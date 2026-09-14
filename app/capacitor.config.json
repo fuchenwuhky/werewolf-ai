@@ -1,0 +1,17 @@
+{
+  "appId": "com.werewolfai.app",
+  "appName": "AI狼人杀",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorNodeJS": {
+      "startMode": "manual"
+    }
+  },
+  "server": {
+    "androidScheme": "http",
+    "allowNavigation": ["127.0.0.1", "localhost"]
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}

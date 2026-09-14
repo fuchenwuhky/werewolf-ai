@@ -1,0 +1,29 @@
+# 密钥与本机配置（模板见 config.example.json）
+config.json
+
+# 运行时产物
+logs/
+saves/
+*.log
+
+# 代玩测试工件
+.play-state.json
+.play-log*.md
+
+# 依赖
+node_modules/
+
+# 构建产物：build-app.js / cap sync / gradle 生成，可用 npm run app:sync 重建
+app/www/
+app/android/.gradle/
+app/android/build/
+app/android/app/build/
+app/android/app/src/main/assets/
+app/android/capacitor-cordova-android-plugins/
+app/android/local.properties
+*.apk
+*.keystore
+
+# 系统
+.DS_Store
+Thumbs.db

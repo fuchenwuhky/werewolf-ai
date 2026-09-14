@@ -1,0 +1,13 @@
+{
+  "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+  "apiKey": "在这里填你的 API Key",
+  "model": "GLM-5.3-Flash",
+  "temperature": 0.8,
+  "maxTokens": 16000,
+  "fastMaxTokens": 8000,
+  "timeoutMs": 360000,
+  "cacheControl": true,
+  "reasoningEffort": "high",
+  "fastEffort": "low",
+  "contextBudget": 12000
+}

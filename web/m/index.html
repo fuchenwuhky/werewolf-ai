@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0b0a10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AI狼人杀">
+<link rel="manifest" href="../manifest.webmanifest">
+<link rel="apple-touch-icon" href="../assets/icon.svg">
+<title>AI 狼人杀 · APP</title>
+<link rel="stylesheet" href="m.css">
+</head>
+<body>
+<div id="m-app">
+
+  <!-- 屏1：选择板子 -->
+  <section id="m-boards" class="m-screen">
+    <header class="m-head">
+      <h1>🦇 AI 狼人杀</h1>
+      <p class="m-sub">✠ 选择你的战场 ✠</p>
+    </header>
+    <div id="m-board-grid" class="m-grid"></div>
+    <div class="m-foot">
+      <button class="btn" id="m-settings-btn">⚙ 设置</button>
+      <span class="hint" id="m-hint"></span>
+      <button class="btn primary" id="m-next" disabled>下一步 →</button>
+    </div>
+  </section>
+
+  <!-- 屏2：规则确认 -->
+  <section id="m-rules" class="m-screen hidden">
+    <header class="m-head">
+      <button class="btn small" id="m-back">←</button>
+      <h2 id="m-rules-title">对局规则</h2>
+    </header>
+    <div class="m-scroll">
+      <div id="m-board-summary" class="m-summary"></div>
+      <div id="m-custom-editor" class="hidden"></div>
+      <h3 class="m-h3">⚔ 对局规则</h3>
+      <div id="m-rules-list"></div>
+      <div class="row2">
+        <label>我的座位<select id="m-my-seat"></select></label>
+        <label>我的昵称<input id="m-my-name" value="我" maxlength="12"></label>
+      </div>
+      <p class="hint" style="margin-top:10px">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
+    </div>
+    <div class="m-foot">
+      <span class="hint" id="m-err"></span>
+      <button class="btn primary big" id="m-start">⚔ 开始游戏</button>
+    </div>
+  </section>
+
+  <!-- 屏3：对局（圆桌框架） -->
+  <section id="m-game" class="m-screen hidden">
+    <header class="m-head m-game-head">
+      <div class="m-status">
+        <b id="m-day"></b>
+        <span id="m-phase" class="m-phase-chip"></span>
+      </div>
+      <div class="m-top-actions">
+        <button class="btn small ghost" id="m-log-btn" title="事件记录">📜</button>
+        <button class="btn small ghost" id="m-me-btn" title="我的身份">🎴</button>
+        <button class="btn small ghost" id="m-rulebook-btn" title="规则书">📖</button>
+        <button class="btn small danger" id="m-terminate-btn" title="结束本局">⏹</button>
+      </div>
+    </header>
+
+    <!-- 圆桌座位层 -->
+    <div id="m-table" class="m-table">
+      <div class="m-table-felt"></div>
+      <div class="m-table-center">
+        <div class="tc-icon" id="tc-icon">🌙</div>
+        <div class="tc-day" id="tc-day"></div>
+        <div class="tc-step" id="tc-step"></div>
+      </div>
+    </div>
+
+    <!-- 当前发言舞台 -->
+    <div id="m-stage" class="m-stage">
+      <div id="m-stage-head" class="stage-head"></div>
+      <div id="m-stage-body" class="stage-body"></div>
+    </div>
+
+    <!-- 底部操作栏 -->
+    <div id="m-actionbar">
+      <div id="m-pending-hint" class="pending-hint"></div>
+      <div id="m-controls"></div>
+    </div>
+  </section>
+</div>
+
+<!-- 记录抽屉 -->
+<div id="m-drawer" class="m-drawer hidden">
+  <div class="drawer-mask" id="m-drawer-mask"></div>
+  <div class="drawer-panel">
+    <div class="drawer-tabs">
+      <button class="dtab sel" data-tab="log">📜 记录</button>
+      <button class="dtab" data-tab="me">🎴 我的身份</button>
+      <span style="flex:1"></span>
+      <button class="btn ghost small" id="m-drawer-close">✕</button>
+    </div>
+    <div class="drawer-body">
+      <div id="m-drawer-log" class="dtab-page stream"></div>
+      <div id="m-drawer-me" class="dtab-page hidden"></div>
+    </div>
+  </div>
+</div>
+
+<div id="m-modal"></div>
+<div id="m-flash" class="m-flash hidden"></div>
+<div id="m-flip" class="m-flip hidden">
+  <div class="flip-card" id="m-flip-card">
+    <div class="flip-inner">
+      <div class="flip-back">身份牌<br>点击翻开</div>
+      <div class="flip-front" id="m-flip-front"></div>
+    </div>
+  </div>
+  <div class="flip-caption" id="m-flip-caption"></div>
+  <div class="flip-tools">
+    <button class="btn primary" id="m-flip-done">开始游戏</button>
+    <button class="btn" id="m-inspect-btn">🔍 检视</button>
+  </div>
+</div>
+<script src="m.js"></script>
+</body>
+</html>

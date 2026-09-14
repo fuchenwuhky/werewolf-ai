@@ -1,0 +1,15 @@
+{
+  "name": "AI 狼人杀",
+  "short_name": "AI狼人杀",
+  "description": "与 AI 玩家同桌的哥特暗黑风狼人杀",
+  "start_url": "/m/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0a10",
+  "theme_color": "#0b0a10",
+  "icons": [
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}

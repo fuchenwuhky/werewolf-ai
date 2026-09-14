@@ -1,0 +1,19 @@
+{
+  "name": "werewolf-ai",
+  "version": "0.1.0",
+  "description": "AI 狼人杀 — 本地网页版，1 名人类玩家 + N 名 AI，OpenAI 兼容接口，零依赖",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/",
+    "simulate": "node scripts/simulate.js",
+    "gen-docs": "node scripts/gen-roles-doc.js",
+    "app:sync": "node scripts/build-app.js && cd app && npx cap sync android",
+    "app:apk": "bash scripts/update-app.sh"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}

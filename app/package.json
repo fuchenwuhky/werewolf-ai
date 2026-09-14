@@ -1,0 +1,12 @@
+{
+  "name": "werewolf-ai-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI 狼人杀 APP 壳（Capacitor + 内嵌 Node 服务端）",
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/cli": "^8.5.2",
+    "@capacitor/core": "^8.5.2",
+    "capacitor-nodejs": "https://github.com/hampoelz/capacitor-nodejs/releases/download/v1.0.0-beta.10/capacitor-nodejs.tgz"
+  }
+}
