@@ -39,8 +39,8 @@ const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf8');
  */
 function collectSelectors(cssRaw) {
   const css = cssRaw.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
-  const found = [];       // { ctx, sel, line, props }
-  const stack = [];       // { type: 'at'|'rule', sel, line, bodyStart }
+  const found = []; // { ctx, sel, line, props }
+  const stack = []; // { type: 'at'|'rule', sel, line, bodyStart }
   let buf = '';
   let line = 1;
   let bufLine = 1;
@@ -49,7 +49,6 @@ function collectSelectors(cssRaw) {
     if (ch === '\n') line++;
     if (ch === '{') {
       const sel = buf.trim();
-      const ctx = stack.filter((s) => s.type === 'at').map((s) => s.sel).join(' && ') || 'root';
       if (sel.startsWith('@')) stack.push({ type: 'at', sel, line: bufLine });
       else stack.push({ type: 'rule', sel, line: bufLine, bodyStart: i + 1 });
       buf = '';
@@ -58,7 +57,16 @@ function collectSelectors(cssRaw) {
       if (top && top.type === 'rule' && top.sel) {
         const body = css.slice(top.bodyStart, i).replace(/url\([^)]*\)/g, 'url()');
         const props = new Set([...body.matchAll(/(?:^|[;{])\s*([-\w]+)\s*:/g)].map((m) => m[1]));
-        found.push({ ctx: stack.filter((s) => s.type === 'at').map((s) => s.sel).join(' && ') || 'root', sel: top.sel, line: top.line, props });
+        found.push({
+          ctx:
+            stack
+              .filter((s) => s.type === 'at')
+              .map((s) => s.sel)
+              .join(' && ') || 'root',
+          sel: top.sel,
+          line: top.line,
+          props,
+        });
       }
       buf = '';
     } else {
@@ -118,7 +126,10 @@ test('文本文件必须都是合法 UTF-8（PowerShell Add-Content 曾按 GBK �
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (SKIP_DIR.has(e.name)) continue;
       const p = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(p); continue; }
+      if (e.isDirectory()) {
+        walk(p);
+        continue;
+      }
       if (!TEXT_EXT.has(path.extname(e.name).toLowerCase())) continue;
       const buf = fs.readFileSync(p);
       if (buf.toString('utf8').includes('\uFFFD')) bad.push(path.relative(ROOT, p));

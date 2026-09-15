@@ -235,7 +235,7 @@ function renderRulesEditor() {
       /* 夜晚行动顺序：8 行编辑器，占 ~390px，把规则卡撑得很高（设置页 2×2 布局里右下会空出一大块）。
          收进默认折叠的 details：改它的人本来就少，展开后仍占整行宽度。 */
       const det = el('details', 'rule-order-details');
-      det.innerHTML = '<summary class="rlabel"><b>夜晚行动顺序</b><span class="hint">（默认按官方流程，通常不用改；展开可调整先后）</span></summary>';
+      det.innerHTML = `<summary class="rlabel"><b>${tr('rules.nightOrder', '夜晚行动顺序')}</b><span class="hint">${tr('rules.nightOrderHint', '（默认按官方流程，通常不用改；展开可调整先后）')}</span></summary>`;
       det.appendChild(wrap);
       item.innerHTML = '';
       item.appendChild(det);
