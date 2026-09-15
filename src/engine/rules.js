@@ -84,6 +84,7 @@ const RULE_META = [
     options: [
       { value: 'never', label: '全程不可自救（网易12人场）' },
       { value: 'firstNight', label: '仅首夜可自救（网易10人场）' },
+      { value: 'noFirstNight', label: '仅首夜不可自救（其余夜可）' },
       { value: 'always', label: '全程可自救' },
     ],
     desc: '女巫能否用解药救自己。',
@@ -197,7 +198,7 @@ function describeRules(rules) {
     lines.push(`吞警徽：${{ off: '自爆不影响竞选', single: '竞选阶段狼人自爆一次即取消警长', double: '竞选阶段狼人自爆两次才取消警长（双爆吞警徽）' }[rules.badgeSwallow]}`);
     lines.push(`警长票权：放逐投票中警长算 ${rules.sheriffVoteWeight} 票；警长每天决定发言方向并压轴最后发言`);
   }
-  lines.push(`女巫自救：${{ never: '全程不可自救', firstNight: '仅第一夜可以用解药自救', always: '全程可自救' }[rules.witchSelfSave]}`);
+  lines.push(`女巫自救：${{ never: '全程不可自救', firstNight: '仅第一夜可以用解药自救', noFirstNight: '仅第一夜不可自救，之后每晚都可以', always: '全程可自救' }[rules.witchSelfSave]}`);
   lines.push(`同守同救：${{ die: '守卫守护与解药同夜作用于同一人时，该玩家死亡（奶穿，视同被狼袭）', cancel: '守卫与解药互相抵消，目标存活', guardDies: '若同守同救目标正是守卫，守卫死亡；否则目标存活' }[rules.milkThrough]}`);
   lines.push(`守卫连守：${rules.guardNoRepeat ? '不能连续两晚守护同一人' : '可以连续守护同一人'}`);
   lines.push(`狼人空刀：${rules.allowEmptyKill ? '允许' : '不允许（每晚必须袭击一人）'}`);

@@ -356,8 +356,10 @@ function renderEventNode(e) {
     case 'system': return el('div', 'sysline', e.text || d.text || '');
     case 'deaths': {
       const ds = d.deaths || [];
+      const rules = state.view && state.view.rules;
+      const showCause = !rules || rules.revealOnDeath !== false; // 暗牌局只报死亡不报死因
       return el('div', `msg event ${ds.length ? 'red' : 'green'}`, ds.length
-        ? `天亮了。昨夜死亡：${ds.map((x) => `${x.seat}号（${causeLabel(x.cause)}）`).join('、')}。`
+        ? `天亮了。昨夜死亡：${ds.map((x) => `${x.seat}号${showCause ? `（${causeLabel(x.cause)}）` : ''}`).join('、')}。`
         : '天亮了。昨夜是平安夜，无人死亡。');
     }
     case 'speech': {
@@ -497,8 +499,10 @@ function feedStage(e, fresh) {
     }
     case 'deaths': {
       const ds = d.deaths || [];
+      const rules = state.view && state.view.rules;
+      const showCause = !rules || rules.revealOnDeath !== false; // 暗牌局只报死亡不报死因
       state.stage = { kind: 'event', important: ds.length > 0, html: ds.length
-        ? `🌅 天亮了。昨夜死亡：${ds.map((x) => `${x.seat}号（${causeLabel(x.cause)}）`).join('、')}。`
+        ? `🌅 天亮了。昨夜死亡：${ds.map((x) => `${x.seat}号${showCause ? `（${causeLabel(x.cause)}）` : ''}`).join('、')}。`
         : '🌅 天亮了。昨夜是平安夜，无人死亡。' };
       if (fresh) flash(ds.length ? '昨夜有人死去' : '平安夜', ds.length ? 'red' : 'night');
       break;
@@ -954,7 +958,7 @@ function openRulebook() {
 function formatRules() {
   const parts = [];
   parts.push(state.rules.sheriff ? '有警长竞选' : '无警长');
-  parts.push({ never: '女巫不可自救', firstNight: '女巫仅首夜可自救', always: '女巫全程可自救' }[state.rules.witchSelfSave]);
+  parts.push({ never: '女巫不可自救', firstNight: '女巫仅首夜可自救', noFirstNight: '女巫仅首夜不可自救', always: '女巫全程可自救' }[state.rules.witchSelfSave]);
   parts.push(state.rules.allowEmptyKill ? '可空刀' : '不可空刀');
   parts.push(state.rules.allowSelfExplode ? '可自爆' : '不可自爆');
   return parts.join('；') + '。其余细则见设置内规则开关描述。';

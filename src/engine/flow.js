@@ -509,7 +509,8 @@ async function witchStep(game) {
   for (const w of witches) {
     const killTarget = game.night.wolfKill;
     const selfSaveAllowed = game.rules.witchSelfSave === 'always' ||
-      (game.rules.witchSelfSave === 'firstNight' && game.day === 1);
+      (game.rules.witchSelfSave === 'firstNight' && game.day === 1) ||
+      (game.rules.witchSelfSave === 'noFirstNight' && game.day !== 1);
     const canAntidote = !game.witch.antidoteUsed && killTarget > 0;
     const canPoison = !game.witch.poisonUsed;
     game.emit('witch_info', { actor: w.seat, visibleTo: [w.seat], data: { killTarget } });

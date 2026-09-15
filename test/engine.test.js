@@ -1248,3 +1248,57 @@ test('新板子全流程：4 个官方板 mock 跑通 + 隔离审计', async () 
     }
   }
 });
+
+// ==================== 女巫自救第四档 + 暗牌局严谨化 ====================
+
+test('女巫自救 noFirstNight：首夜不可自救，之后可自救', async () => {
+  const g = makeGame({ board: { wolf: 1, witch: 1, seer: 1, villager: 2 }, rules: { witchSelfSave: 'noFirstNight' }, rnd: () => 0 });
+  assignRoles(g, { 1: 'wolf', 2: 'witch', 3: 'seer', 4: 'villager', 5: 'villager' });
+  g.phase = 'night';
+  const mkNight = () => ({ guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 2, saved: false, poisonTargets: [] });
+  // 第 1 夜：狼刀女巫自己，尝试自救 → 规则拒绝（降级为不用药）
+  g.day = 1;
+  g.night = mkNight();
+  g.witch = { antidoteUsed: false, poisonUsed: false };
+  await _internals.witchStep(g);
+  assert.strictEqual(g.night.saved, false, '首夜不可自救');
+  assert.strictEqual(g.witch.antidoteUsed, false, '被拒绝的自救不消耗解药');
+  // 第 2 夜：再被刀 → 可自救
+  g.day = 2;
+  g.night = mkNight();
+  await _internals.witchStep(g);
+  assert.strictEqual(g.night.saved, true, '第二夜起可自救');
+  assert.strictEqual(g.witch.antidoteUsed, true);
+});
+
+test('暗牌局：死因不公开（渲染与 AI 上下文均无死因）', async () => {
+  const { renderEvent } = require('../src/engine/render');
+  const ctx = require('../src/ai/context');
+  const g = makeGame({ rules: { revealOnDeath: false } });
+  assignRoles(g, { 1: 'wolf', 2: 'guard', 3: 'seer', 4: 'witch', 5: 'hunter', 6: 'villager' });
+  g.phase = 'night';
+  g.day = 1;
+  g.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 6, saved: false, poisonTargets: [] };
+  _internals.resolveNightDeaths(g);
+  await _internals.dawnPhase(g);
+  const de = g.events.find((e) => e.type === 'deaths');
+  const line = renderEvent(g, de);
+  assert.ok(line.includes('6号'), '应公布死亡座位');
+  assert.ok(!line.includes('被袭击') && !line.includes('被狼人'), '暗牌局不应含死因');
+  // AI 上下文同样不含死因文本
+  const built = ctx.assemble(g, g.player(3), { task: 'speech' }, { digests: new Map(), lastSeq: 0, transcriptDays: [1] });
+  assert.ok(!built.text.includes('被袭击'), 'AI 快照/实录不应出现死因');
+  // 翻牌局对照：死因公开
+  const g2 = makeGame({ rules: { revealOnDeath: true } });
+  assignRoles(g2, { 1: 'wolf', 2: 'guard', 3: 'seer', 4: 'witch', 5: 'hunter', 6: 'villager' });
+  g2.phase = 'night';
+  g2.day = 1;
+  g2.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 6, saved: false, poisonTargets: [] };
+  _internals.resolveNightDeaths(g2);
+  await _internals.dawnPhase(g2);
+  const line2 = renderEvent(g2, g2.events.find((e) => e.type === 'deaths'));
+  assert.ok(line2.includes('被狼人袭击'), '翻牌局应保留死因');
+  // 暗牌局公共提示词含暗牌铁律
+  const common = buildCommonPrompt(g);
+  assert.ok(common.includes('暗牌局'), '暗牌局应注入防幻觉铁律');
+});

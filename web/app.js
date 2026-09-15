@@ -579,8 +579,10 @@ function renderEventNode(e) {
       return d.title ? el('div', 'sysline', `【${d.title}】${e.text}`) : el('div', 'sysline', e.text || d.text || '');
     case 'deaths': {
       const deaths = d.deaths || [];
+      const rules = state.view && state.view.rules;
+      const showCause = !rules || rules.revealOnDeath !== false; // 暗牌局只报死亡不报死因
       const text = deaths.length
-        ? `天亮了。昨夜死亡：${deaths.map((x) => `${x.seat}号（${causeLabel(x.cause)}）`).join('、')}。`
+        ? `天亮了。昨夜死亡：${deaths.map((x) => `${x.seat}号${showCause ? `（${causeLabel(x.cause)}）` : ''}`).join('、')}。`
         : '天亮了。昨夜是平安夜，无人死亡。';
       return el('div', `msg event ${deaths.length ? 'red' : 'green'}`, text);
     }

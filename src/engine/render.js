@@ -69,7 +69,7 @@ function renderEvent(game, e) {
     case 'witch_info': return d.killTarget ? `今晚被狼人袭击的是 ${seatName(game, d.killTarget)}。` : '今晚是空刀，无人被袭击。';
     case 'witch_action': return `你的用药：${d.antidote ? `对 ${seatName(game, d.killTarget)} 使用了解药。` : '未使用解药。'}${d.poison ? `对 ${seatName(game, d.poison)} 使用了毒药。` : '未使用毒药。'}`;
     case 'deaths': {
-      const names = (d.deaths || []).map((x) => `${seatName(game, x.seat)}（${causeLabel(x.cause)}）`).join('、');
+      const names = (d.deaths || []).map((x) => `${seatName(game, x.seat)}${game.rules.revealOnDeath ? `（${causeLabel(x.cause)}）` : ''}`).join('、');
       return names ? `天亮了。昨夜死亡：${names}。` : '天亮了。昨夜是平安夜，无人死亡。';
     }
     case 'vote_cast': return `你投给了 ${d.target ? seatName(game, d.target) : '弃票'}。`;
