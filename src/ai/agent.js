@@ -96,6 +96,7 @@ class Agent {
           logger: this.logger,
           effort: this.llmCfg.fastEffort || 'low', // 反思是账本维护，轻度即可；high 曾出现 7 分钟思考失控
           maxTokens: 2000,
+          signal: g.abortSignal, // 终止对局时立即中断
           meta: { label: `${this.player.seat}号`, task: `第${day}天反思`, seat: this.player.seat },
         });
       let text = (out.content || '').trim();
@@ -134,6 +135,7 @@ class Agent {
       logger: this.logger,
       effort: ctx.taskEffort(request.task, this.llmCfg),
       maxTokens: ctx.taskMaxTokens(request.task, this.llmCfg),
+      signal: g.abortSignal, // 终止对局时立即中断在途调用
       meta: { label: `${seat}号`, task: request.task, seat },
     });
     // 3. 更新"新事件"游标（本次调用时点之前的都算已读）

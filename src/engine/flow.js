@@ -629,8 +629,14 @@ async function consumeExplodeRequest(game) {
   const p = game.player(req.seat);
   if (!p || !p.alive || game.finished || !game.rules.allowSelfExplode) return false;
   if (!ROLES[p.role] || !ROLES[p.role].selfExplode) return false;
-  game.logger.info('engine', `${req.seat}号 随时自爆生效（target=${req.target || 0}）`);
-  await handleExplode(game, req.seat, { text: '', explode: true, target: req.target || 0 }, { inElection: false });
+  // 排队期间目标可能已出局（如被开枪带走）：降级为不带人并公告，避免玩家以为目标被带走
+  let target = req.target || 0;
+  if (target && !game.player(target).alive) {
+    game.emit('system', { text: `⚠️ ${p.seat}号（${ROLES[p.role].name}）自爆：原目标 ${target}号 已出局，本次自爆不带人，天黑了。` });
+    target = 0;
+  }
+  game.logger.info('engine', `${req.seat}号 随时自爆生效（target=${target || 0}）`);
+  await handleExplode(game, req.seat, { text: '', explode: true, target }, { inElection: false });
   return true;
 }
 
@@ -664,7 +670,11 @@ async function consumeDuelRequest(game) {
   const p = game.player(req.seat);
   if (!p || !p.alive || game.finished || p.role !== 'knight') return false;
   const tp = Number.isInteger(req.target) ? game.player(req.target) : null;
-  if (!tp || !tp.alive || req.target === req.seat) return false;
+  if (!tp || !tp.alive || req.target === req.seat) {
+    // 目标在排队期间出局：公告取消（此前为静默丢弃，玩家会以为决斗没提交上）
+    game.emit('system', { text: `⚠️ ${req.seat}号（骑士）的决斗目标已出局，本次决斗取消。` });
+    return false;
+  }
   game.logger.info('engine', `${req.seat}号(骑士) 随时决斗生效（target=${req.target}）`);
   return handleDuel(game, req.seat, req.target);
 }

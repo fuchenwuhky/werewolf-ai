@@ -783,7 +783,7 @@ function updateActionbar(v) {
   if (!p) {
     const finished = v.finished;
     hint.className = 'pending-hint waiting';
-    hint.textContent = finished ? '对局已结束。' : waitingText(v);
+    hint.textContent = finished ? '对局已结束。' : (queuedInterruptText(v) || waitingText(v));
     box.innerHTML = '';
     mountExplodeBtn(v, box);
     mountDuelBtn(v, box);
@@ -865,7 +865,16 @@ function openStrategy(rid) {
 // ---------------- 骑士随时决斗（白天任意时刻） ----------------
 function canDuelNow(v) {
   return !!(v && v.me && v.me.alive && !v.finished && v.me.role === 'knight'
-    && v.phase === 'speech'); // 决斗仅发言阶段
+    && !v.pending // 轮到自己操作时不显示打断按钮（引擎正等你的操作，打断不会生效）
+    && ['speech', 'vote', 'pk'].includes(v.phase)); // 白天任意时刻，警长竞选不可
+}
+
+/** 已排队未生效的打断请求提示（优先级高于普通等待文案，防误以为没提交上/卡死） */
+function queuedInterruptText(v) {
+  const q = v && v.queued;
+  if (q && q.explode) return `🔮 自爆已就绪：当前发言结束后立即生效${q.explode.target ? `（带走 ${q.explode.target} 号）` : ''}…`;
+  if (q && q.duel) return `⚔️ 决斗已就绪：当前发言结束后立即生效（指定 ${q.duel.target} 号）…`;
+  return null;
 }
 
 async function confirmDuel(v) {
@@ -891,7 +900,8 @@ function mountDuelBtn(v, box) {
 function canExplodeNow(v) {
   const r = v && v.me && v.me.role && roleInfo(v.me.role);
   return !!(v && v.me && v.me.alive && !v.finished && v.rules && v.rules.allowSelfExplode
-    && v.phase === 'speech' && r && r.selfExplode); // 自爆仅发言阶段
+    && !v.pending // 轮到自己操作时不显示打断按钮（轮到你发言时请直接勾选"自爆"）
+    && ['speech', 'vote', 'pk'].includes(v.phase) && r && r.selfExplode); // 白天任意时刻，警长竞选不可
 }
 
 async function confirmExplode(v) {

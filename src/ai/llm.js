@@ -20,15 +20,21 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const HARD_OUTPUT_CAP = 32768;
 
 /**
- * @param {object} opts {logger, meta, effort, maxTokens}
+ * @param {object} opts {logger, meta, effort, maxTokens, signal}
  *   - effort/maxTokens：单次调用级覆盖（如按任务分层思考强度），缺省回落 cfg
+ *   - signal：外部中止信号（终止对局时立即中断在途请求，不重试）
  * @returns {content, usage:{promptTokens, cachedTokens, completionTokens}, latencyMs, attempts}
  */
-async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens } = {}) {
+async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, signal } = {}) {
   const endpoint = buildEndpoint(cfg.baseUrl);
   const maxRetries = cfg.retries != null ? cfg.retries : 3;
   const timeoutMs = cfg.timeoutMs || 120000;
   const baseMaxTokens = maxTokens || cfg.maxTokens || 16000;
+  if (signal && signal.aborted) {
+    const err = new Error('对局已终止，请求未发出');
+    err.aborted = true;
+    throw err;
+  }
 
   const body = {
     model: cfg.model,
@@ -46,6 +52,12 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     attempts++;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    // 外部中止（终止对局）：转发到本次请求的 ctrl；超时 abort 与外部 abort 共用同一信号
+    let onExternalAbort = null;
+    if (signal) {
+      onExternalAbort = () => ctrl.abort();
+      signal.addEventListener('abort', onExternalAbort, { once: true });
+    }
     const t0 = Date.now();
     try {
       const res = await fetch(endpoint, {
@@ -111,10 +123,18 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
       return out;
     } catch (err) {
       clearTimeout(timer);
+      if (signal && onExternalAbort) signal.removeEventListener('abort', onExternalAbort);
       lastErr = err;
-      const retryable = err.retryable || err.name === 'AbortError' || err.name === 'TypeError';
-      const msg = err.name === 'AbortError' ? `请求超时（${Math.round(timeoutMs / 1000)}s，思考/生成未完成被中止）` : err.message;
+      const externalAbort = !!(signal && signal.aborted); // 外部终止 ≠ 超时：立即退出不重试
+      const retryable = !externalAbort && (err.retryable || err.name === 'AbortError' || err.name === 'TypeError');
+      const msg = externalAbort ? '对局已终止，请求被中止'
+        : err.name === 'AbortError' ? `请求超时（${Math.round(timeoutMs / 1000)}s，思考/生成未完成被中止）` : err.message;
       if (logger) logger.warn('llm', `${meta.label || 'chat'} 第${attempts}次失败：${msg}`, { task: meta.task, seat: meta.seat, retryable });
+      if (externalAbort) {
+        lastErr = new Error('对局已终止，请求被中止');
+        lastErr.aborted = true;
+        break;
+      }
       if (!retryable || attempts > maxRetries) break;
       if (!err.noBackoff) await sleep(800 * attempts * attempts); // 0.8s, 3.2s
     }

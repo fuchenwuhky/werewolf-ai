@@ -234,7 +234,16 @@ class Api {
     if (!game.rules.allowSelfExplode) return this.json(res, 409, { error: '本局规则不允许自爆' });
     if (!ROLES[me.role] || !ROLES[me.role].selfExplode) return this.json(res, 409, { error: '你的身份不能自爆' });
     if (game.explodeRequest) return this.json(res, 409, { error: '自爆请求已提交，等待生效' });
-    if (game.phase !== 'speech') return this.json(res, 409, { error: '自爆只能在白天发言阶段发动（投票阶段不可）' });
+    // 硬闸：引擎正等你自己的操作时，打断请求永远不会被消费（会卡死在 pending 上）——明确拒绝
+    if (game.pending && game.pending.seat === me.seat) {
+      const t = game.pending.request.task;
+      return this.json(res, 409, { error: t === 'speech'
+        ? '轮到你发言了：请在发言框勾选"自爆"直接发动'
+        : '轮到你了：请先完成当前操作，之后再发动自爆' });
+    }
+    if (!['speech', 'vote', 'pk'].includes(game.phase)) {
+      return this.json(res, 409, { error: '自爆只能在白天（发言/投票/PK 阶段）发动' });
+    }
     let target = 0;
     if (me.role === 'whitewolfking') {
       target = Number(body.target);
@@ -255,7 +264,13 @@ class Api {
     if (!me || !me.alive) return this.json(res, 409, { error: '你已出局，无法决斗' });
     if (me.role !== 'knight') return this.json(res, 409, { error: '只有骑士能发起决斗' });
     if (game.duelRequest) return this.json(res, 409, { error: '决斗请求已提交，等待生效' });
-    if (game.phase !== 'speech') return this.json(res, 409, { error: '决斗只能在白天发言阶段发动（投票/警长竞选阶段不可）' });
+    // 硬闸：同自爆——引擎在等你自己的操作时不接受打断请求
+    if (game.pending && game.pending.seat === me.seat) {
+      return this.json(res, 409, { error: '轮到你了：请先完成当前操作，之后再发起决斗' });
+    }
+    if (!['speech', 'vote', 'pk'].includes(game.phase)) {
+      return this.json(res, 409, { error: '决斗只能在白天（发言/投票/PK 阶段）发动，警长竞选阶段不可' });
+    }
     const target = Number(body.target);
     const tp = Number.isInteger(target) ? game.player(target) : null;
     if (!tp || !tp.alive || target === me.seat) return this.json(res, 400, { error: '决斗需要指定一名存活的其他玩家' });
@@ -318,11 +333,17 @@ class Api {
       canWithdraw: !!game.pending.request.canWithdraw,
       extra: game.pending.request.extra || null,
     } : null;
+    // 已排队未生效的打断请求（自爆/决斗）：让前端常驻提示"当前发言结束后生效"，避免误以为卡死
+    const isMe = !isGod && viewer;
+    const queued = {
+      explode: game.explodeRequest && (!isMe || game.explodeRequest.seat === viewer) ? game.explodeRequest : null,
+      duel: game.duelRequest && (!isMe || game.duelRequest.seat === viewer) ? game.duelRequest : null,
+    };
     return this.json(res, 200, {
       gameId: game.id, day: game.day, phase: game.phase,
       started: game.started, live: this.games.has(game.id), finished: game.finished, winner: game.winner, winReason: game.winReason,
       error: entry.error,
-      players, events, pending, rules: game.rules, wolfTalk,
+      players, events, pending, queued, rules: game.rules, wolfTalk,
       me: me ? { seat: me.seat, name: me.name, role: me.role, alive: me.alive, isSheriff: me.isSheriff, lostVote: me.lostVote, teammates: game.wolves().some((w) => w.seat === me.seat) ? game.wolves().filter((w) => w.alive && w.seat !== me.seat).map((w) => w.seat) : [] } : null,
       llmStats: isGod ? game.llmStats : undefined,
       board: game.board,

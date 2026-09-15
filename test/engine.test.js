@@ -1107,8 +1107,7 @@ test('乌鸦诅咒：放逐投票 +0.5 票；警长竞选投票不受影响', as
   const r2 = await secretVote(g, { task: 'sheriff_vote', voters: [1, 2, 3, 4], candidates: [5, 6], allowNone: true });
   assert.strictEqual(r2.tally['6'], 4, '警长竞选投票不应加诅咒票');
   const cursed = g.events.filter((e) => e.type === 'vote_reveal' && e.data.curseBonus && Object.keys(e.data.curseBonus).length).pop();
-  assert.ok(cursed && cursed.data.curseBonus['6'] === 0.5, '放逐亮票应带诅咒加成标注');
-  const sheriffReveal = g.events.filter((e) => e.type === 'vote_reveal').pop();
+  assert.ok(cursed && cursed.data.curseBonus['6'] === 0.5, '放逐亮票应带诅咒加成标注');  const sheriffReveal = g.events.filter((e) => e.type === 'vote_reveal').pop();
   assert.strictEqual(sheriffReveal.data.curseBonus, undefined, '警选亮票不应带诅咒标注');
 });
 
@@ -1345,3 +1344,151 @@ function game_becomeSheriff(g, player) {
   player.isSheriff = true;
   return player;
 }
+
+// ==================== 打断与终止（卡死清扫专项） ====================
+
+function fakeRes() { return { code: 0, body: null, writeHead(c) { this.code = c; }, end(b) { this.body = b; } }; }
+
+test('终止对局：terminate 触发 abortSignal，ask 抛 ForceEnded', async () => {
+  const g = makeGame({});
+  let aborted = false;
+  g.abortSignal.addEventListener('abort', () => { aborted = true; });
+  g.terminate('测试终止');
+  assert.ok(aborted && g.forceEnded, 'terminate 应触发 abort 信号');
+  await assert.rejects(() => g.ask(1, { task: 'speech' }), (e) => e.code === 'FORCE_ENDED', 'forceEnded 后 ask 应直接抛出');
+});
+
+test('终止对局：AI 决策挂起时 terminate 立即优雅结算', async () => {
+  const board = { wolf: 1, seer: 1, villager: 2 };
+  const players = Array.from({ length: 4 }, (_, i) => ({ name: 'P' + (i + 1) }));
+  const g = new Game({
+    id: 'term-test', board, rules: {}, players, stepPauseMs: 1, logger: silentLogger,
+    agentFactory: (player, game) => ({
+      async decide(req) {
+        // 模拟在途 LLM 调用：挂起直到 abort 或自然完成
+        await new Promise((resolve, reject) => {
+          if (game.abortSignal.aborted) return reject(new Error('已终止'));
+          game.abortSignal.addEventListener('abort', () => reject(new Error('已终止')), { once: true });
+          setTimeout(resolve, 80, { text: '过。', target: 0 });
+        });
+      },
+    }),
+  });
+  const t0 = Date.now();
+  const runP = runGame(g);
+  setTimeout(() => g.terminate('测试终止'), 30); // 在 AI 决策挂起时终止
+  await runP;
+  assert.ok(g.finished, '对局应优雅结束');
+  assert.ok(Date.now() - t0 < 5000, `应在终止后立即结算（耗时 ${Date.now() - t0}ms），而非等自然完成`);
+});
+
+test('llm：外部终止信号立即中断在途请求且不重试', async () => {
+  const llm = require('../src/ai/llm');
+  const origFetch = global.fetch;
+  let fetchCalls = 0;
+  global.fetch = (url, opts) => new Promise((resolve, reject) => {
+    fetchCalls++;
+    opts.signal.addEventListener('abort', () => {
+      const e = new Error('aborted');
+      e.name = 'AbortError';
+      reject(e);
+    }); // 永不 resolve：模拟长时间无响应
+  });
+  try {
+    // 已中止的信号：请求根本不发出
+    const pre = new AbortController();
+    pre.abort();
+    await assert.rejects(
+      llm.chatCompletion({ baseUrl: 'http://x', model: 'm', apiKey: 'k', timeoutMs: 60000, retries: 3 }, [{ role: 'user', content: 'hi' }], { signal: pre.signal }),
+      /终止/,
+      '已中止信号应直接拒绝且不发请求',
+    );
+    assert.strictEqual(fetchCalls, 0);
+    // 在途请求：外部 abort 毫秒级中断，不等超时也不重试
+    const started = Date.now();
+    const external = new AbortController();
+    setTimeout(() => external.abort(), 80);
+    await assert.rejects(
+      llm.chatCompletion({ baseUrl: 'http://x', model: 'm', apiKey: 'k', timeoutMs: 60000, retries: 3 }, [{ role: 'user', content: 'hi' }], { signal: external.signal }),
+      /终止|中止/,
+    );
+    assert.ok(Date.now() - started < 2000, `应毫秒级中断（耗时 ${Date.now() - started}ms）`);
+    assert.strictEqual(fetchCalls, 1, '外部中止不应重试');
+  } finally {
+    global.fetch = origFetch;
+  }
+});
+
+test('API 硬闸：pending 属于玩家时打断被拒；阶段口径与 queued 下发', () => {
+  const { Api } = require('../src/api');
+  const api = new Api({ config: { get: () => ({}), save() {} }, logger: silentLogger });
+  const g = makeGame({ humanSeat: 2, board: { wolf: 2, whitewolfking: 1, seer: 1, villager: 3 } });
+  assignRoles(g, { 2: 'whitewolfking', 3: 'seer' });
+  g.started = true;
+  const entry = { game: g, tokens: { player: 'pt', god: 'gt' }, running: true };
+  const call = (fn, body) => { const res = fakeRes(); fn.call(api, res, entry, body); return { code: res.code, body: JSON.parse(res.body) }; };
+
+  // 情形1：引擎在等玩家自己投票时提交自爆 → 硬闸 409（防卡死主因）
+  g.phase = 'speech';
+  g.pending = { seat: 2, request: { task: 'vote' } };
+  let r = call(api.explodeAction, { token: 'pt', target: 3 });
+  assert.strictEqual(r.code, 409);
+  assert.ok(r.body.error.includes('先完成当前操作'), `应提示先完成操作：${r.body.error}`);
+  g.pending = null;
+
+  // 情形2：投票阶段允许自爆（与引擎 votePhase 消费点对齐）
+  g.phase = 'vote';
+  r = call(api.explodeAction, { token: 'pt', target: 3 });
+  assert.strictEqual(r.code, 200, `投票阶段自爆应被接受：${r.body.error}`);
+  assert.ok(g.explodeRequest && g.explodeRequest.target === 3, '请求应入队');
+  g.explodeRequest = null;
+
+  // 情形3：夜晚不可提交
+  g.phase = 'night';
+  r = call(api.explodeAction, { token: 'pt', target: 3 });
+  assert.strictEqual(r.code, 409);
+  assert.ok(r.body.error.includes('白天'));
+
+  // 情形4：决斗（临时改骑士身份）投票阶段可提交、pending 冲突被拒
+  g.phase = 'vote';
+  g.player(2).role = 'knight';
+  r = call(api.duelAction, { token: 'pt', target: 3 });
+  assert.strictEqual(r.code, 200, `投票阶段决斗应被接受：${r.body.error}`);
+  g.pending = { seat: 2, request: { task: 'vote' } };
+  g.duelRequest = null;
+  r = call(api.duelAction, { token: 'pt', target: 3 });
+  assert.strictEqual(r.code, 409, 'pending 冲突时决斗应被拒');
+  g.pending = null;
+
+  // 情形5：view 下发 queued 状态
+  g.phase = 'speech';
+  g.explodeRequest = { seat: 2, target: 3 };
+  g.duelRequest = null;
+  const vres = fakeRes();
+  api.view(vres, entry, new URLSearchParams('token=pt'));
+  const vbody = JSON.parse(vres.body);
+  assert.ok(vbody.queued && vbody.queued.explode && vbody.queued.explode.target === 3, 'view 应下发排队中的自爆');
+  assert.strictEqual(vbody.queued.duel, null);
+});
+
+test('打断请求消费期目标失效：自爆降级不带人、决斗公告取消', async () => {
+  const g = makeGame({ humanSeat: 1 });
+  assignRoles(g, { 2: 'whitewolfking', 3: 'villager' });
+  g.explodeRequest = { seat: 2, target: 3 };
+  g.player(3).alive = false; // 排队期间目标死亡（如被开枪带走）
+  g._shots = [];
+  const fired = await _internals.consumeExplodeRequest(g);
+  assert.ok(fired, '自爆本身应生效');
+  assert.ok(g.events.some((e) => e.type === 'system' && e.text.includes('不带人')), '应公告目标失效降级');
+  assert.strictEqual(g.player(2).alive, false, '自爆者出局');
+  assert.strictEqual(g.player(3).alive, false);
+
+  const g2 = makeGame({ humanSeat: 1 });
+  assignRoles(g2, { 2: 'knight', 3: 'villager' });
+  g2.duelRequest = { seat: 2, target: 3 };
+  g2.player(3).alive = false;
+  const r = await _internals.consumeDuelRequest(g2);
+  assert.strictEqual(r, false, '决斗应取消');
+  assert.ok(g2.events.some((e) => e.type === 'system' && e.text.includes('决斗取消')), '应公告决斗取消');
+  assert.strictEqual(g2.player(2).alive, true, '骑士不应被误杀');
+});

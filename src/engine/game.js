@@ -74,9 +74,12 @@ class Game {
     this.activeCurse = [];   // 乌鸦诅咒生效中的座位（当日放逐投票 +0.5 票）
     this.witch = { antidoteUsed: false, poisonUsed: false };
     this._agents = new Map();
+    this._abort = new AbortController(); // terminate() 时中断在途 LLM 调用，结束对局立即生效
     this.llmStats = { calls: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, errors: 0, compressions: 0 };
     this.stepPauseMs = opts.stepPauseMs != null ? opts.stepPauseMs : 2000; // 夜晚死角色步骤的固定停顿（测试可置 0）
   }
+
+  get abortSignal() { return this._abort.signal; }
 
   player(seat) { return this.players[seat - 1]; }
   alivePlayers() { return this.players.filter((p) => p.alive); }
@@ -165,6 +168,8 @@ class Game {
       this.llmStats.errors++;
       this.logger.error('ai', `${seat}号 ${request.task} 智能体异常`, { stack: err && err.stack });
       this.emit('llm_error', { actor: seat, visibleTo: 'god', data: { task: request.task, message: String(err && err.message || err) } });
+      // 终止对局时不再降级续跑：直接抛出让 runGame 优雅结算（否则还要等下一轮校验/降级才退出）
+      if (this.forceEnded) throw new ForceEnded();
       return null; // 由 flow 走降级
     }
   }
@@ -191,11 +196,12 @@ class Game {
     return { ok: true };
   }
 
-  /** 手动终止对局：中断当前等待，runGame 捕获 ForceEnded 后优雅结算 */
+  /** 手动终止对局：中断当前等待（人类 pending 直接拒绝；在途 LLM 调用经 abortSignal 立即中止） */
   terminate(reason = '玩家手动终止对局') {
     if (this.finished) return;
     this.forceEnded = true;
     this.terminateReason = reason;
+    try { this._abort.abort(); } catch (_) { /* 已 abort */ }
     const p = this.pending;
     this.pending = null;
     if (p && p.reject) p.reject(new ForceEnded());
