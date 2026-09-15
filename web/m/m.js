@@ -109,6 +109,8 @@ function renderBoardGrid() {
     card.addEventListener('click', () => {
       state.boardId = b.id;
       state.boardCounts = { ...b.roles };
+      // 板子内置板规（如狼美人局女巫不可自救）预填进规则页，仍可手动调整
+      if (b.rules) Object.assign(state.rules, JSON.parse(JSON.stringify(b.rules)));
       grid.querySelectorAll('.m-board-card').forEach((x) => x.classList.remove('sel'));
       card.classList.add('sel');
       $('#m-next').disabled = false;
@@ -243,8 +245,8 @@ function renderRulesList() {
       sel.addEventListener('change', () => setPath(state.rules, m.key, m.parse ? m.parse(sel.value) : sel.value));
       item.appendChild(sel);
     } else if (m.type === 'nightOrder') {
-      const labels = { guard: '守卫', wolf: '狼人', seer: '预言家', witch: '女巫' };
-      item.innerHTML = `<span class="rlabel">${state.rules.nightOrder.map((s) => labels[s]).join(' → ')}</span>`;
+      const labels = { admirer: '暗恋者', guard: '守卫', dreamer: '摄梦人', wolf: '狼人', wolfbeauty: '狼美人', seer: '预言家', witch: '女巫', crow: '乌鸦' };
+      item.innerHTML = `<span class="rlabel">${state.rules.nightOrder.map((s) => labels[s] || s).join(' → ')}</span>`;
     }
     box.appendChild(item);
   }
@@ -370,7 +372,9 @@ function renderEventNode(e) {
     case 'vote_reveal': {
       const detail = (d.votes || []).map((x) => `${x.seat}→${x.target || '弃'}${x.weight !== 1 ? `<small>×${x.weight}</small>` : ''}`).join('，');
       const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
-      return el('div', 'msg event', `🗳 亮票：${detail}<br><span class="hint">${tally}</span>`);
+      const curse = d.curseBonus && Object.keys(d.curseBonus).length
+        ? `（🐦 ${Object.keys(d.curseBonus).map((s) => s + '号').join('、')} 受诅咒+0.5）` : '';
+      return el('div', 'msg event', `🗳 亮票：${detail}<br><span class="hint">${tally}${curse}</span>`);
     }
     case 'duel': return el('div', 'msg event red', `⚔️ ${seatLabel(e.actor)}（骑士）翻牌发起决斗，指定 ${seatLabel(d.target)}！`);
     case 'sheriff_run': return d.run ? el('div', 'msg event', `🎩 ${seatLabel(e.actor)} 举手，上警竞选警长！`) : null;
@@ -395,11 +399,15 @@ function renderEventNode(e) {
     case 'witch_info': return el('div', 'msg private', `🔒 ${isMine(e) ? '今晚被袭击的是' : seatLabel(e.actor) + ' 得知被袭击的是'}：${d.killTarget ? seatLabel(d.killTarget) : '无人'}`);
     case 'witch_action': return el('div', 'msg private', `🔒 ${isMine(e) ? '用药' : seatLabel(e.actor) + ' 用药'}：${d.antidote ? `解药→${seatLabel(d.killTarget)}；` : ''}${d.poison ? `毒药→${seatLabel(d.poison)}` : ''}${!d.antidote && !d.poison ? '空过' : ''}`);
     case 'night_guard': return el('div', 'msg private', `🔒 ${isMine(e) ? '你守护了' : seatLabel(e.actor) + ' 守护了'} ${d.target ? seatLabel(d.target) : '无人（空守）'}`);
+    case 'night_dream': return el('div', 'msg private', `🔒 ${isMine(e) ? '你摄梦了' : seatLabel(e.actor) + '（摄梦人）摄梦了'} ${seatLabel(d.target)}${d.consecutive ? ' ⚠️ 连摄两晚，他今夜将死' : ''}`);
+    case 'wolfbeauty_charm': return el('div', 'msg private', `🔒 ${isMine(e) ? '你魅惑了' : seatLabel(e.actor) + '（狼美人）魅惑了'} ${seatLabel(d.target)}`);
+    case 'crow_curse': return el('div', 'msg private', `🔒 ${isMine(e) ? '你诅咒了' : seatLabel(e.actor) + '（乌鸦）诅咒了'} ${seatLabel(d.target)}（明日+0.5票）`);
+    case 'admirer_crush': return el('div', 'msg private', `🔒 ${isMine(e) ? '你暗恋上了' : seatLabel(e.actor) + '（暗恋者）暗恋上了'} ${seatLabel(d.target)}`);
     case 'vote_cast': return el('div', 'msg private', `🔒 ${isMine(e) ? '你' : seatLabel(e.actor)}投给了 ${d.target ? seatLabel(d.target) : '弃票'}`);
     default: return null;
   }
 }
-function causeLabel(cause) { return { wolf_kill: '被袭击', poison: '被毒杀', vote_out: '被放逐', shot: '被枪带走', explode_self: '自爆', explode_target: '被自爆带走' }[cause] || cause; }
+function causeLabel(cause) { return { wolf_kill: '被袭击', poison: '被毒杀', vote_out: '被放逐', shot: '被枪带走', explode_self: '自爆', explode_target: '被自爆带走', dream: '被连摄而亡', dream_follow: '梦随出局', charm_follow: '殉情出局', duel_win: '被决斗出局', duel_fail: '决斗谢罪' }[cause] || cause; }
 function roleChipHtml(rid) { const r = roleInfo(rid); return `<span class="role-tag" style="color:${r.color}">${r.emoji} ${r.name}</span>`; }
 
 function updateHeader(v) {
@@ -498,7 +506,9 @@ function feedStage(e, fresh) {
     case 'vote_reveal': {
       const detail = (d.votes || []).map((x) => `${x.seat}→${x.target || '弃'}${x.weight !== 1 ? `×${x.weight}` : ''}`).join('，');
       const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
-      state.stage = { kind: 'event', html: `🗳 亮票：${detail}<br><span class="hint">${tally}</span>` };
+      const curse = d.curseBonus && Object.keys(d.curseBonus).length
+        ? `（🐦 ${Object.keys(d.curseBonus).map((s) => s + '号').join('、')} 受诅咒+0.5）` : '';
+      state.stage = { kind: 'event', html: `🗳 亮票：${detail}<br><span class="hint">${tally}${curse}</span>` };
       break;
     }
     case 'role_reveal':
@@ -785,6 +795,10 @@ function buildActionUI(v, p, box) {
     seer_check: '预言家查验', sheriff_vote: '警长竞选投票', vote: '放逐投票（互相保密）',
     pk_vote: 'PK 投票', wolf_say: '狼队讨论·轮到你（可跳过）', shoot: '开枪技能',
     badge_pass: '警徽去向', direction: '决定发言方向', sheriff_run: '是否上警', witch: '女巫用药',
+    night_dream: '摄梦人·选摄梦对象（连摄两晚同一人则其死亡）',
+    wolfbeauty_charm: '狼美人·选魅惑对象（你出局时他殉情）',
+    crow_curse: '乌鸦·选诅咒对象（明日他放逐投票+0.5票）',
+    admirer_crush: '暗恋者·暗选心动对象（胜负阵营终身绑定）',
   };
   hint(`⏳ ${tasks[p.task] || p.task}（无时间限制）`);
   const ta = () => { const t = el('textarea'); t.placeholder = '输入…'; return t; };
@@ -818,6 +832,10 @@ function buildActionUI(v, p, box) {
   }
   const targetTasks = {
     night_guard: ['确认守护', p.allowNone ? '空守' : null],
+    night_dream: ['确认摄梦', null],
+    wolfbeauty_charm: ['确认魅惑', null],
+    crow_curse: ['确认诅咒', null],
+    admirer_crush: ['确认心动', null],
     wolf_kill: ['投刀', p.allowNone ? '空刀' : null],
     seer_check: ['查验', null],
     vote: ['投票', p.allowNone ? '弃票' : null],

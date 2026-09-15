@@ -49,6 +49,14 @@ function taskInstruction(game, player, req) {
       return `狼队频道：请投票决定今晚的刀口。${cand(req.candidates)}${req.allowNone ? '可以投 0 表示空刀。' : '本局不允许空刀，必须选一人。'}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     case 'night_guard':
       return `请选择今晚守护的对象（可以守自己${req.allowNone ? '，也可以选 0 空守' : ''}）。注意规则限制${game.rules.guardNoRepeat ? '：不能连续两晚守护同一人（列表中已排除）' : ''}。${cand(req.candidates)}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+    case 'night_dream':
+      return `你是摄梦人，今晚必须摄梦一名玩家（不能是自己，不能空过）。被摄梦者当夜免疫狼刀和毒药；若你连续两晚摄梦同一人，他会死亡且女巫救不活（这是你唯一的进攻手段，也可刻意换目标保护他）。你的上夜摄梦记录见"你确知"。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
+    case 'wolfbeauty_charm':
+      return `你是狼美人，今晚选择一名玩家魅惑（不能是自己或狼队）。你被毒杀/放逐/枪杀/摄梦等方式出局时，被魅惑者立即殉情出局（无遗言无技能）；但若你死于骑士决斗则魅惑失效。常用思路：魅惑最像神的人制造"陪葬"威慑，或绑一张深水好人在关键局换命。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
+    case 'crow_curse':
+      return `你是乌鸦，今晚诅咒一名玩家（不能是自己）。被诅咒者明天的放逐投票中额外+0.5票（警长竞选不受影响），每晚重新诅咒会覆盖之前的。常见思路：诅咒你最怀疑的狼帮好人聚集火力，或诅咒悍跳者提高其被推出局概率。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
+    case 'admirer_crush':
+      return `第一夜开始了，你是暗恋者，必须暗中选择一名玩家作为暗恋对象（对方不知情）。你的胜负阵营与他终身绑定：他是神你算神、民你算民、狼你随狼营（但预言家查验你永远是好人）。选前思考：板子神民狼比例、谁的位置和发言风格更像生存率高的阵营；绑狼风险高但验人免疫是护身符。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
     case 'seer_check':
       return `请选择今晚查验的对象。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
     case 'witch': {
@@ -114,6 +122,12 @@ function buildCommonPrompt(game) {
   lines.push('- 狼人夜里只决定刀口，当晚没有任何关于结果的消息：刀口可能被守护或被女巫救下，是否得手要等天亮公告才知道。');
   lines.push('- 天亮时公布昨夜死讯；死者身份是否公开由本局翻牌规则决定。不要声称自己不可能知道的夜间信息（比如猜测的死者身份）。');
   lines.push('- 女巫首夜可以救人也可以不救，解药毒药整场各限一次；猎人被毒杀时无法开枪。');
+  const has = (rid) => (game.board[rid] || 0) > 0;
+  if (has('dreamer')) lines.push('- 摄梦人每晚必须摄梦一人：梦游者当夜免疫狼刀与毒药；同一人被连续摄梦两晚就会死亡且女巫救不活；摄梦人夜里死亡时其梦游者连带出局。因此平安夜≠一定有守卫或女巫救人，可能是刀口撞上了梦游者。');
+  if (has('wolfbeauty')) lines.push('- 狼美人是狼队成员，参与刀口；她另有魅惑技能：她被毒/放逐/枪杀等出局时被魅惑者殉情出局，死于骑士决斗则魅惑失效。她出局后"殉情"的死者不代表其阵营。');
+  if (has('crow')) lines.push('- 乌鸦每晚诅咒一人：被诅咒者次日的放逐投票中额外+0.5票（亮票的票数统计里会体现并标注），警长竞选投票不受影响。');
+  if (has('admirer')) lines.push('- 暗恋者首夜暗选一名暗恋对象，胜负阵营与其终身绑定（绑神算神、绑民算民、绑狼随狼营）；但预言家查验暗恋者永远是"好人"。暗恋者死亡不影响绑定结果。');
+  if (has('hiddenwolf')) lines.push('- 隐狼是狼营暗牌：夜里不睁眼、不知道刀口；被预言家查验永远是"好人"。场上存在隐狼时，"查验好人"不等于"一定是好人阵营"。');
   lines.push('');
   lines.push('## 胜负条件');
   lines.push('好人阵营：所有狼人出局即获胜。狼人阵营：屠边——所有神职出局或所有平民出局即获胜。');
@@ -139,13 +153,19 @@ function buildCommonPrompt(game) {
 /** system 个性部分：座位/身份/技能/队友/性格/阵营立场铁律（各玩家不同，置于公共段之后） */
 function buildPersonalPrompt(game, player) {
   const role = ROLES[player.role];
-  const mates = game.wolves().filter((p) => p.seat !== player.seat).map((p) => `${p.seat}号${p.name}`);
+  const mates = game.matesOf(player).map((p) => `${p.seat}号${p.name}`);
   const lines = [];
   lines.push('## 你的身份');
   lines.push(`座位：${player.seat}号（昵称：${player.name}）`);
   lines.push(`身份：${role.name}`);
   lines.push(`技能说明：${role.description}`);
-  if (role.team === 'wolf') lines.push(`你的狼队队友：${mates.length ? mates.join('、') : '（暂无其他狼人存活信息）'}。夜里狼队频道内可以互相交流。`);
+  if (role.team === 'wolf') {
+    if (player.role === 'hiddenwolf') {
+      lines.push(`你已知的狼队队友：${mates.length ? mates.join('、') : '（无）'}。注意：狼队友不知道你的存在，你夜里也无法进入狼队频道，与他们的唯一默契是各自的伪装与投票配合。`);
+    } else {
+      lines.push(`你的狼队队友：${mates.length ? mates.join('、') : '（暂无其他狼人存活信息）'}。夜里狼队频道内可以互相交流。`);
+    }
+  }
   lines.push('');
   if (player.personality) {
     lines.push('## 你的性格');
@@ -158,7 +178,19 @@ function buildPersonalPrompt(game, player) {
     lines.push(strat);
     lines.push('');
   }
-  if (role.team === 'wolf') {
+  if (player.role === 'admirer') {
+    lines.push('## 立场铁律（暗恋者）');
+    lines.push('- 你的胜负阵营由暗恋对象决定（绑定结果见快照"你确知"中的暗恋记录；对象的阵营需要你自己推理）。');
+    lines.push('- 若对象是神职或平民：你就是好人阵营，帮好人找狼；若对象是狼人阵营：暗中帮狼，但绝不暴露。');
+    lines.push('- 你的护身符：预言家查验你永远是"好人"。无论绑谁，被查都不会暴露；但不要主动声称暗恋者身份。');
+    lines.push('- 白天像普通好人一样发言推理；绑狼时可以做"反向带节奏"的暗狼，注意别做出只有狼才知道的反应。');
+  } else if (player.role === 'hiddenwolf') {
+    lines.push('## 立场铁律（隐狼）');
+    lines.push('- 你与狼队共享胜负，帮狼赢就是帮自己赢；但你夜里不能与狼队交流，也不知道刀口。');
+    lines.push('- 你的最大优势：预言家查验你永远是"好人"。你可以大胆悍跳预言家、报假查验，真预言家对跳也验不出你。');
+    lines.push('- 不知道刀口是你的表演素材：发言绝不预设刀口信息，天亮死讯和你获得的信息完全同步，演好人要自然。');
+    lines.push('- 你不能自爆。狼队友不知道你，别在发言中无意配合他们只有狼才知道的信息。');
+  } else if (role.team === 'wolf') {
     lines.push('## 立场铁律');
     lines.push('- 一切发言与遗言都服务狼阵营胜利：不给出指向队友的可验证真信息，不替好人复盘正确结论。');
     lines.push('- 被推上放逐台先求生（表水、质疑查验来源、引开矛盾）；自感必死则转为埋假线索。');

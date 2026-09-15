@@ -51,6 +51,11 @@ function makeMockAgentFactory(rnd = Math.random, opts = {}) {
           return { target: r.allowNone && maybe(0.12) ? 0 : pick(r.candidates) };
         case 'night_guard':
           return { target: r.allowNone && maybe(0.25) ? 0 : pick(r.candidates) };
+        case 'night_dream':
+        case 'crow_curse':
+        case 'wolfbeauty_charm':
+        case 'admirer_crush':
+          return { target: pick(r.candidates) };
         case 'seer_check':
           return { target: pick(r.candidates) };
         case 'witch': {
@@ -86,7 +91,9 @@ function makeMockAgentFactory(rnd = Math.random, opts = {}) {
 /** 隔离审计：校验每条事件的可见性标签是否泄漏私密信息 */
 function auditIsolation(game) {
   const problems = [];
+  const { ROLES } = require('../src/engine/roles');
   const role = (s) => (game.player(s) ? game.player(s).role : null);
+  const isWolfSeat = (s) => !!ROLES[role(s)] && ROLES[role(s)].team === 'wolf';
   for (const e of game.events) {
     const vis = e.visibleTo;
     const seats = Array.isArray(vis) ? vis : null;
@@ -98,7 +105,7 @@ function auditIsolation(game) {
       case 'wolf_propose':
       case 'wolf_kill':
       case 'wolf_kill_vote':
-        if (!seats || seats.some((s) => role(s) !== 'wolf' && role(s) !== 'wolfking' && role(s) !== 'whitewolfking')) {
+        if (!seats || seats.some((s) => !isWolfSeat(s))) {
           problems.push(`狼队私密事件泄漏 seq=${e.seq} type=${e.type} vis=${vis}`);
         }
         break;
@@ -111,6 +118,18 @@ function auditIsolation(game) {
         break;
       case 'night_guard':
         if (!seats || seats.length !== 1 || role(seats[0]) !== 'guard') problems.push(`守卫目标泄漏 seq=${e.seq}`);
+        break;
+      case 'night_dream':
+        if (!seats || seats.length !== 1 || role(seats[0]) !== 'dreamer') problems.push(`摄梦目标泄漏 seq=${e.seq}`);
+        break;
+      case 'wolfbeauty_charm':
+        if (!seats || seats.length !== 1 || role(seats[0]) !== 'wolfbeauty') problems.push(`魅惑目标泄漏 seq=${e.seq}`);
+        break;
+      case 'crow_curse':
+        if (!seats || seats.length !== 1 || role(seats[0]) !== 'crow') problems.push(`诅咒目标泄漏 seq=${e.seq}`);
+        break;
+      case 'admirer_crush':
+        if (!seats || seats.length !== 1 || role(seats[0]) !== 'admirer') problems.push(`暗恋对象泄漏 seq=${e.seq}`);
         break;
       case 'vote_cast':
         if (!seats || seats.length !== 1 || seats[0] !== e.actor) problems.push(`投票保密性被破坏 seq=${e.seq}`);

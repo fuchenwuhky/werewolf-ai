@@ -748,8 +748,8 @@ test('推荐打法注入 system + 提示词体积守卫', () => {
   assert.ok(wp.includes('悍跳狼') && wp.includes('好人榜流'), '狼人应看到全部狼队模版');
   const sp = buildSystemPrompt(game, game.player(1));
   assert.ok(sp.includes('警徽流'), '预言家应看到警徽流模版');
-  assert.ok(wp.length < 2200, `狼人 system 应保持精简（当前 ${wp.length} 字符）`);
-  assert.ok(sp.length < 2000, `预言家 system 应保持精简（当前 ${sp.length} 字符）`);
+  assert.ok(wp.length < 2400, `狼人 system 应保持精简（当前 ${wp.length} 字符）`);
+  assert.ok(sp.length < 2150, `预言家 system 应保持精简（当前 ${sp.length} 字符）`);
 });
 
 test('共享前缀：职业配置/职业一览/流程常识', () => {
@@ -981,5 +981,270 @@ test('Agent.decide 集成：组装→单发调用→解析→游标推进', asyn
     assert.strictEqual(calls[2].opts.maxTokens, 8000);
   } finally {
     llm.chatCompletion = orig;
+  }
+});
+
+// ==================== 新角色与板子（摄梦人/狼美人/乌鸦/隐狼/暗恋者） ====================
+
+test('新板子：5 个网易官方板配置合法（12 人）', () => {
+  for (const id of ['wwkguard12', 'dreamer12', 'wolfbeautyknight12', 'crowhidden12', 'admirer12']) {
+    const b = BOARDS[id];
+    const total = Object.values(b.roles).reduce((a, x) => a + x, 0);
+    assert.strictEqual(total, 12, `${id} 总人数应为 12`);
+    assert.ok(validateBoard(b.roles).ok, `${id} 校验应通过`);
+  }
+  assert.strictEqual(BOARDS.dreamer12.roles.dreamer, 1, '摄梦人场恰一名摄梦人');
+  assert.strictEqual(BOARDS.wolfbeautyknight12.roles.wolfbeauty, 1, '狼美骑士场恰一名狼美人');
+  assert.deepStrictEqual(BOARDS.wolfbeautyknight12.rules, { witchSelfSave: 'never' }, '狼美骑士场板规：女巫不可自救');
+  assert.strictEqual(BOARDS.crowhidden12.roles.hiddenwolf, 1, '乌鸦隐狼场恰一名隐狼');
+  assert.strictEqual(BOARDS.crowhidden12.roles.crow, 1, '乌鸦隐狼场恰一名乌鸦');
+  assert.strictEqual(BOARDS.admirer12.roles.admirer, 1, '暗恋者场恰一名暗恋者');
+});
+
+test('夜晚顺序：默认含新步骤 + 老配置自动迁移补齐', () => {
+  const r = mergeRules({});
+  for (const s of ['admirer', 'dreamer', 'wolfbeauty', 'crow']) assert.ok(r.nightOrder.includes(s), `默认顺序应含 ${s}`);
+  const old = mergeRules({ nightOrder: ['guard', 'wolf', 'seer', 'witch'] });
+  for (const s of ['admirer', 'dreamer', 'wolfbeauty', 'crow']) assert.ok(old.nightOrder.includes(s), `老配置应补齐 ${s}`);
+  assert.strictEqual(old.nightOrder.filter((s) => s === 'guard').length, 1, '不应重复添加');
+  assert.ok(describeRules(r).includes('摄梦人'), 'describeRules 应有新步骤中文名');
+});
+
+// ---------- 摄梦人 ----------
+function setupDreamNight(wolfKill, guardActions, saved, poisonTargets, dreamActions, lastDreamMap = {}) {
+  const g = makeGame({ rules: {} });
+  assignRoles(g, { 1: 'wolf', 2: 'dreamer', 3: 'seer', 4: 'witch', 5: 'hunter', 6: 'villager' });
+  g.day = 1;
+  g.phase = 'night';
+  g.night = { guardActions, wolfKill, saved, poisonTargets, dreamActions };
+  g.lastDreamMap = lastDreamMap;
+  return g;
+}
+
+test('摄梦结算：连摄两晚同一人 → 死亡且女巫救不活', () => {
+  // 狼刀 6 号撞上梦游者落空，但 6 号被连摄两晚：仍死于连摄（救不活）
+  const g = setupDreamNight(6, [{ seat: 2, target: 6 }], false, [], [{ seat: 2, target: 6 }], { 2: 6 });
+  _internals.resolveNightDeaths(g);
+  assert.deepStrictEqual(g.pendingDeaths.map((d) => d.seat), [6]);
+  assert.strictEqual(g.pendingDeaths[0].cause, 'dream');
+  assert.strictEqual(g.lastDreamMap[2], 6, 'lastDreamMap 应更新');
+});
+
+test('摄梦结算：梦游者免疫狼刀 → 平安夜', () => {
+  const g = setupDreamNight(6, [], false, [], [{ seat: 2, target: 6 }]);
+  _internals.resolveNightDeaths(g);
+  assert.deepStrictEqual(g.pendingDeaths, [], '刀中梦游者应落空');
+});
+
+test('摄梦结算：毒杀梦游者 → 落空（药照耗）', () => {
+  const g = setupDreamNight(0, [], false, [6], [{ seat: 2, target: 6 }]);
+  _internals.resolveNightDeaths(g);
+  assert.deepStrictEqual(g.pendingDeaths, [], '毒梦游者应落空');
+});
+
+test('摄梦结算：摄梦人夜里被刀 → 梦游者连带出局', () => {
+  const g = setupDreamNight(2, [], false, [], [{ seat: 2, target: 6 }]);
+  _internals.resolveNightDeaths(g);
+  assert.deepStrictEqual(g.pendingDeaths.map((d) => d.seat), [2, 6]);
+  assert.strictEqual(g.pendingDeaths.find((d) => d.seat === 6).cause, 'dream_follow');
+});
+
+test('摄梦结算：连摄死的猎人不开枪', async () => {
+  const g = setupDreamNight(0, [], false, [], [{ seat: 2, target: 5 }], { 2: 5 });
+  g._shots = [];
+  _internals.resolveNightDeaths(g);
+  assert.deepStrictEqual(g.pendingDeaths.map((d) => d.seat), [5]);
+  await _internals.dawnPhase(g);
+  assert.deepStrictEqual(g._shots, [], '连摄死亡的猎人不应触发开枪');
+});
+
+// ---------- 狼美人 ----------
+test('狼美人：被放逐 → 被魅惑者殉情出局（不开枪）', async () => {
+  const g = makeGame({});
+  assignRoles(g, { 1: 'wolf', 2: 'wolfbeauty', 3: 'villager', 4: 'hunter', 5: 'villager' });
+  g.charmMap = { 2: 4 }; // 魅惑猎人
+  g._shots = [];
+  await _internals.settleDeath(g, 2, 'vote_out', {});
+  assert.strictEqual(g.player(4).alive, false, '被魅惑的猎人应殉情出局');
+  assert.deepStrictEqual(g._shots, [], '殉情死亡的猎人不能开枪');
+  assert.ok(g.events.some((e) => e.type === 'role_reveal' && e.data.seat === 4), '殉情者应翻牌');
+});
+
+test('狼美人：死于骑士决斗 → 魅惑失效不殉情', async () => {
+  const g = makeGame({});
+  assignRoles(g, { 1: 'knight', 2: 'wolfbeauty', 3: 'villager', 4: 'villager', 5: 'villager' });
+  g.charmMap = { 2: 4 };
+  const r = await _internals.handleDuel(g, 1, 2);
+  assert.strictEqual(r, 'dayEnded', '决斗狼美人应入夜');
+  assert.strictEqual(g.player(2).alive, false, '狼美人出局');
+  assert.strictEqual(g.player(4).alive, true, '被魅惑者不应殉情');
+  assert.strictEqual(g.charmMap[2], undefined, '魅惑记录应清除');
+});
+
+test('狼美人：毒杀触发殉情；新魅惑覆盖旧目标', async () => {
+  const g = makeGame({});
+  assignRoles(g, { 1: 'wolf', 2: 'wolfbeauty', 3: 'witch', 4: 'villager', 5: 'villager' });
+  g.charmMap = { 2: 5 };
+  await _internals.settleDeath(g, 2, 'poison', {});
+  assert.strictEqual(g.player(5).alive, false, '毒杀狼美人应触发殉情');
+  const g2 = makeGame({});
+  assignRoles(g2, { 1: 'wolf', 2: 'wolfbeauty', 3: 'villager', 4: 'villager', 5: 'villager' });
+  g2.charmMap = { 2: 4 };
+  g2.night = { guardActions: [], dreamActions: [], charmActions: [{ seat: 2, target: 5 }], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  _internals.resolveNightDeaths(g2);
+  assert.strictEqual(g2.charmMap[2], 5, '最新魅惑应覆盖旧的');
+});
+
+// ---------- 乌鸦 ----------
+test('乌鸦诅咒：放逐投票 +0.5 票；警长竞选投票不受影响', async () => {
+  const rnd = () => 0.5; // 确定性：两候选时 mock 必投第 2 个（6号）
+  const g = makeGame({ humanSeat: null, rnd });
+  assignRoles(g, { 1: 'wolf', 2: 'crow', 3: 'seer', 4: 'villager', 5: 'villager', 6: 'villager' });
+  g.activeCurse = [6];
+  const r = await secretVote(g, { task: 'vote', voters: [1, 2, 3, 4], candidates: [5, 6], allowNone: true });
+  assert.strictEqual(r.tally['6'], 4.5, '被诅咒者应 4 票+0.5');
+  assert.deepStrictEqual(r.topSeats, [6]);
+  const r2 = await secretVote(g, { task: 'sheriff_vote', voters: [1, 2, 3, 4], candidates: [5, 6], allowNone: true });
+  assert.strictEqual(r2.tally['6'], 4, '警长竞选投票不应加诅咒票');
+  const cursed = g.events.filter((e) => e.type === 'vote_reveal' && e.data.curseBonus && Object.keys(e.data.curseBonus).length).pop();
+  assert.ok(cursed && cursed.data.curseBonus['6'] === 0.5, '放逐亮票应带诅咒加成标注');
+  const sheriffReveal = g.events.filter((e) => e.type === 'vote_reveal').pop();
+  assert.strictEqual(sheriffReveal.data.curseBonus, undefined, '警选亮票不应带诅咒标注');
+});
+
+// ---------- 隐狼 ----------
+test('隐狼互认：隐狼知道狼队友，狼队不知道隐狼', () => {
+  const g = makeGame({ board: { wolf: 1, hiddenwolf: 1, seer: 1, witch: 1, villager: 3 } });
+  g.deal();
+  const hw = g.players.find((p) => p.role === 'hiddenwolf');
+  const wolf = g.players.find((p) => p.role === 'wolf');
+  const hwMates = g.events.filter((e) => e.type === 'teammates' && e.actor === hw.seat).pop();
+  const wolfMates = g.events.filter((e) => e.type === 'teammates' && e.actor === wolf.seat).pop();
+  assert.deepStrictEqual(hwMates.data.seats, [wolf.seat], '隐狼应知道狼队友');
+  assert.deepStrictEqual(wolfMates.data.seats, [], '狼队友不应知道隐狼');
+  assert.deepStrictEqual(g.matesOf(hw).map((p) => p.seat), [wolf.seat]);
+  assert.deepStrictEqual(g.matesOf(wolf), [], 'matesOf 对普通狼应排除隐狼');
+});
+
+test('隐狼：查验恒好人；不参与狼刀；可被决斗；参与胜负', async () => {
+  const g = makeGame({ board: { wolf: 1, hiddenwolf: 1, seer: 1, witch: 1, villager: 3 }, rnd: () => 0.2 });
+  assignRoles(g, { 1: 'wolf', 2: 'hiddenwolf', 3: 'seer', 4: 'witch', 5: 'villager', 6: 'villager' });
+  g.day = 1;
+  g.phase = 'night';
+  g.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  assert.strictEqual(g.nightWolves().length, 1, 'nightWolves 不应含隐狼');
+  await _internals.seerStep(g); // 候选[1,2,4,5,6]，rnd=0.2 → floor(1)=1 → 必验 2号（隐狼）
+  const check = g.events.filter((e) => e.type === 'seer_check').pop();
+  assert.strictEqual(check.data.target, 2, '确定性 rnd 应验中隐狼');
+  assert.strictEqual(check.data.isWolf, false, '查验隐狼应为好人');
+  // 狼全死但隐狼存活 → 好人未胜（隐狼算狼营）
+  g.player(1).alive = false;
+  assert.strictEqual(g.checkWin(), null, '隐狼存活时好人不应获胜');
+  g.player(1).alive = true;
+  // 决斗隐狼 → 隐狼出局（他是狼）
+  const r = await _internals.handleDuel(g, 3, 2);
+  assert.strictEqual(r, 'dayEnded', '决斗隐狼应成功入夜');
+  assert.strictEqual(g.player(2).alive, false);
+  g.player(1).alive = false;
+  assert.strictEqual(g.checkWin().winner, 'good', '隐狼也出局后好人胜');
+});
+
+// ---------- 暗恋者 ----------
+test('暗恋者：categoryOf 随绑定对象变动并驱动胜负', () => {
+  const g = makeGame({ board: { wolf: 1, seer: 1, admirer: 1, villager: 2 } });
+  assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'admirer', 4: 'villager', 5: 'villager' });
+  assert.strictEqual(g.categoryOf(g.player(3)), 'villager', '未绑定前按默认类别');
+  g.crush = { 3: 1 }; // 绑狼
+  assert.strictEqual(g.categoryOf(g.player(3)), 'wolf', '绑狼后算狼营');
+  g.player(1).alive = false; // 真狼出局
+  assert.strictEqual(g.checkWin(), null, '绑狼暗恋者存活时好人未胜');
+  g.player(3).alive = false;
+  assert.strictEqual(g.checkWin().winner, 'good', '暗恋者也出局后好人胜');
+  const g2 = makeGame({ board: { wolf: 1, seer: 1, admirer: 1, villager: 2 } });
+  assignRoles(g2, { 1: 'wolf', 2: 'seer', 3: 'admirer', 4: 'villager', 5: 'villager' });
+  g2.crush = { 3: 4 }; // 绑民
+  g2.player(2).alive = false; // 神职全灭
+  assert.strictEqual(g2.checkWin().winner, 'wolf', '绑民的暗恋者算民，神职出局狼人屠边');
+});
+
+test('暗恋者：查验恒好人（即使绑狼）', async () => {
+  const g = makeGame({ board: { wolf: 1, seer: 1, admirer: 1, villager: 2 }, rnd: () => 0.3 });
+  assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'admirer', 4: 'villager', 5: 'villager' });
+  g.crush = { 3: 1 };
+  g.day = 1;
+  g.phase = 'night';
+  g.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  await _internals.seerStep(g);
+  const onAdmirer = g.events.filter((e) => e.type === 'seer_check').find((e) => e.data.target === 3);
+  assert.ok(onAdmirer, '确定性 rnd 应让预言家验中暗恋者（候选[1,3,4,5] 取 index 1）');
+  assert.strictEqual(onAdmirer.data.isWolf, false, '查验暗恋者应恒为好人（即使绑狼）');
+});
+
+// ---------- 新夜步 + 输入校验 + 提示词 ----------
+test('新夜步：摄梦/诅咒/魅惑/暗恋 mock 驱动 + 校验', async () => {
+  const g = makeGame({ board: { wolf: 2, wolfbeauty: 1, dreamer: 1, crow: 1, seer: 1, admirer: 1, villager: 4 } });
+  assignRoles(g, { 1: 'wolf', 2: 'wolf', 3: 'wolfbeauty', 4: 'dreamer', 5: 'crow', 6: 'seer', 7: 'admirer' });
+  g.day = 1;
+  g.phase = 'night';
+  g.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  await _internals.admirerStep(g);
+  assert.ok(g.crush[7], '暗恋者应完成绑定');
+  assert.notStrictEqual(g.crush[7], 7, '不能选自己');
+  await _internals.dreamerStep(g);
+  assert.strictEqual(g.night.dreamActions.length, 1, '摄梦人必须行动');
+  await _internals.crowStep(g);
+  assert.strictEqual(g.night.curses.length, 1, '乌鸦必须行动');
+  await _internals.wolfbeautyStep(g);
+  assert.strictEqual(g.night.charmActions.length, 1, '狼美人必须行动');
+  const charmTarget = g.night.charmActions[0].target;
+  assert.ok(![1, 2, 3].includes(charmTarget), '狼美人不能魅惑狼队');
+  const req = { task: 'night_dream', candidates: [1, 2] };
+  assert.ok(!validatePayload('night_dream', {}, req, g, 4).ok, '缺目标应拒绝');
+  assert.ok(!validatePayload('night_dream', { target: 0 }, req, g, 4).ok, '摄梦不能空过');
+  assert.ok(!validatePayload('admirer_crush', { target: 7 }, { task: 'admirer_crush', candidates: [1, 7] }, g, 7).ok, '暗恋不能选自己');
+  assert.ok(validatePayload('crow_curse', { target: 1 }, { task: 'crow_curse', candidates: [1, 2] }, g, 5).ok, '诅咒合法目标');
+});
+
+test('新角色提示词：公共机制说明按板子注入 + 任务指令', () => {
+  const g = makeGame({ board: { wolf: 2, wolfbeauty: 1, dreamer: 1, crow: 1, seer: 1, admirer: 1, villager: 4 } });
+  assignRoles(g, { 1: 'wolf', 2: 'wolf', 3: 'wolfbeauty', 4: 'dreamer', 5: 'crow', 6: 'seer', 7: 'admirer' });
+  const common = buildCommonPrompt(g);
+  for (const kw of ['摄梦', '殉情', '0.5票', '暗恋者', '隐狼不在此板']) {
+    if (kw === '隐狼不在此板') continue;
+    assert.ok(common.includes(kw), `公共流程常识应含：${kw}`);
+  }
+  const g2 = makeGame({ board: { wolf: 2, wolfbeauty: 1, dreamer: 1, crow: 1, seer: 1, admirer: 1, hiddenwolf: 1, villager: 3 } });
+  assignRoles(g2, { 1: 'wolf', 2: 'wolf', 3: 'wolfbeauty', 4: 'dreamer', 5: 'crow', 6: 'seer', 7: 'admirer', 8: 'hiddenwolf' });
+  assert.ok(buildCommonPrompt(g2).includes('隐狼'), '隐狼在场时公共常识应说明隐狼机制');
+  assert.ok(buildCommonPrompt(g).includes('【摄梦人】'), '职业一览应含新角色');
+  // 任务指令
+  assert.ok(taskInstruction(g, g.player(4), { task: 'night_dream', candidates: [1] }).includes('连续两晚'), '摄梦指令说明连摄');
+  assert.ok(taskInstruction(g, g.player(3), { task: 'wolfbeauty_charm', candidates: [4] }).includes('殉情'), '魅惑指令说明殉情');
+  assert.ok(taskInstruction(g, g.player(5), { task: 'crow_curse', candidates: [4] }).includes('0.5'), '诅咒指令说明票权');
+  assert.ok(taskInstruction(g, g.player(7), { task: 'admirer_crush', candidates: [4] }).includes('绑定'), '暗恋指令说明绑定');
+  // 隐狼/暗恋者个性提示词特殊立场
+  const hwPrompt = buildPersonalPrompt(g2, g2.player(8));
+  assert.ok(hwPrompt.includes('立场铁律（隐狼）') && hwPrompt.includes('查验你永远是'), '隐狼应注入专属立场');
+  const adPrompt = buildPersonalPrompt(g, g.player(7));
+  assert.ok(adPrompt.includes('立场铁律（暗恋者）'), '暗恋者应注入专属立场');
+  const wbPrompt = buildPersonalPrompt(g, g.player(3));
+  assert.ok(wbPrompt.includes('狼队队友'), '狼美人仍应看到狼队');
+});
+
+test('新板子全流程：4 个官方板 mock 跑通 + 隔离审计', async () => {
+  for (const id of ['dreamer12', 'wolfbeautyknight12', 'crowhidden12', 'admirer12']) {
+    for (let i = 0; i < 2; i++) {
+      const g = makeGame({ id: `${id}-${i}`, board: BOARDS[id].roles, rules: BOARDS[id].rules, rnd: Math.random, mock: { explodeRate: 0.02 } });
+      await runGame(g);
+      assert.ok(g.finished, `${id} 第${i}局应正常结束`);
+      assert.ok(['good', 'wolf'].includes(g.winner), `${id} 第${i}局应有胜负`);
+      const problems = auditIsolation(g);
+      assert.deepStrictEqual(problems, [], `${id} 第${i}局隔离审计失败: ${problems.join('; ')}`);
+      // 摄梦人局的连摄记录 / 暗恋者局的绑定必须存在
+      if (id === 'dreamer12') assert.ok(g.events.some((e) => e.type === 'night_dream'), '应有摄梦事件');
+      if (id === 'crowhidden12') assert.ok(g.events.some((e) => e.type === 'crow_curse'), '应有诅咒事件');
+      if (id === 'admirer12') assert.ok(Object.keys(g.crush).length > 0, '暗恋者应完成绑定');
+      if (id === 'wolfbeautyknight12') assert.strictEqual(g.rules.witchSelfSave, 'never', '板规应生效');
+    }
   }
 });

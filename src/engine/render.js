@@ -12,6 +12,10 @@ const TASK_META = {
   sheriff_speech: { label: '警长竞选演讲', needText: true },
   wolf_propose: { label: '狼队频道表态', needText: true },
   night_guard: { label: '选择守护目标', needTarget: true },
+  night_dream: { label: '选择摄梦目标', needTarget: true },
+  wolfbeauty_charm: { label: '选择魅惑目标', needTarget: true },
+  crow_curse: { label: '选择诅咒目标', needTarget: true },
+  admirer_crush: { label: '选择暗恋对象', needTarget: true },
   wolf_kill: { label: '投票选择今晚的刀口', needTarget: true },
   seer_check: { label: '选择查验目标', needTarget: true },
   witch: { label: '使用药剂', special: 'witch' },
@@ -54,6 +58,10 @@ function renderEvent(game, e) {
     case 'sheriff_none': return '警长竞选结束：本局没有产生警长。';
     case 'badge_pass': return d.to ? `${seatName(game, e.actor)}（警长）将警徽移交给了 ${seatName(game, d.to)}。` : `${seatName(game, e.actor)}（警长）撕毁了警徽。`;
     case 'night_guard': return `你今晚守护了 ${d.target ? seatName(game, d.target) : '无人（空守）'}。`;
+    case 'night_dream': return `你今晚摄梦了 ${seatName(game, d.target)}，他是当夜的梦游者${d.consecutive ? '。⚠️ 这是你连续第二晚摄梦此人：他今夜会死亡（女巫救不活）' : ''}。`;
+    case 'wolfbeauty_charm': return `你今晚魅惑了 ${seatName(game, d.target)}。你出局时（骑士决斗除外）他将殉情出局。`;
+    case 'crow_curse': return `你今晚诅咒了 ${seatName(game, d.target)}，明天的放逐投票中他会额外多 0.5 票。`;
+    case 'admirer_crush': return `你暗恋上了 ${seatName(game, d.target)}。你的胜负阵营与他终身绑定（预言家查验你永远是好人）。`;
     case 'wolf_propose': return `${seatName(game, e.actor)}（狼队频道）：${d.text}`;
     case 'wolf_kill_vote': return `${seatName(game, e.actor)} 投刀：${d.target ? seatName(game, d.target) : '空刀'}`;
     case 'wolf_kill': return `狼队最终决定：今晚袭击 ${d.target ? seatName(game, d.target) : '无人（空刀）'}。`;
@@ -68,7 +76,9 @@ function renderEvent(game, e) {
     case 'vote_reveal': {
       const detail = (d.votes || []).map((v) => `${v.seat}号→${v.target ? v.target + '号' : '弃票'}${v.weight !== 1 ? `(×${v.weight})` : ''}`).join('，');
       const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
-      return `亮票结果：${detail}。${tally ? `票数统计：${tally}。` : ''}`;
+      const curse = d.curseBonus && Object.keys(d.curseBonus).length
+        ? `（${Object.keys(d.curseBonus).map((s) => s + '号').join('、')}受乌鸦诅咒各+0.5票）` : '';
+      return `亮票结果：${detail}。${tally ? `票数统计${curse}：${tally}。` : ''}`;
     }
     case 'role_reveal': return `${seatName(game, d.seat)} 的身份是：${ROLES[d.role].name}。`;
     case 'idiot_save': return `${seatName(game, d.seat)} 是白痴，翻牌免疫本次放逐，之后可以发言但不再有投票权。`;
@@ -84,6 +94,8 @@ function causeLabel(cause) {
   return {
     wolf_kill: '被狼人袭击', poison: '被毒杀', vote_out: '被投票放逐',
     shot: '被开枪带走', explode_self: '自爆', explode_target: '被自爆带走',
+    duel_win: '被骑士决斗出局', duel_fail: '决斗失败以死谢罪',
+    dream: '被连续摄梦而亡', dream_follow: '因摄梦人出局连带出局', charm_follow: '殉情出局',
   }[cause] || cause;
 }
 

@@ -143,6 +143,73 @@ const ROLES = {
     short: '白天可翻牌决斗：决斗狼人则其出局入夜；决斗好人则骑士以死谢罪。',
     description: '除警长竞选阶段外，你可以在白天任意玩家的发言阶段翻牌发起决斗：指定一名玩家，若他是狼人则其立即出局并直接进入黑夜；若是好人则你出局以死谢罪，白天继续。决斗不能指定自己。',
   },
+
+  dreamer: {
+    id: 'dreamer',
+    name: '摄梦人',
+    team: 'good',
+    category: 'god',
+    emoji: '🌙',
+    color: '#7e57c2',
+    nightStep: 'dreamer',
+    deathTrigger: null,
+    short: '每晚必须摄梦一人：梦游者当夜免疫袭击与毒杀；连摄两晚同一人则其死亡（救不活）；摄梦人夜里死则梦游者连带出局。',
+    description: '每晚你必须选择一名其他玩家摄梦，使其成为当夜的梦游者。梦游者当夜免疫狼人袭击和毒药（女巫的药会白白消耗）。若你连续两晚摄梦同一名玩家，该玩家死亡，女巫救不活。若你在夜里死亡，当晚的梦游者会连带出局。被摄梦死亡的猎人/狼王不能开枪。',
+  },
+
+  wolfbeauty: {
+    id: 'wolfbeauty',
+    name: '狼美人',
+    team: 'wolf',
+    category: 'wolf',
+    emoji: '💃',
+    color: '#c2185b',
+    nightStep: 'wolfbeauty',
+    deathTrigger: null,
+    selfExplode: false,
+    short: '每晚魅惑一人（不能是自己或狼队）；你被毒/放逐/枪杀等出局时被魅惑者殉情出局；死于骑士决斗则魅惑失效；不能自爆。',
+    description: '狼人阵营，参与狼队的讨论与刀口。你另有单独技能：每晚可以魅惑一名玩家（不能是自己，也不能是狼队成员）。当你被毒杀、被放逐、被开枪带走、被摄梦等方式出局时，被你魅惑的玩家立即殉情出局，没有遗言、不能发动技能；但你若死于骑士决斗，魅惑失效。你不能自爆。',
+  },
+
+  crow: {
+    id: 'crow',
+    name: '乌鸦',
+    team: 'good',
+    category: 'god',
+    emoji: '🐦',
+    color: '#546e7a',
+    nightStep: 'crow',
+    deathTrigger: null,
+    short: '每晚诅咒一人：被诅咒者次日的放逐投票中额外多 0.5 票（警长竞选投票不受影响）。',
+    description: '每晚你可以诅咒一名玩家（不能是自己）。被诅咒的玩家在接下来白天的放逐投票中会被额外计入 0.5 票；警长竞选投票不受影响。每晚重新诅咒会覆盖之前的诅咒。',
+  },
+
+  hiddenwolf: {
+    id: 'hiddenwolf',
+    name: '隐狼',
+    team: 'wolf',
+    category: 'wolf',
+    emoji: '🌫️',
+    color: '#6d4c41',
+    nightStep: null,
+    deathTrigger: null,
+    selfExplode: false,
+    short: '狼营暗牌：夜里不睁眼、不参与刀口，也不知道刀口；你知道狼队友但狼队不知道你；被查验结果永远是好人；不能自爆。',
+    description: '狼人阵营的暗牌。夜晚你不睁眼：不参与狼队讨论、不参与刀口投票，也看不到今晚的刀口。开局时你知道狼队友是谁，但狼队友不知道你的存在。预言家查验你时结果永远是"好人"。白天请伪装成好人发言，把水搅浑；你与狼队共享胜负。你不能自爆。',
+  },
+
+  admirer: {
+    id: 'admirer',
+    name: '暗恋者',
+    team: 'good',
+    category: 'villager',
+    emoji: '💗',
+    color: '#ec407a',
+    nightStep: 'admirer',
+    deathTrigger: null,
+    short: '首夜最先行动暗选一名暗恋对象，胜负阵营与其终身绑定；预言家查验你永远是好人。',
+    description: '第一夜你最先行动，必须暗中选择一名其他玩家作为暗恋对象（对方不会知道）。你的胜负阵营与暗恋对象终身绑定：他是神职你就算神职、平民就算平民、狼人阵营则你随狼人阵营获胜——即使他死了绑定依然有效。但无论绑定谁，预言家查验你的结果永远是"好人"。不要暴露你的身份。',
+  },
 };
 
 const ROLE_IDS = Object.keys(ROLES);
@@ -178,6 +245,37 @@ const BOARDS = {
     name: '12人白狼王骑士场',
     desc: '白狼王+3狼 + 预女骑白 + 4民，决斗与自爆的操作型快节奏板子',
     roles: { whitewolfking: 1, wolf: 3, seer: 1, witch: 1, knight: 1, idiot: 1, villager: 4 },
+  },
+  wwkguard12: {
+    id: 'wwkguard12',
+    name: '12人白狼王守卫场',
+    desc: '白狼王+3狼 + 预女猎守 + 4民，网易官方板子',
+    roles: { whitewolfking: 1, wolf: 3, seer: 1, witch: 1, hunter: 1, guard: 1, villager: 4 },
+  },
+  dreamer12: {
+    id: 'dreamer12',
+    name: '12人狼王摄梦人场',
+    desc: '狼王+3狼 + 预女猎摄 + 4民，网易官方板子：连摄是武器也是双刃剑',
+    roles: { wolf: 3, wolfking: 1, seer: 1, witch: 1, hunter: 1, dreamer: 1, villager: 4 },
+  },
+  wolfbeautyknight12: {
+    id: 'wolfbeautyknight12',
+    name: '12人狼美人骑士场',
+    desc: '狼美人+3狼 + 预女守骑 + 4民；板规：女巫全程不能自救',
+    roles: { wolfbeauty: 1, wolf: 3, seer: 1, witch: 1, guard: 1, knight: 1, villager: 4 },
+    rules: { witchSelfSave: 'never' },
+  },
+  crowhidden12: {
+    id: 'crowhidden12',
+    name: '12人乌鸦隐狼场',
+    desc: '狼王+2狼+隐狼 + 预女猎乌 + 4民：查验结果里有陷阱的诅咒板',
+    roles: { wolfking: 1, wolf: 2, hiddenwolf: 1, seer: 1, witch: 1, hunter: 1, crow: 1, villager: 4 },
+  },
+  admirer12: {
+    id: 'admirer12',
+    name: '12人暗恋者场',
+    desc: '4狼 + 预女猎 + 4民 + 暗恋者，首夜绑定阵营的暗牌屠边局',
+    roles: { wolf: 4, seer: 1, witch: 1, hunter: 1, admirer: 1, villager: 4 },
   },
 };
 

@@ -172,14 +172,16 @@ class Api {
 
   // ---------- 实现 ----------
   createGame(res, body) {
-    const board = body.boardId && BOARDS[body.boardId] ? BOARDS[body.boardId].roles : body.board;
+    const boardDef = body.boardId && BOARDS[body.boardId] ? BOARDS[body.boardId] : null;
+    const board = boardDef ? boardDef.roles : body.board;
     const check = validateBoard(board);
     if (!check.ok) return this.json(res, 400, { error: '板子不合法：' + check.errors.join('；') });
     const players = Array.isArray(body.players) ? body.players : [];
     if (players.length !== check.total) return this.json(res, 400, { error: `玩家数(${players.length})与板子人数(${check.total})不一致` });
     const humans = players.filter((p) => p.isHuman).length;
     if (humans > 1) return this.json(res, 400, { error: '最多 1 名人类玩家' });
-    const rules = mergeRules(body.rules);
+    // 规则优先级：用户设置 > 板子内置板规（如狼美人局女巫不可自救） > 默认值
+    const rules = mergeRules({ ...(boardDef && boardDef.rules || {}), ...(body.rules || {}) });
     const useMock = !!body.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key（或在设置中勾选 Mock 试玩）' });
 

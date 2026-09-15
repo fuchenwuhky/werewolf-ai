@@ -20,6 +20,7 @@ const FAST_TASKS = new Set([
   'wolf_propose', 'wolf_chat', 'wolf_kill', 'night_guard', 'seer_check', 'witch',
   'sheriff_run', 'sheriff_vote', 'vote', 'pk_vote', 'shoot', 'badge_pass',
   'direction', 'explode_check', 'duel_check', 'lastwords',
+  'night_dream', 'crow_curse', 'wolfbeauty_charm', 'admirer_crush',
 ]);
 
 /** 任务分层：发言类用主思考强度，快速任务用 fastEffort */
@@ -60,25 +61,39 @@ function privateLedger(game, player, events) {
   const lines = [];
   const role = player.role;
   if (game.wolves().some((w) => w.seat === player.seat)) {
-    const mates = game.wolves().filter((w) => w.seat !== player.seat && w.alive).map((w) => `${w.seat}号${w.name}`);
-    const dead = game.wolves().filter((w) => w.seat !== player.seat && !w.alive).map((w) => `${w.seat}号${w.name}`);
-    lines.push(`狼队队友：${mates.join('、') || '（无存活）'}${dead.length ? `（已出局：${dead.join('、')}）` : ''}`);
+    const mates = game.matesOf(player).filter((w) => w.alive).map((w) => `${w.seat}号${w.name}`);
+    const dead = game.matesOf(player).filter((w) => !w.alive).map((w) => `${w.seat}号${w.name}`);
+    const label = role === 'hiddenwolf' ? '你已知的狼队队友（他们不知道你）' : '狼队队友';
+    lines.push(`${label}：${mates.join('、') || '（无存活）'}${dead.length ? `（已出局：${dead.join('、')}）` : ''}`);
+  }
+  if (game.crush && game.crush[player.seat]) {
+    const t = game.player(game.crush[player.seat]);
+    if (t) lines.push(`你的暗恋对象：${t.seat}号${t.name}${t.alive ? '' : '（已出局，绑定依然有效）'}——胜负阵营与他绑定，他的阵营需你自行推断`);
   }
   const kills = [];
   const checks = [];
   const potions = [];
   const guards = [];
+  const dreams = [];
+  const charms = [];
+  const curses = [];
   for (const e of events) {
     const d = e.data || {};
     if (e.type === 'wolf_kill') kills.push(`第${e.day}夜→${d.target ? d.target + '号' : '空刀'}`);
     else if (e.type === 'seer_check') checks.push(`第${e.day}夜验 ${d.target}号：${d.isWolf ? '狼人' : '好人'}`);
     else if (e.type === 'witch_action') potions.push(`第${e.day}夜 ${d.antidote ? `解药救${d.killTarget}号` : '未救'}${d.poison ? `、毒${d.poison}号` : ''}`);
     else if (e.type === 'night_guard') guards.push(`第${e.day}夜守 ${d.target ? d.target + '号' : '空'}`);
+    else if (e.type === 'night_dream') dreams.push(`第${e.day}夜摄梦 ${d.target}号`);
+    else if (e.type === 'wolfbeauty_charm') charms.push(`第${e.day}夜魅惑 ${d.target}号`);
+    else if (e.type === 'crow_curse') curses.push(`第${e.day}夜诅咒 ${d.target}号`);
   }
   if (kills.length && role !== 'whitewolfking') lines.push(`狼队历史刀口：${kills.join('，')}`);
   if (checks.length) lines.push(`查验记录：${checks.join('，')}`);
   if (potions.length) lines.push(`用药记录：${potions.join('，')}`);
   if (guards.length) lines.push(`守护记录：${guards.join('，')}`);
+  if (dreams.length) lines.push(`摄梦记录：${dreams.join('，')}（连续两晚同一人则其死亡）`);
+  if (charms.length) lines.push(`当前魅惑：${charms[charms.length - 1]}（每次魅惑覆盖之前）`);
+  if (curses.length) lines.push(`诅咒记录：${curses.join('，')}（最新诅咒次日生效）`);
   return lines;
 }
 
@@ -168,7 +183,8 @@ function skeletonDigest(game, ledger, day) {
   const facts = dayFacts(game, evs);
   const mine = [];
   for (const e of evs) {
-    if (['wolf_kill', 'seer_check', 'witch_action', 'night_guard', 'vote_cast'].includes(e.type)) {
+    if (['wolf_kill', 'seer_check', 'witch_action', 'night_guard', 'vote_cast',
+      'night_dream', 'wolfbeauty_charm', 'crow_curse', 'admirer_crush'].includes(e.type)) {
       const line = renderEvent(game, e);
       if (line) mine.push(`  ${line}`);
     }

@@ -75,7 +75,7 @@ async function initSetup() {
   $('#btn-god-close').addEventListener('click', toggleGod);
   $('#board-template').addEventListener('change', (e) => {
     state.setup.boardId = e.target.value;
-    if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); }
+    if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); renderRulesEditor(); }
   });
   $('#btn-start').addEventListener('click', startGame);
   $('#btn-resume').addEventListener('click', () => resumeGame());
@@ -85,6 +85,8 @@ async function initSetup() {
 function applyBoardTemplate(id) {
   const tpl = state.meta.boards[id];
   state.setup.boardCounts = { ...tpl.roles };
+  // 板子内置板规（如狼美人局女巫不可自救）预填进规则表单，仍可手动调整
+  if (tpl.rules && state.setup.rules) Object.assign(state.setup.rules, JSON.parse(JSON.stringify(tpl.rules)));
   state.setup.boardId = id;
 }
 
@@ -165,7 +167,7 @@ function renderRulesEditor() {
       item.appendChild(sel);
     } else if (m.type === 'nightOrder') {
       const wrap = el('div', 'rule-order');
-      const labels = { guard: '守卫', wolf: '狼人', seer: '预言家', witch: '女巫' };
+      const labels = { admirer: '暗恋者', guard: '守卫', dreamer: '摄梦人', wolf: '狼人', wolfbeauty: '狼美人', seer: '预言家', witch: '女巫', crow: '乌鸦' };
       const render = () => {
         wrap.innerHTML = '';
         state.setup.rules.nightOrder.forEach((step, i) => {
@@ -570,7 +572,7 @@ function renderEventNode(e) {
       return el('div', `banner ${night ? 'night' : ''}`, d.title || '');
     }
     case 'night_step': {
-      const icons = { guard: '🛡️', wolf: '🐺', seer: '🔮', witch: '⚗️' };
+      const icons = { admirer: '💗', guard: '🛡️', dreamer: '🌙', wolf: '🐺', wolfbeauty: '💃', seer: '🔮', witch: '⚗️', crow: '🐦' };
       return el('div', 'msg event', `🕯 第${d.index}/${d.total}步 · ${icons[d.step] || ''} ${escapeHtml(d.label)}`);
     }
     case 'system':
@@ -595,7 +597,9 @@ function renderEventNode(e) {
     case 'vote_reveal': {
       const detail = (d.votes || []).map((v) => `${v.seat}→${v.target || '弃'}${v.weight !== 1 ? `<small>×${v.weight}</small>` : ''}`).join('，');
       const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
-      return el('div', 'msg event', `🗳 亮票：${detail}<br><span class="hint">${tally}</span>`);
+      const curse = d.curseBonus && Object.keys(d.curseBonus).length
+        ? `（🐦 ${Object.keys(d.curseBonus).map((s) => s + '号').join('、')} 受乌鸦诅咒 +0.5）` : '';
+      return el('div', 'msg event', `🗳 亮票：${detail}<br><span class="hint">${tally}${curse}</span>`);
     }
     case 'sheriff_run':
       return d.run ? el('div', 'msg event', `🎩 ${seatLabel(e.actor)} 举手，上警竞选警长！`) : null;
@@ -659,6 +663,23 @@ function renderEventNode(e) {
       const who = isMine(e) ? '你守护了' : `${seatLabel(e.actor)} 守护了`;
       return el('div', 'msg private', `🔒 ${who} ${d.target ? seatLabel(d.target) : '无人（空守）'}`);
     }
+    case 'night_dream': {
+      const who = isMine(e) ? '你摄梦了' : `${seatLabel(e.actor)}（摄梦人）摄梦了`;
+      const warn = d.consecutive ? ' ⚠️ 连续两晚摄梦，他今夜将死亡' : '';
+      return el('div', 'msg private', `🔒 ${who} ${seatLabel(d.target)}（梦游者当夜免疫刀/毒）${warn}`);
+    }
+    case 'wolfbeauty_charm': {
+      const who = isMine(e) ? '你魅惑了' : `${seatLabel(e.actor)}（狼美人）魅惑了`;
+      return el('div', 'msg private', `🔒 ${who} ${seatLabel(d.target)}`);
+    }
+    case 'crow_curse': {
+      const who = isMine(e) ? '你诅咒了' : `${seatLabel(e.actor)}（乌鸦）诅咒了`;
+      return el('div', 'msg private', `🔒 ${who} ${seatLabel(d.target)}（明日放逐投票 +0.5 票）`);
+    }
+    case 'admirer_crush': {
+      const who = isMine(e) ? '你暗恋上了' : `${seatLabel(e.actor)}（暗恋者）暗恋上了`;
+      return el('div', 'msg private', `🔒 ${who} ${seatLabel(d.target)}（胜负阵营终身绑定）`);
+    }
     case 'vote_cast': {
       const who = isMine(e) ? '你' : seatLabel(e.actor);
       return el('div', 'msg private', `🔒 ${who}投给了 ${d.target ? seatLabel(d.target) : '弃票'}`);
@@ -673,7 +694,7 @@ function renderEventNode(e) {
 }
 
 function causeLabel(cause) {
-  return { wolf_kill: '被袭击', poison: '被毒杀', vote_out: '被放逐', shot: '被枪带走', explode_self: '自爆', explode_target: '被自爆带走' }[cause] || cause;
+  return { wolf_kill: '被袭击', poison: '被毒杀', vote_out: '被放逐', shot: '被枪带走', explode_self: '自爆', explode_target: '被自爆带走', dream: '被连摄而亡', dream_follow: '梦随出局', charm_follow: '殉情出局', duel_win: '被决斗出局', duel_fail: '决斗谢罪' }[cause] || cause;
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
@@ -1031,6 +1052,38 @@ function buildActionUI(v, p, box) {
       box.appendChild(btnRow);
       break;
     }
+    case 'night_dream': {
+      $('#pending-hint').textContent = '⏳ 摄梦人：选择今晚的摄梦对象（梦游者当夜免疫刀/毒；连摄两晚同一人则其死亡）';
+      box.appendChild(targetPicker(p.candidates));
+      const btnRow = el('div', 'btnrow');
+      btnRow.appendChild(confirmBtn('确认摄梦', () => ({ target: actionState.target })));
+      box.appendChild(btnRow);
+      break;
+    }
+    case 'wolfbeauty_charm': {
+      $('#pending-hint').textContent = '⏳ 狼美人：选择今晚的魅惑对象（你出局时他殉情，骑士决斗除外）';
+      box.appendChild(targetPicker(p.candidates));
+      const btnRow = el('div', 'btnrow');
+      btnRow.appendChild(confirmBtn('确认魅惑', () => ({ target: actionState.target })));
+      box.appendChild(btnRow);
+      break;
+    }
+    case 'crow_curse': {
+      $('#pending-hint').textContent = '⏳ 乌鸦：选择今晚的诅咒对象（明日放逐投票他+0.5票）';
+      box.appendChild(targetPicker(p.candidates));
+      const btnRow = el('div', 'btnrow');
+      btnRow.appendChild(confirmBtn('确认诅咒', () => ({ target: actionState.target })));
+      box.appendChild(btnRow);
+      break;
+    }
+    case 'admirer_crush': {
+      $('#pending-hint').textContent = '⏳ 暗恋者：暗选你的暗恋对象（胜负阵营与他终身绑定，对方不知情）';
+      box.appendChild(targetPicker(p.candidates));
+      const btnRow = el('div', 'btnrow');
+      btnRow.appendChild(confirmBtn('确认心动', () => ({ target: actionState.target })));
+      box.appendChild(btnRow);
+      break;
+    }
     case 'wolf_kill': {
       $('#pending-hint').textContent = '⏳ 狼队投票：选择今晚的刀口';
       box.appendChild(targetPicker(p.candidates, { noneLabel: p.allowNone ? '空刀' : null }));
@@ -1258,7 +1311,7 @@ function renderRulesTab(box) {
     if (m.type === 'bool') val = raw ? '开' : '关';
     else if (m.type === 'enum') val = (m.options.find((o) => String(o.value) === String(raw)) || {}).label || String(raw);
     else if (m.type === 'nightOrder') {
-      const labels = { guard: '守卫', wolf: '狼人', seer: '预言家', witch: '女巫' };
+      const labels = { admirer: '暗恋者', guard: '守卫', dreamer: '摄梦人', wolf: '狼人', wolfbeauty: '狼美人', seer: '预言家', witch: '女巫', crow: '乌鸦' };
       val = raw.map((s) => labels[s] || s).join(' → ');
     }
     box.appendChild(el('p', null, `<b>${m.label}</b>：${val}<br><span class="hint">${m.desc || ''}</span>`));

@@ -102,6 +102,17 @@ function validatePayload(task, payload, req, game, seat) {
       if (t === seat) return fail('不能查验自己');
       return { ok: true, value: { target: t } };
     }
+    // 摄梦/诅咒/魅惑/暗恋：必须从候选中选一名（候选已排除自己），不允许空过
+    case 'night_dream':
+    case 'crow_curse':
+    case 'wolfbeauty_charm':
+    case 'admirer_crush': {
+      const t = asInt(payload.target);
+      if (!Number.isInteger(t)) return fail('缺少目标（需要 target 字段）');
+      if (!inCand(t)) return fail('目标不合法');
+      if (t === seat) return fail('不能选择自己');
+      return { ok: true, value: { target: t } };
+    }
     case 'witch': {
       const ex = req.extra || {};
       const value = { antidote: false, poison: 0 };
@@ -165,10 +176,16 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
 const fb = (fn) => ({ fallback: fn });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const NIGHT_STEP_LABEL = { guard: '守卫行动', wolf: '狼人行动', seer: '预言家行动', witch: '女巫行动' };
+const NIGHT_STEP_LABEL = {
+  admirer: '暗恋者行动', guard: '守卫行动', dreamer: '摄梦人行动', wolf: '狼人行动',
+  wolfbeauty: '狼美人行动', seer: '预言家行动', witch: '女巫行动', crow: '乌鸦行动',
+};
+
+/** 狼美人殉情触发死因：毒/放逐/枪/摄梦系死亡触发连带；骑士决斗（duel_win）不触发 */
+const CHARM_TRIGGER_CAUSES = ['poison', 'vote_out', 'shot', 'dream', 'dream_follow'];
 
 // ---------- 小工具 ----------
-function wolfVis(game) { return game.wolves().map((p) => p.seat); }
+function wolfVis(game) { return game.nightWolves().map((p) => p.seat); }
 
 function randomOf(arr, rnd = Math.random) { return arr[Math.floor(rnd() * arr.length)]; }
 
@@ -205,10 +222,10 @@ function checkEnd(game) {
 function checkWinWithPending(game) {
   const dead = new Set(game.pendingDeaths.map((d) => d.seat));
   const alive = game.alivePlayers().filter((p) => !dead.has(p.seat));
-  const wolves = alive.filter((p) => ROLES[p.role].category === 'wolf');
+  const wolves = alive.filter((p) => game.categoryOf(p) === 'wolf');
   if (wolves.length === 0) return { winner: 'good', reason: '所有狼人已出局，好人阵营获胜！' };
-  const gods = alive.filter((p) => ROLES[p.role].category === 'god');
-  const villagers = alive.filter((p) => ROLES[p.role].category === 'villager');
+  const gods = alive.filter((p) => game.categoryOf(p) === 'god');
+  const villagers = alive.filter((p) => game.categoryOf(p) === 'villager');
   if (gods.length === 0) return { winner: 'wolf', reason: '所有神职出局，狼人屠边成功！' };
   if (villagers.length === 0) return { winner: 'wolf', reason: '所有平民出局，狼人屠边成功！' };
   return null;
@@ -245,6 +262,18 @@ async function settleDeath(game, seat, cause, opts = {}) {
     game._shots.push(seat);
     game.logger.info('engine', `${seat}号(${ROLES[p.role].name}) 因 ${cause} 触发开枪技能`);
   }
+  // 狼美人殉情链：她被毒/放逐/枪/摄梦系带走时，被魅惑者殉情出局（骑士决斗死不触发，魅惑作废）
+  if (p.role === 'wolfbeauty') {
+    const ts = game.charmMap[seat];
+    delete game.charmMap[seat];
+    if (ts != null && CHARM_TRIGGER_CAUSES.includes(cause)) {
+      const tp = game.player(ts);
+      if (tp && tp.alive) {
+        game.logger.info('engine', `${ts}号 因狼美人（${seat}号）出局而殉情`);
+        await settleDeath(game, ts, 'charm_follow', {});
+      }
+    }
+  }
 }
 
 async function badgeResolve(game, seat) {
@@ -276,11 +305,13 @@ async function processShots(game) {
 async function nightPhase(game) {
   game.day++;
   game.phase = 'night';
-  game.night = { guardActions: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  game.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
+  game.activeCurse = []; // 乌鸦诅咒只在"次日的放逐投票"生效，新的一夜先清空
   game.emit('phase', { data: { title: `第${game.day}夜 · 天黑请闭眼` } });
-  // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播
+  // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播；暗恋者仅首夜行动
   const activeSteps = game.rules.nightOrder.filter((s) => {
     if (s === 'wolf') return game.wolves().length > 0;
+    if (s === 'admirer') return game.day === 1 && (game.board.admirer || 0) > 0;
     return (game.board[s] || 0) > 0;
   });
   let idx = 0;
@@ -288,17 +319,33 @@ async function nightPhase(game) {
     if (!activeSteps.includes(step)) continue;
     idx++;
     game.emit('night_step', { data: { step, label: NIGHT_STEP_LABEL[step] || step, index: idx, total: activeSteps.length } });
-    if (step === 'guard') await guardStep(game);
+    if (step === 'admirer') await admirerStep(game);
+    else if (step === 'guard') await guardStep(game);
+    else if (step === 'dreamer') await dreamerStep(game);
     else if (step === 'wolf') await wolfStep(game);
+    else if (step === 'wolfbeauty') await wolfbeautyStep(game);
     else if (step === 'seer') await seerStep(game);
     else if (step === 'witch') await witchStep(game);
+    else if (step === 'crow') await crowStep(game);
     // 该角色已全员出局时步骤会"秒过"，加固定停顿避免时长推断
     const hasAliveActor = step === 'wolf'
-      ? game.aliveWolves().length > 0
+      ? game.nightWolves().length > 0
       : game.aliveOfRole(step).length > 0;
     if (!hasAliveActor) await sleep(game.stepPauseMs != null ? game.stepPauseMs : 2000);
   }
   resolveNightDeaths(game);
+}
+
+/** 暗恋者：仅首夜最先行动，暗选一名暗恋对象（胜负阵营终身绑定） */
+async function admirerStep(game) {
+  if (game.day !== 1) return;
+  for (const a of game.aliveOfRole('admirer')) {
+    const candidates = game.aliveSeats().filter((x) => x !== a.seat);
+    if (!candidates.length) continue;
+    const v = await askValidated(game, a.seat, { task: 'admirer_crush', candidates }, fb(() => ({ target: candidates[0] })));
+    game.crush[a.seat] = v.target;
+    game.emit('admirer_crush', { actor: a.seat, visibleTo: [a.seat], data: { target: v.target } });
+  }
 }
 
 async function guardStep(game) {
@@ -316,8 +363,45 @@ async function guardStep(game) {
   }
 }
 
+/** 摄梦人：每晚必须摄梦一人（不能自摄）。结算规则见 resolveNightDeaths */
+async function dreamerStep(game) {
+  for (const d of game.aliveOfRole('dreamer')) {
+    const candidates = game.aliveSeats().filter((x) => x !== d.seat);
+    if (!candidates.length) continue;
+    const v = await askValidated(game, d.seat, { task: 'night_dream', candidates }, fb(() => ({ target: candidates[0] })));
+    const consecutive = !!(game.lastDreamMap && game.lastDreamMap[d.seat] === v.target);
+    game.night.dreamActions.push({ seat: d.seat, target: v.target });
+    game.emit('night_dream', { actor: d.seat, visibleTo: [d.seat], data: { target: v.target, consecutive } });
+  }
+}
+
+/** 狼美人：每晚魅惑一人（不能是自己或狼队成员）。殉情结算在 settleDeath */
+async function wolfbeautyStep(game) {
+  for (const w of game.aliveOfRole('wolfbeauty')) {
+    const candidates = game.aliveSeats().filter((x) => {
+      if (x === w.seat) return false;
+      return ROLES[game.player(x).role].category !== 'wolf';
+    });
+    if (!candidates.length) continue;
+    const v = await askValidated(game, w.seat, { task: 'wolfbeauty_charm', candidates }, fb(() => ({ target: candidates[0] })));
+    game.night.charmActions.push({ seat: w.seat, target: v.target });
+    game.emit('wolfbeauty_charm', { actor: w.seat, visibleTo: [w.seat], data: { target: v.target } });
+  }
+}
+
+/** 乌鸦：每晚诅咒一人（不能自咒），次日其放逐投票 +0.5 票 */
+async function crowStep(game) {
+  for (const c of game.aliveOfRole('crow')) {
+    const candidates = game.aliveSeats().filter((x) => x !== c.seat);
+    if (!candidates.length) continue;
+    const v = await askValidated(game, c.seat, { task: 'crow_curse', candidates }, fb(() => ({ target: candidates[0] })));
+    game.night.curses.push({ seat: c.seat, target: v.target });
+    game.emit('crow_curse', { actor: c.seat, visibleTo: [c.seat], data: { target: v.target } });
+  }
+}
+
 async function wolfStep(game) {
-  const wolves = game.aliveWolves();
+  const wolves = game.nightWolves(); // 隐狼夜里不睁眼，不参与讨论与刀口
   if (!wolves.length) return;
   const vis = wolfVis(game);
   const prey = game.alivePlayers().filter((p) => ROLES[p.role].category !== 'wolf').map((p) => p.seat);
@@ -413,7 +497,9 @@ async function seerStep(game) {
     const candidates = game.aliveSeats().filter((x) => x !== s.seat);
     if (!candidates.length) continue;
     const v = await askValidated(game, s.seat, { task: 'seer_check', candidates }, fb(() => ({ target: candidates[0] })));
-    const isWolf = ROLES[game.player(v.target).role].category === 'wolf';
+    const target = game.player(v.target);
+    // 官方特殊裁定：隐狼与暗恋者的查验结果永远是"好人"
+    const isWolf = target.role !== 'hiddenwolf' && target.role !== 'admirer' && ROLES[target.role].category === 'wolf';
     game.emit('seer_check', { actor: s.seat, visibleTo: [s.seat], data: { target: v.target, isWolf } });
   }
 }
@@ -440,6 +526,9 @@ async function witchStep(game) {
 
 function resolveNightDeaths(game) {
   const { wolfKill, saved, guardActions, poisonTargets } = game.night;
+  const dreamActions = game.night.dreamActions || [];
+  const charmActions = game.night.charmActions || [];
+  const curses = game.night.curses || [];
   const deaths = [];
   const guarded = guardActions.some((g) => g.target === wolfKill && wolfKill > 0);
   if (wolfKill > 0) {
@@ -457,12 +546,39 @@ function resolveNightDeaths(game) {
     // 被救未守 / 被守未救 → 存活
   }
   for (const pt of poisonTargets) deaths.push({ seat: pt, cause: 'poison' });
-  // 去重（同一人被刀+被毒只死一次；毒优先，防止毒死的人还能开枪）
+
+  // ---------- 摄梦结算（官方规则） ----------
+  // ① 摄梦人当晚死亡 → 梦游者连带出局（不可守护、不可救治）
+  // ② 摄梦人存活 → 梦游者当夜免疫狼刀与毒杀（技能视为落空，药照耗）
+  // ③ 连续两晚摄梦同一人 → 梦游者死亡（女巫救不活，死因不计入猎人/狼王开枪）
+  const dreamTargets = new Set(dreamActions.map((a) => a.target));
+  for (const a of dreamActions) {
+    const dreamerDies = deaths.some((d) => d.seat === a.seat);
+    if (dreamerDies) {
+      deaths.push({ seat: a.target, cause: 'dream_follow' });
+      continue;
+    }
+    for (let i = deaths.length - 1; i >= 0; i--) {
+      if (deaths[i].seat === a.target) deaths.splice(i, 1); // 夜间伤害落空
+    }
+    if (game.lastDreamMap && game.lastDreamMap[a.seat] === a.target) {
+      deaths.push({ seat: a.target, cause: 'dream' });
+    }
+  }
+
+  // 去重（同一人只死一次；毒 > 连摄死 > 其余，同座位按原因优先级保留）
+  const prio = (c) => (c === 'poison' ? 0 : c === 'dream' ? 1 : 2);
   const seen = new Set();
   game.pendingDeaths = deaths
-    .sort((a, b) => (a.cause === 'poison' ? 0 : 1) - (b.cause === 'poison' ? 0 : 1) || a.seat - b.seat)
+    .sort((a, b) => prio(a.cause) - prio(b.cause) || a.seat - b.seat)
     .filter((d) => { if (seen.has(d.seat)) return false; seen.add(d.seat); return true; });
   game.lastNightDeaths = game.pendingDeaths.slice();
+
+  // ---------- 跨夜状态更新 ----------
+  game.lastDreamMap = {};
+  for (const a of dreamActions) game.lastDreamMap[a.seat] = a.target;
+  for (const a of charmActions) game.charmMap[a.seat] = a.target; // 最新魅惑覆盖旧的
+  game.activeCurse = [...new Set(curses.map((c) => c.target))];
 }
 
 // ---------- 天亮 ----------
@@ -655,6 +771,13 @@ function electSheriff(game, seat) {
 
 // ---------- 秘密投票（互相不可见；人类投票界面先就绪，AI 逐个思考，人与 AI 同时进行） ----------
 async function secretVote(game, { task, voters, candidates, allowNone }) {
+  // 乌鸦诅咒：放逐投票（含 PK 投票）中被诅咒座位额外 +0.5 票；警长竞选投票不受影响
+  const curseBonus = {};
+  if ((task === 'vote' || task === 'pk_vote') && Array.isArray(game.activeCurse)) {
+    for (const t of game.activeCurse) {
+      if (t && candidates.includes(t)) curseBonus[t] = (curseBonus[t] || 0) + 0.5;
+    }
+  }
   const req = { task, candidates, allowNone };
   const eligible = voters.map((s) => game.player(s)).filter((p) => p.alive && !p.lostVote);
   const human = eligible.find((p) => p.isHuman);
@@ -694,7 +817,8 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
     const key = String(v.target);
     tally[key] = (tally[key] || 0) + v.weight;
   }
-  game.emit('vote_reveal', { data: { votes, tally } });
+  for (const [t, b] of Object.entries(curseBonus)) tally[t] = (tally[t] || 0) + b;
+  game.emit('vote_reveal', { data: Object.keys(curseBonus).length ? { votes, tally, curseBonus } : { votes, tally } });
   let max = 0, topSeats = [];
   for (const [t, n] of Object.entries(tally)) {
     const ti = Number(t);
@@ -884,4 +1008,4 @@ async function runGameInner(game) {
 
 module.exports = { runGame, validatePayload, secretVote, buildSpeechOrder, checkWinWithPending,
   // 供单元测试直接驱动内部阶段
-  _internals: { nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep } };
+  _internals: { nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep } };

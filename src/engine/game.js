@@ -68,6 +68,10 @@ class Game {
     this.sheriffElectionPending = false;
     this.lastSpeechOrder = [];
     this.lastProtect = 0;    // 守卫上一夜守护目标（跨夜）
+    this.lastDreamMap = {};  // 摄梦人上一夜摄梦目标（跨夜，seat→target）
+    this.charmMap = {};      // 狼美人当前魅惑目标（wolfbeautySeat→targetSeat）
+    this.crush = {};         // 暗恋者暗恋对象（seat→targetSeat，首夜后终身有效）
+    this.activeCurse = [];   // 乌鸦诅咒生效中的座位（当日放逐投票 +0.5 票）
     this.witch = { antidoteUsed: false, poisonUsed: false };
     this._agents = new Map();
     this.llmStats = { calls: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, errors: 0, compressions: 0 };
@@ -81,6 +85,27 @@ class Game {
   aliveWolves() { return this.wolves().filter((p) => p.alive); }
   aliveOfRole(roleId) { return this.players.filter((p) => p.alive && p.role === roleId); }
   sheriff() { return this.players.find((p) => p.isSheriff) || null; }
+
+  /** 某玩家"可见"的狼队队友：隐狼认识所有狼，但其他狼不知道隐狼（网易官方互认规则） */
+  matesOf(player) {
+    return this.wolves().filter((w) => {
+      if (w.seat === player.seat) return false;
+      if (player.role === 'hiddenwolf') return true;
+      return w.role !== 'hiddenwolf';
+    });
+  }
+
+  /** 夜晚参与狼队行动（讨论/刀口）的狼：不含夜里不睁眼的隐狼 */
+  nightWolves() { return this.aliveWolves().filter((p) => p.role !== 'hiddenwolf'); }
+
+  /** 玩家的有效阵营类别（暗恋者随绑定对象终身变动，用于屠边胜负判定） */
+  categoryOf(p) {
+    if (p.role === 'admirer' && this.crush[p.seat]) {
+      const t = this.player(this.crush[p.seat]);
+      if (t && t.role && ROLES[t.role]) return ROLES[t.role].category;
+    }
+    return (ROLES[p.role] && ROLES[p.role].category) || 'villager';
+  }
 
   // ---------- 事件 ----------
   emit(type, { actor = null, data = {}, text = '', visibleTo = 'all' } = {}) {
@@ -109,7 +134,7 @@ class Game {
     });
     const wolfSeats = this.wolves().map((p) => p.seat);
     for (const w of this.wolves()) {
-      const mates = wolfSeats.filter((s) => s !== w.seat);
+      const mates = this.matesOf(w).map((p) => p.seat);
       this.emit('teammates', { actor: w.seat, visibleTo: [w.seat], data: { seats: mates }, text: `${w.seat}号获知狼队` });
     }
     this.started = true;
@@ -180,10 +205,10 @@ class Game {
   // ---------- 胜负 ----------
   checkWin() {
     const alive = this.alivePlayers();
-    const wolves = alive.filter((p) => ROLES[p.role].category === 'wolf');
+    const wolves = alive.filter((p) => this.categoryOf(p) === 'wolf');
     if (wolves.length === 0) return { winner: 'good', reason: '所有狼人已出局，好人阵营获胜！' };
-    const gods = alive.filter((p) => ROLES[p.role].category === 'god');
-    const villagers = alive.filter((p) => ROLES[p.role].category === 'villager');
+    const gods = alive.filter((p) => this.categoryOf(p) === 'god');
+    const villagers = alive.filter((p) => this.categoryOf(p) === 'villager');
     if (gods.length === 0) return { winner: 'wolf', reason: '所有神职出局，狼人屠边成功！' };
     if (villagers.length === 0) return { winner: 'wolf', reason: '所有平民出局，狼人屠边成功！' };
     return null;

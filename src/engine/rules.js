@@ -33,8 +33,8 @@ const DEFAULT_RULES = {
     shotVictim: false, // 被枪带走者无遗言（白狼王带走者官方明确无）
     explodeFirstDay: true, // 狼自爆仅首日有遗言
   },
-  // 11. 夜晚行动顺序（每晚固定）
-  nightOrder: ['guard', 'wolf', 'seer', 'witch'],
+  // 11. 夜晚行动顺序（每晚固定；暗恋者仅首夜行动，板子里不存在的步骤自动跳过）
+  nightOrder: ['admirer', 'guard', 'dreamer', 'wolf', 'wolfbeauty', 'seer', 'witch', 'crow'],
   // 12. 死亡翻牌公开（网易线上为翻牌局）
   revealOnDeath: true,
   // 13. 无警长时发言起点：afterDeath=死者下家顺时针（平安夜随机）/ random=随机
@@ -44,10 +44,14 @@ const DEFAULT_RULES = {
 };
 
 const NIGHT_STEPS = [
+  { key: 'admirer', label: '暗恋者心动' },
   { key: 'guard', label: '守卫行动' },
+  { key: 'dreamer', label: '摄梦人行动' },
   { key: 'wolf', label: '狼人行动' },
+  { key: 'wolfbeauty', label: '狼美人行动' },
   { key: 'seer', label: '预言家查验' },
   { key: 'witch', label: '女巫用药' },
+  { key: 'crow', label: '乌鸦诅咒' },
 ];
 
 /** 设置页开关元数据：key → 控件定义 */
@@ -154,8 +158,8 @@ const RULE_META = [
     desc: '被开枪带走的玩家是否有遗言（默认无：白狼王带走者官方明确无遗言）。',
   },
   {
-    key: 'nightOrder', label: '夜晚行动顺序', type: 'nightOrder', default: ['guard', 'wolf', 'seer', 'witch'],
-    desc: '每晚固定的行动顺序，可调整先后。',
+    key: 'nightOrder', label: '夜晚行动顺序', type: 'nightOrder', default: ['admirer', 'guard', 'dreamer', 'wolf', 'wolfbeauty', 'seer', 'witch', 'crow'],
+    desc: '每晚固定的行动顺序，可调整先后（板子里不存在的角色自动跳过）。',
   },
 ];
 
@@ -168,6 +172,12 @@ function mergeRules(partial) {
     delete partial.lastWords;
   }
   Object.assign(out, pickKnown(partial, out));
+  // nightOrder 兼容：老版本存档/前端缓存缺新步骤时自动补齐（保留用户已有相对顺序）
+  if (Array.isArray(out.nightOrder)) {
+    for (const s of DEFAULT_RULES.nightOrder) {
+      if (!out.nightOrder.includes(s)) out.nightOrder.push(s);
+    }
+  }
   return out;
 }
 
@@ -196,7 +206,7 @@ function describeRules(rules) {
   if (rules.allowSelfExplode) lines.push(`自爆遗言：${rules.explodeLastWords === 'firstDay' ? '仅首日自爆有遗言' : '自爆没有遗言'}`);
   lines.push(`死亡翻牌：${rules.revealOnDeath ? '玩家死亡时公开身份' : '暗牌局，死亡不公开身份'}`);
   lines.push(`遗言：首夜死者${rules.lastWords.night1 ? '有' : '无'}遗言；被放逐者${rules.lastWords.exiled ? '有' : '无'}遗言；被枪带走者${rules.lastWords.shotVictim ? '有' : '无'}遗言`);
-  const stepNames = { guard: '守卫', wolf: '狼人', seer: '预言家', witch: '女巫' };
+  const stepNames = { admirer: '暗恋者', guard: '守卫', dreamer: '摄梦人', wolf: '狼人', wolfbeauty: '狼美人', seer: '预言家', witch: '女巫', crow: '乌鸦' };
   lines.push(`夜晚顺序：${rules.nightOrder.map((s) => stepNames[s] || s).join(' → ')}`);
   return lines.map((l) => '· ' + l).join('\n');
 }
