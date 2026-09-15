@@ -14,6 +14,16 @@ const { DEFAULT_CONFIG, migrateConfig, createConfig } = require('../src/config')
 const { PERSONALITIES, resolvePersona, applyPersonalities } = require('../src/ai/personalities');
 const { makeMockAgentFactory, auditIsolation } = require('../scripts/mock-agent');
 
+// 测试必须完全离线：任何意外的真实网络调用立刻报错，而不是静默等 DNS/连接超时
+// （历史事故：断点恢复用例把 baseUrl='x' 的真实智能体留在 _agents 里，
+//   导致 76 次 https://x 请求、该用例单独跑满 382 秒）。
+// 需要验证网络行为的用例请在自己作用域内临时替换 global.fetch（见下方「llm 截断链」用例）。
+global.fetch = async (url) => {
+  const err = new Error(`测试禁止真实网络请求：${url}（请在该用例内临时替换 global.fetch）`);
+  err.retryable = false; // 不触发 llm.js 的重试退避，保证 fail-fast
+  throw err;
+};
+
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
 
 function makeGame(opts = {}) {
@@ -468,7 +478,6 @@ test('手动终止：pending 拒绝、优雅结算为无胜者', async () => {
 test('人类座位：pending 挂起与 resolveHuman 校验', async () => {
   const g = makeGame({ humanSeat: 3 });
   assignRoles(g, {});
-  const p3 = g.promise || null;
   const promise = g.ask(3, { task: 'vote', candidates: [2, 4], allowNone: true });
   assert.ok(g.pending, '应挂起等待人类输入');
   assert.strictEqual(g.pending.seat, 3);
@@ -907,7 +916,9 @@ test('上下文：预算裁剪（超预算时降级且仍可组装）', () => {
   assert.ok(out.trimmed, '触发裁剪');
   assert.ok(out.text.includes('局面快照'), '快照永不裁掉');
   assert.ok(out.text.includes('当前任务'), '任务永不裁掉');
-  assert.ok(out.tokens < 2000, `裁剪后总量受限（实际 ${out.tokens}）`);
+  // 阈值 2000 → 2700：注入防御（P2-3）给每条玩家发言加了 spotlight 标记，
+  // 实测 26 字符/条（本例 40 条 ≈ +693 tokens）。这是刻意的安全成本，不是预算失控。
+  assert.ok(out.tokens < 2700, `裁剪后总量受限（实际 ${out.tokens}）`);
 });
 
 test('任务分层：effort 与 maxTokens 映射', () => {
@@ -943,7 +954,8 @@ test('反思：LLM 正常时生成纪要并跨天缓存', async () => {
     return { content: '【身份判断】8号可疑（置信度中）。【我的状态】稳住。', usage: { promptTokens: 100, cachedTokens: 0, completionTokens: 30 } };
   };
   try {
-    const agent = new Agent(g.player(5), g, { baseUrl: 'http://x', model: 'x', apiKey: 'k', fastEffort: 'low' }, silentLogger);
+    // digestMinEvents:0 = 关闭节流（本用例要验证 LLM 反思路径本身；节流由 test/reflection.test.js 覆盖）
+    const agent = new Agent(g.player(5), g, { baseUrl: 'http://x', model: 'x', apiKey: 'k', fastEffort: 'low', digestMinEvents: 0 }, silentLogger);
     await agent.ensureDigests();
     const first = agent.digests.get(1);
     assert.ok(first && first.includes('身份判断'), '纪要已生成');
@@ -965,7 +977,9 @@ test('Agent.decide 集成：组装→单发调用→解析→游标推进', asyn
     return { content: '{"text":"我觉得8号有问题。"}', usage: { promptTokens: 500, cachedTokens: 300, completionTokens: 40 } };
   };
   try {
-    const agent = new Agent(g.player(5), g, { baseUrl: 'http://x', model: 'x', apiKey: 'k', reasoningEffort: 'high', fastEffort: 'low', contextBudget: 12000 }, silentLogger);
+    // 本用例聚焦"组装→单发调用→解析→游标推进"的接线，故固定用 flat 策略；
+    // 新的"按信息含量调度"策略由 test/effort.test.js 覆盖
+    const agent = new Agent(g.player(5), g, { baseUrl: 'http://x', model: 'x', apiKey: 'k', reasoningEffort: 'high', fastEffort: 'low', effortPolicy: 'flat', contextBudget: 12000 }, silentLogger);
     const p1 = await agent.decide({ task: 'speech' });
     assert.deepStrictEqual(p1, { text: '我觉得8号有问题。' }, 'JSON 正常解析');
     assert.strictEqual(calls.length, 1, '单发调用');
@@ -1506,8 +1520,8 @@ test('怀疑度表：反思 JSON 解析更新 suspicion 并注入快照', async 
     usage: { promptTokens: 10, cachedTokens: 0, completionTokens: 20 },
   });
   try {
-    const agent = new Agent(g.player(5), g, { baseUrl: 'x', model: 'm', apiKey: 'k', fastEffort: 'low' }, silentLogger);
-    const digest = await agent._reflect(1);
+    const agent = new Agent(g.player(5), g, { baseUrl: 'x', model: 'm', apiKey: 'k', fastEffort: 'low', digestMinEvents: 0 }, silentLogger);
+    const digest = await agent._reflectDay(1);
     assert.strictEqual(agent.suspicion['8'], 60, '合法座位怀疑度应更新');
     assert.strictEqual(agent.suspicion['9'], -20);
     assert.ok(!('99' in agent.suspicion) && !('me' in agent.suspicion), '非法座位/自己应被忽略');
@@ -1622,6 +1636,10 @@ test('断点恢复：锚点快照 + fromJSON 重建 + resume 继续运行', asyn
   g2.restoreAgentState(5, { digests: [[1, '第1天纪要']], suspicion: { 3: 50 }, lastSeq: 7 });
   assert.strictEqual(agent.digests.get(1), '第1天纪要');
   assert.strictEqual(agent.suspicion['3'], 50);
+  // 断言完毕即摘掉这个智能体：它的 baseUrl 是假的 'x'，若留在 _agents 里，
+  // 恢复后的对局会为 5 号座位真的向 https://x/chat/completions 发几十次请求
+  // （实测 76 次、跑满 6 分钟）。摘掉后 5 号回落到 mock 工厂。
+  g2._agents.delete(5);
   await runGame(g2, { resumeFrom: captured.nextPhase });
   assert.ok(g2.finished, '恢复的对局应能跑到终局');
   assert.ok(g2.day >= captured.day, '恢复后天数不回退');
@@ -1637,7 +1655,7 @@ test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接�
   g.started = true;
   g.markAnchor('speech');
   const entry = { game: g, tokens: { player: 'pt', god: 'gt' }, running: false, mock: true };
-  api.saveGame(entry);
+  await api.saveGame(entry); // 存档已改为异步 + 原子替换，测试需 await 才能看到文件
   const saveFile = path.join('saves', 'resume-api-test.json');
   try {
     assert.ok(fs.existsSync(saveFile), '存档应写入');

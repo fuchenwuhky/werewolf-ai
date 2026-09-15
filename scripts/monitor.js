@@ -13,9 +13,7 @@ const MAX_MINUTES = Number(process.argv[2] || 45);
 const state = new Map(); // file → { size, inode }
 let lastNew = Date.now();
 let waitingHuman = false;
-let lastLLM = null;
 let errors = 0;
-const seen = new Set(); // 跨文件去重（server.log 与 game-*.log 内容重叠）
 let sawActivity = false; // 本窗口是否见过任何日志活动（区分“空闲”与“活动后断流”）
 let idleNoted = false;
 let gameEnded = false;   // 最近一次活动以“对局结束”收尾 → 之后安静属正常
@@ -81,7 +79,6 @@ function check() {
       let e;
       try { e = JSON.parse(lineRaw); } catch (_) { continue; }
       if (e.level === 'error') errors++;
-      if (e.module === 'llm') lastLLM = Date.now();
       if (/等待人类玩家/.test(e.msg || '')) waitingHuman = true;
       else if (e.module === 'engine' && e.level === 'info' && !/等待人类玩家/.test(e.msg || '')) waitingHuman = false;
       if (e.module === 'engine' && /对局结束|手动终止并结算|已被手动终止/.test(e.msg || '')) { gameEnded = true; idleNoted = false; }

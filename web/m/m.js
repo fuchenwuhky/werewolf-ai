@@ -13,6 +13,8 @@ const state = {
   boardId: 'adv12', boardCounts: null,
   rules: null, mode: 'play',
   game: null, playerAfter: 0, pollTimer: null,
+  // SSE 推送（P2-2）：连接 + 看门狗时间戳（断流即回退轮询）
+  stream: null, streamWatchdog: null, lastStreamAt: 0,
   roleShown: false, seatNames: {}, tags: {}, lastNightStep: null,
   speakingSeat: 0, stage: null,
 };
@@ -41,7 +43,10 @@ async function init() {
   $('#m-start').addEventListener('click', startGame);
   $('#m-rulebook-btn').addEventListener('click', openRulebook);
   $('#m-terminate-btn').addEventListener('click', terminateGame);
-  $('#m-my-seat').addEventListener('change', () => renderSeatSelect());
+  $('#m-my-seat').addEventListener('change', () => {
+    try { localStorage.setItem('ww_seat', $('#m-my-seat').value); } catch (_) { /* 隐私模式忽略 */ }
+    renderSeatSelect();
+  });
   $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
   $('#m-flip-card').addEventListener('click', () => $('#m-flip-card').classList.add('flipped'));
   $('#m-flip-done').addEventListener('click', () => $('#m-flip').classList.add('hidden'));
@@ -51,6 +56,7 @@ async function init() {
   $('#m-drawer-mask').addEventListener('click', closeDrawer);
   document.querySelectorAll('.dtab[data-tab]').forEach((b) => b.addEventListener('click', () => selectDrawerTab(b.dataset.tab)));
   tryResume();
+  window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
 }
 
 // ---------------- 记录抽屉 ----------------
@@ -138,10 +144,17 @@ function wireSettings() {
     close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
     head.appendChild(close);
     const body = el('div', 'mbody');
+    const paces = (state.meta && state.meta.paces) || [];
+    const paceOpts = paces.map((p) => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join('')
+      + '<option value="custom">自定义（参数与任何档位都不一致）</option>';
+    const curPace = paces.some((p) => p.id === cfg.pace) ? cfg.pace : 'custom';
     body.innerHTML = `
       <label>接口地址 base_url<input id="ms-baseurl" value="${escapeHtml(cfg.baseUrl || '')}"></label>
       <label>模型 model<input id="ms-model" value="${escapeHtml(cfg.model || '')}"></label>
       <label>API Key<input id="ms-key" type="password" placeholder="${cfg.hasKey ? '已保存（' + cfg.apiKeyMasked + '），留空不改' : 'sk-...'}"></label>
+      <label>节奏档位（一次设定思考强度/反思频率/上下文）
+        <select id="ms-pace">${paceOpts}</select></label>
+      <div class="hint" id="ms-pace-hint"></div>
       <div class="row2">
         <label>最大回复 tokens（建议 16000）<input id="ms-maxtokens" type="number" value="${cfg.maxTokens || 16000}"></label>
       <div class="row2">
@@ -167,9 +180,31 @@ function wireSettings() {
       </div>`;
     wrap.append(head, body);
     openModal(wrap);
+    // 节奏档位：与桌面端同源（都来自 /api/meta 的 paces），选中后填充可见输入框并如实说明改了什么
+    const paceHint = (id) => {
+      const p = paces.find((x) => x.id === id);
+      const box = $('#ms-pace-hint');
+      if (!box) return;
+      box.textContent = p
+        ? `${p.desc}（反思阈值 ${p.values.digestMinEvents} 条、纪要保留 ${p.values.digestKeep} 条）`
+        : '当前参数与任何档位都不完全一致；再选一档并保存即可回到该档的完整参数。';
+    };
+    $('#ms-pace').value = curPace;
+    paceHint(curPace);
+    $('#ms-pace').addEventListener('change', (e) => {
+      const p = paces.find((x) => x.id === e.target.value);
+      if (p) {
+        if (p.values.reasoningEffort) $('#ms-effort').value = p.values.reasoningEffort;
+        if (p.values.fastEffort) $('#ms-fasteffort').value = p.values.fastEffort;
+        if (p.values.contextBudget) $('#ms-budget').value = p.values.contextBudget;
+      }
+      paceHint(e.target.value);
+    });
     $('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; });
     $('#ms-save').addEventListener('click', async () => {
       const b = { baseUrl: $('#ms-baseurl').value.trim(), model: $('#ms-model').value.trim(), maxTokens: Number($('#ms-maxtokens').value), temperature: Number($('#ms-temp').value), reasoningEffort: $('#ms-effort').value || 'high', fastEffort: $('#ms-fasteffort').value || 'low', contextBudget: Number($('#ms-budget').value) || 12000 };
+      const pace = $('#ms-pace').value;
+      if (pace && pace !== 'custom') b.pace = pace; // custom = 保留用户自己调出来的参数
       const key = $('#ms-key').value.trim();
       if (key) b.apiKey = key;
       try {
@@ -177,6 +212,12 @@ function wireSettings() {
         $('#ms-key').value = '';
         $('#ms-key').placeholder = `已保存（${r.apiKeyMasked}）`;
         $('#ms-result').textContent = '✓ 已保存';
+        const after = await api('GET', '/api/config').catch(() => null); // 按服务端反查结果回显，避免界面与磁盘不一致
+        if (after) {
+          const id = paces.some((p) => p.id === after.pace) ? after.pace : 'custom';
+          $('#ms-pace').value = id;
+          paceHint(id);
+        }
       } catch (e) { $('#ms-result').textContent = `✗ ${e.message}`; }
     });
     $('#ms-test').addEventListener('click', async () => {
@@ -252,13 +293,19 @@ function renderRulesList() {
   }
 }
 
+/** 我的座位：默认"🎲 随机"（老坐 1 号很难受），也可指定某一号；选择记在 localStorage 里 */
 function renderSeatSelect() {
   const sel = $('#m-my-seat');
   const total = Object.values(state.boardCounts).reduce((a, b) => a + b, 0);
-  const cur = Number(sel.value || 1);
+  const cur = String(sel.value || savedSeatChoice());
   sel.innerHTML = '';
+  sel.appendChild(el('option', null, '🎲 随机（推荐）')).value = 'random';
   for (let i = 1; i <= total; i++) sel.appendChild(el('option', null, `${i} 号`)).value = i;
-  if (cur <= total) sel.value = cur;
+  sel.value = [...sel.options].some((o) => o.value === cur) ? cur : 'random';
+}
+
+function savedSeatChoice() {
+  try { return localStorage.getItem('ww_seat') || 'random'; } catch (_) { return 'random'; } // 与桌面版共用同一个键
 }
 
 async function startGame() {
@@ -271,21 +318,27 @@ async function startGame() {
     const useMock = !!state.mock;
     const cfg = await api('GET', '/api/config');
     if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在 ⚙ 设置 里填写 API Key（或勾选 Mock 试玩）'; return; }
-    const mySeat = Number($('#m-my-seat').value || 1);
+    const seatChoice = String($('#m-my-seat').value || 'random');
+    const randomSeat = seatChoice === 'random';
+    const mySeat = randomSeat ? 0 : Number(seatChoice);
+    const humanName = $('#m-my-name').value.trim() || '我';
     const pool = shuffle(state.meta.names || []);
     const players = [];
     let ni = 0;
     for (let i = 1; i <= total; i++) {
       players.push(i === mySeat
-        ? { name: $('#m-my-name').value.trim() || '我', isHuman: true }
+        ? { name: humanName, isHuman: true }
         : { name: pool[ni++ % pool.length], isHuman: false });
     }
-    const created = await api('POST', '/api/games', {
+    const body = {
       boardId: state.boardId !== 'custom' ? state.boardId : null,
       board: state.boardId === 'custom' ? { ...counts } : undefined,
       rules: state.rules, players, mock: useMock,
-    });
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken };
+    };
+    if (randomSeat) { body.mySeat = 'random'; body.myName = humanName; } // 座位由服务端抽签
+    try { localStorage.setItem('ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
+    const created = await api('POST', '/api/games', body);
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat };
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGame();
   } catch (e) { $('#m-err').textContent = `✗ ${e.message}`; }
@@ -297,7 +350,8 @@ async function tryResume() {
   try {
     const g = JSON.parse(saved);
     const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-    if (v && !v.finished && v.started && v.live) { state.game = g; enterGame(); }
+    // inMemory = 对局还在服务端内存里（v.live 是流式缓冲，空闲时为 null，不能用来判断能否继续）
+    if (v && !v.finished && v.started && v.inMemory) { state.game = g; enterGame(); }
     else localStorage.removeItem('mww_current'); // 已结束或从未开局 → 不恢复
   } catch (_) { localStorage.removeItem('mww_current'); }
 }
@@ -313,35 +367,163 @@ function enterGame() {
   startPolling();
 }
 
-function startPolling() { stopPolling(); state.pollTimer = setInterval(poll, 1200); poll(); }
-function stopPolling() { if (state.pollTimer) clearInterval(state.pollTimer); state.pollTimer = null; }
+function startPolling() {
+  stopPolling();
+  if (startStream()) return; // 优先 SSE 推送
+  startPollFallback();
+}
+function startPollFallback() {
+  if (state.pollTimer) return;
+  state.pollTimer = setInterval(poll, 1200);
+  poll();
+}
+function stopPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
+  stopStream();
+}
+
+/**
+ * SSE 推送：只在服务端有变化时推帧。推送是优化不是依赖——
+ * 不支持/被反代缓冲/断流一律回退轮询，手机端照常可玩。
+ * 看门狗：8s 内既无帧也无心跳即判定连接已死。
+ */
+function startStream() {
+  if (typeof window === 'undefined' || !window.EventSource) return false;
+  const g = state.game;
+  if (!g || !g.gameId) return false;
+  try {
+    const es = new EventSource(`/api/games/${g.gameId}/stream?token=${g.playerToken || g.godToken}&after=${state.playerAfter || 0}`);
+    state.stream = { es };
+    state.lastStreamAt = Date.now();
+    es.addEventListener('view', (ev) => {
+      state.lastStreamAt = Date.now();
+      let v;
+      try { v = JSON.parse(ev.data); } catch (_) { return; }
+      applyView(v);
+    });
+    es.addEventListener('ping', () => { state.lastStreamAt = Date.now(); });
+    es.addEventListener('end', () => { stopStream(); poll(); });
+    es.addEventListener('error', () => {
+      if (es.readyState === 2) { stopStream(); appendSys('⚠ 推送中断，已切换为轮询'); startPollFallback(); }
+    });
+    state.streamWatchdog = setInterval(() => {
+      if (!state.stream) return;
+      if (Date.now() - (state.lastStreamAt || 0) > 8000) {
+        stopStream();
+        appendSys('⚠ 推送无响应，已切换为轮询');
+        startPollFallback();
+      }
+    }, 4000);
+    return true;
+  } catch (_) {
+    stopStream();
+    return false;
+  }
+}
+
+function stopStream() {
+  if (state.stream && state.stream.es) { try { state.stream.es.close(); } catch (_) { /* ignore */ } }
+  state.stream = null;
+  if (state.streamWatchdog) { clearInterval(state.streamWatchdog); state.streamWatchdog = null; }
+}
 
 async function poll() {
   const g = state.game;
   if (!g) return;
   try {
     const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=${state.playerAfter}`);
-    state.view = v;
-    const freshFrom = state.playerAfter; // 只有新事件才触发横幅/闪光
-    if (state.playerAfter === 0) {
-      $('#m-drawer-log').innerHTML = '';
-      state.seatNames = {}; for (const p of v.players) state.seatNames[p.seat] = p.name;
-      state.speakingSeat = 0; state.stage = null;
-    }
-    for (const e of v.events) {
-      if (e.type === 'night_step') state.lastNightStep = e.data;
-      const node = renderEventNode(e);
-      if (node) $('#m-drawer-log').appendChild(node);
-      feedStage(e, e.seq > freshFrom);
-    }
-    if (v.events.length) state.playerAfter = Math.max(state.playerAfter, ...v.events.map((e) => e.seq));
-    autoScroll();
-    updateHeader(v);
-    updateSeats(v);
-    updateStage(v);
-    updateActionbar(v);
-    maybeShowRole(v);
+    applyView(v);
   } catch (e) { appendSys(`⚠ 拉取失败：${e.message}`); }
+}
+
+/** 渲染一份视图。SSE 与轮询共用；事件按 seq 游标过滤，重连重发也不会画两遍。 */
+function applyView(v) {
+  if (!v) return;
+  state.view = v;
+  const freshFrom = state.playerAfter; // 只有新事件才触发横幅/闪光
+  if (state.playerAfter === 0) {
+    $('#m-drawer-log').innerHTML = '';
+    state.seatNames = {}; for (const p of v.players) state.seatNames[p.seat] = p.name;
+    state.speakingSeat = 0; state.stage = null;
+  }
+  for (const e of v.events) {
+    if (e.seq <= (freshFrom || 0)) continue; // 幂等：已渲染过的 seq 直接跳过
+    if (e.type === 'night_step') state.lastNightStep = e.data;
+    const node = renderEventNode(e);
+    if (node) $('#m-drawer-log').appendChild(node);
+    feedStage(e, e.seq > freshFrom);
+  }
+  if (v.events.length) state.playerAfter = Math.max(state.playerAfter, ...v.events.map((e) => e.seq));
+  autoScroll();
+  updateHeader(v);
+  updateSeats(v);
+  updateStage(v);
+  updateActionbar(v);
+  updatePausedBanner(v);
+  updateMemoryChip(v);
+  maybeShowRole(v);
+}
+
+/**
+ * 暂停横幅（手机端）：额度/套餐等外部原因导致暂停时明示原因与重置时间，
+ * 点「继续对局」从锚点续跑——已发生的发言不会重来。
+ */
+function updatePausedBanner(v) {
+  const box = $('#m-paused-banner');
+  if (!box) return;
+  const p = v && v.paused;
+  if (!p) {
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.sig = ''; }
+    return;
+  }
+  const sig = `${p.kind}|${p.code}|${p.nextFlushTime || ''}`;
+  if (box.dataset.sig === sig) return; // 1.2s 轮询：内容未变不重建 DOM
+  box.dataset.sig = sig;
+  const title = p.kind === 'quota' ? '账户额度已用尽' : '套餐 / 权限受限';
+  const when = p.nextFlushTime ? `预计 <b>${escapeHtml(String(p.nextFlushTime))}</b> 重置` : '请到服务商控制台确认额度';
+  box.classList.remove('hidden');
+  box.innerHTML =
+    `<div class="pb-title">⏸ 对局已暂停（不是结束）</div>` +
+    `<div class="pb-msg">${title}${p.code ? `（${escapeHtml(String(p.code))}）` : ''}：${escapeHtml(String(p.message || ''))}</div>` +
+    `<div class="pb-hint">${when}。进度已保存，恢复后从断点继续。</div>` +
+    `<div class="pb-actions">` +
+    `<button class="btn primary" id="m-btn-resume-paused">继续对局</button>` +
+    `<button class="btn ghost" id="m-btn-terminate-paused">终止本局</button>` +
+    `</div>`;
+  $('#m-btn-resume-paused').addEventListener('click', resumePausedGame);
+  $('#m-btn-terminate-paused').addEventListener('click', terminateGame);
+}
+
+/** 日切反思进度（日切边界后台整理记忆，不阻塞对局） */
+function updateMemoryChip(v) {
+  const node = $('#m-memory');
+  if (!node) return;
+  const m = v && v.memory;
+  if (!m) { node.classList.add('hidden'); return; }
+  node.classList.remove('hidden');
+  node.textContent = `🧠 整理记忆 ${m.done}/${m.total}`;
+}
+
+async function resumePausedGame() {
+  const g = state.game;
+  if (!g) return;
+  const btn = $('#m-btn-resume-paused');
+  if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
+  try {
+    const r = await api('POST', `/api/games/${g.gameId}/resume`, { token: g.playerToken || g.godToken });
+    state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
+    localStorage.setItem('ww_current', JSON.stringify(state.game));
+    state.playerAfter = 0;
+    $('#m-drawer-log').innerHTML = '';
+    const box = $('#m-paused-banner');
+    if (box) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.sig = ''; }
+    await poll();
+    hint('已从断点继续 ✓');
+  } catch (e) {
+    hint(`✗ 恢复失败：${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '继续对局'; }
+  }
 }
 
 function autoScroll() { const s = $('#m-drawer-log'); if (s.scrollHeight - s.scrollTop - s.clientHeight < 160) s.scrollTop = s.scrollHeight; }
@@ -427,7 +609,14 @@ function updateHeader(v) {
 }
 
 // ---------------- 圆桌座位层 ----------------
+/** 最近一次用于渲染座位的视图：表格尺寸变化时要按同一份数据重排 */
+let lastSeatsView = null;
+let seatsReobserving = false;
+
 function updateSeats(v) {
+  lastSeatsView = v || lastSeatsView;
+  if (!lastSeatsView) return;
+  v = lastSeatsView;
   const table = $('#m-table');
   table.querySelectorAll('.tseat').forEach((n) => n.remove());
   const ps = v.players;
@@ -436,14 +625,18 @@ function updateSeats(v) {
   const mySeat = v.me ? v.me.seat : 0;
   const myIdx = Math.max(0, ps.findIndex((p) => p.seat === mySeat));
   const rect = table.getBoundingClientRect();
-  const cx = rect.width / 2, cy = rect.height / 2;
+  if (rect.width < 80 || rect.height < 80) return; // 还没布局完（或屏幕被隐藏），等尺寸正常再画
   const rx = Math.max(88, rect.width / 2 - 38);
   const ry = Math.max(78, rect.height / 2 - 46);
+  // 用百分比定位：这样表格高度被内容撑大/缩小时（舞台变高变矮、旋转屏幕），
+  // 座位仍落在同一椭圆的相对位置上，不会停在旧坐标上压住舞台（踩过一次）。
+  const rxPct = (rx / rect.width) * 100;
+  const ryPct = (ry / rect.height) * 100;
   for (let i = 0; i < n; i++) {
     const p = ps[(myIdx + i) % n]; // 我的座位固定在 6 点位，顺时针排布
     const ang = Math.PI / 2 + (i / n) * Math.PI * 2;
-    const x = cx + rx * Math.cos(ang);
-    const y = cy + ry * Math.sin(ang);
+    const xPct = 50 + rxPct * Math.cos(ang);
+    const yPct = 50 + ryPct * Math.sin(ang);
     const showRole = p.role && p.revealed;
     const tag = !p.role ? state.tags[p.seat] : null;
     const tagR = tag && roleInfo(tag);
@@ -451,8 +644,8 @@ function updateSeats(v) {
       + (p.seat === mySeat ? ' mine' : '')
       + (p.alive ? '' : ' dead')
       + (p.alive && p.seat === state.speakingSeat ? ' speaking' : ''));
-    s.style.left = `${x.toFixed(1)}px`;
-    s.style.top = `${y.toFixed(1)}px`;
+    s.style.left = `${xPct.toFixed(2)}%`;
+    s.style.top = `${yPct.toFixed(2)}%`;
     const ring = el('div', 'ts-ring', showRole ? roleInfo(p.role).emoji : String(p.seat));
     if (p.isSheriff) ring.appendChild(el('span', 'ts-badge', '👑'));
     if (tagR) {
@@ -478,6 +671,16 @@ function updateSeats(v) {
       s.addEventListener('click', () => openInspect(p.role));
     }
     table.appendChild(s);
+  }
+  // 表格尺寸一变（舞台内容变高变矮、手机旋转、软键盘弹出）就按同一份视图重排座位。
+  // 百分比定位已经能跟着缩放，但 rx/ry 有最小值（88/78px）时仍需要重算。
+  if (!seatsReobserving && typeof ResizeObserver === 'function') {
+    seatsReobserving = true;
+    let raf = 0;
+    new ResizeObserver(() => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => { raf = 0; updateSeats(lastSeatsView); });
+    }).observe(table);
   }
 }
 
@@ -554,6 +757,21 @@ function feedStage(e, fresh) {
 
 function updateStage(v) {
   const head = $('#m-stage-head'), body = $('#m-stage-body'), st = $('#m-stage');
+  // 流式"打字中"优先占用舞台：把漫长的空白等待变成即时反馈
+  const live = v && v.live;
+  if (live) {
+    st.classList.add('important');
+    const lp = v.players.find((x) => x.seat === live.seat);
+    head.innerHTML = `<span class="stage-ava">${live.seat}</span>`
+      + `<span class="stage-who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
+      + `<span class="stage-tag">${live.public ? '✍ 正在发言' : '… 正在思考'}</span>`;
+    if (live.public && live.text) {
+      body.innerHTML = `<span class="typing-live">${escapeHtml(live.text)}</span><span class="caret"></span>`;
+    } else {
+      body.innerHTML = '<span class="hint">正在思考…</span>';
+    }
+    return;
+  }
   const s = state.stage;
   st.classList.toggle('important', !!(s && s.important));
   if (s && s.kind === 'speech') {
@@ -797,7 +1015,7 @@ async function submitSimple(payload) {
 }
 async function wolfTalkAction(kind, text, ta) {
   try {
-    const r = await api('POST', `/api/games/${state.game.gameId}/wolftalk`, { token: state.game.playerToken, kind, text });
+    await api('POST', `/api/games/${state.game.gameId}/wolftalk`, { token: state.game.playerToken, kind, text });
     if (kind === 'say' && ta) ta.value = '';
     hint(`已发送 ✓`);
   } catch (e) { $('#m-pending-hint').textContent = `✗ ${e.message}`; }

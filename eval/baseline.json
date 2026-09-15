@@ -1,0 +1,452 @@
+{
+  "generatedAt": "2026-09-15T09:14:07.702Z",
+  "mode": "mock",
+  "board": "adv12",
+  "games": 30,
+  "seed": 1000,
+  "overall": {
+    "games": 90,
+    "winRate": {
+      "good": 0.133,
+      "wolf": 0.867,
+      "other": 0
+    },
+    "wins": {
+      "good": 12,
+      "wolf": 78,
+      "other": 0
+    },
+    "avgDays": 4.44,
+    "vote": {
+      "cast": 3479,
+      "perGame": 38.66,
+      "hitWolfRate": 0.363,
+      "goodHitWolfRate": 0.368
+    },
+    "seer": {
+      "checks": 275,
+      "perGame": 3.06,
+      "hitRate": 0.415
+    },
+    "fakeClaim": {
+      "wolfSeerClaims": 0,
+      "perGame": 0,
+      "survivalRate": null
+    },
+    "cost": {
+      "calls": 0,
+      "callsPerGame": 0,
+      "promptTokens": 0,
+      "completionTokens": 0,
+      "cachedTokens": 0,
+      "tokensPerGame": 0,
+      "cachedRatio": null
+    },
+    "latency": {
+      "p50": null,
+      "p90": null,
+      "max": null,
+      "note": "对每局的 p90 再取分位；空值表示本批没有真实 LLM 调用（mock 局）"
+    },
+    "deathCauses": {
+      "vote_out": 313,
+      "wolf_kill": 290,
+      "poison": 32,
+      "shot": 83,
+      "explode_self": 34
+    },
+    "byRole": {
+      "seer": {
+        "n": 90,
+        "team": "good",
+        "survivedSum": 275,
+        "died": 78,
+        "avgSurvived": 3.06,
+        "deathRate": 0.867
+      },
+      "witch": {
+        "n": 90,
+        "team": "good",
+        "survivedSum": 281,
+        "died": 71,
+        "avgSurvived": 3.12,
+        "deathRate": 0.789
+      },
+      "villager": {
+        "n": 360,
+        "team": "good",
+        "survivedSum": 1130,
+        "died": 263,
+        "avgSurvived": 3.14,
+        "deathRate": 0.731
+      },
+      "wolfking": {
+        "n": 90,
+        "team": "wolf",
+        "survivedSum": 305,
+        "died": 48,
+        "avgSurvived": 3.39,
+        "deathRate": 0.533
+      },
+      "wolf": {
+        "n": 270,
+        "team": "wolf",
+        "survivedSum": 902,
+        "died": 148,
+        "avgSurvived": 3.34,
+        "deathRate": 0.548
+      },
+      "guard": {
+        "n": 90,
+        "team": "good",
+        "survivedSum": 289,
+        "died": 72,
+        "avgSurvived": 3.21,
+        "deathRate": 0.8
+      },
+      "hunter": {
+        "n": 90,
+        "team": "good",
+        "survivedSum": 289,
+        "died": 72,
+        "avgSurvived": 3.21,
+        "deathRate": 0.8
+      }
+    },
+    "isolationProblems": 0
+  },
+  "configs": {
+    "base": {
+      "games": 30,
+      "winRate": {
+        "good": 0.133,
+        "wolf": 0.867,
+        "other": 0
+      },
+      "wins": {
+        "good": 4,
+        "wolf": 26,
+        "other": 0
+      },
+      "avgDays": 4.33,
+      "vote": {
+        "cast": 1153,
+        "perGame": 38.43,
+        "hitWolfRate": 0.374,
+        "goodHitWolfRate": 0.372
+      },
+      "seer": {
+        "checks": 93,
+        "perGame": 3.1,
+        "hitRate": 0.398
+      },
+      "fakeClaim": {
+        "wolfSeerClaims": 0,
+        "perGame": 0,
+        "survivalRate": null
+      },
+      "cost": {
+        "calls": 0,
+        "callsPerGame": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "cachedTokens": 0,
+        "tokensPerGame": 0,
+        "cachedRatio": null
+      },
+      "latency": {
+        "p50": null,
+        "p90": null,
+        "max": null,
+        "note": "对每局的 p90 再取分位；空值表示本批没有真实 LLM 调用（mock 局）"
+      },
+      "deathCauses": {
+        "vote_out": 98,
+        "wolf_kill": 97,
+        "poison": 10,
+        "shot": 28,
+        "explode_self": 17
+      },
+      "byRole": {
+        "seer": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 93,
+          "died": 27,
+          "avgSurvived": 3.1,
+          "deathRate": 0.9
+        },
+        "witch": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 90,
+          "died": 22,
+          "avgSurvived": 3,
+          "deathRate": 0.733
+        },
+        "villager": {
+          "n": 120,
+          "team": "good",
+          "survivedSum": 367,
+          "died": 88,
+          "avgSurvived": 3.06,
+          "deathRate": 0.733
+        },
+        "wolfking": {
+          "n": 30,
+          "team": "wolf",
+          "survivedSum": 102,
+          "died": 16,
+          "avgSurvived": 3.4,
+          "deathRate": 0.533
+        },
+        "wolf": {
+          "n": 90,
+          "team": "wolf",
+          "survivedSum": 291,
+          "died": 50,
+          "avgSurvived": 3.23,
+          "deathRate": 0.556
+        },
+        "guard": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 90,
+          "died": 25,
+          "avgSurvived": 3,
+          "deathRate": 0.833
+        },
+        "hunter": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 99,
+          "died": 22,
+          "avgSurvived": 3.3,
+          "deathRate": 0.733
+        }
+      },
+      "isolationProblems": 0
+    },
+    "nosheriff": {
+      "games": 30,
+      "winRate": {
+        "good": 0.2,
+        "wolf": 0.8,
+        "other": 0
+      },
+      "wins": {
+        "good": 6,
+        "wolf": 24,
+        "other": 0
+      },
+      "avgDays": 4.67,
+      "vote": {
+        "cast": 1064,
+        "perGame": 35.47,
+        "hitWolfRate": 0.374,
+        "goodHitWolfRate": 0.383
+      },
+      "seer": {
+        "checks": 94,
+        "perGame": 3.13,
+        "hitRate": 0.415
+      },
+      "fakeClaim": {
+        "wolfSeerClaims": 0,
+        "perGame": 0,
+        "survivalRate": null
+      },
+      "cost": {
+        "calls": 0,
+        "callsPerGame": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "cachedTokens": 0,
+        "tokensPerGame": 0,
+        "cachedRatio": null
+      },
+      "latency": {
+        "p50": null,
+        "p90": null,
+        "max": null,
+        "note": "对每局的 p90 再取分位；空值表示本批没有真实 LLM 调用（mock 局）"
+      },
+      "deathCauses": {
+        "shot": 31,
+        "wolf_kill": 99,
+        "vote_out": 102,
+        "explode_self": 17,
+        "poison": 11
+      },
+      "byRole": {
+        "seer": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 94,
+          "died": 24,
+          "avgSurvived": 3.13,
+          "deathRate": 0.8
+        },
+        "witch": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 96,
+          "died": 26,
+          "avgSurvived": 3.2,
+          "deathRate": 0.867
+        },
+        "villager": {
+          "n": 120,
+          "team": "good",
+          "survivedSum": 405,
+          "died": 84,
+          "avgSurvived": 3.38,
+          "deathRate": 0.7
+        },
+        "wolfking": {
+          "n": 30,
+          "team": "wolf",
+          "survivedSum": 96,
+          "died": 22,
+          "avgSurvived": 3.2,
+          "deathRate": 0.733
+        },
+        "wolf": {
+          "n": 90,
+          "team": "wolf",
+          "survivedSum": 309,
+          "died": 55,
+          "avgSurvived": 3.43,
+          "deathRate": 0.611
+        },
+        "guard": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 101,
+          "died": 22,
+          "avgSurvived": 3.37,
+          "deathRate": 0.733
+        },
+        "hunter": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 92,
+          "died": 27,
+          "avgSurvived": 3.07,
+          "deathRate": 0.9
+        }
+      },
+      "isolationProblems": 0
+    },
+    "noexplode": {
+      "games": 30,
+      "winRate": {
+        "good": 0.067,
+        "wolf": 0.933,
+        "other": 0
+      },
+      "wins": {
+        "good": 2,
+        "wolf": 28,
+        "other": 0
+      },
+      "avgDays": 4.33,
+      "vote": {
+        "cast": 1262,
+        "perGame": 42.07,
+        "hitWolfRate": 0.343,
+        "goodHitWolfRate": 0.351
+      },
+      "seer": {
+        "checks": 88,
+        "perGame": 2.93,
+        "hitRate": 0.432
+      },
+      "fakeClaim": {
+        "wolfSeerClaims": 0,
+        "perGame": 0,
+        "survivalRate": null
+      },
+      "cost": {
+        "calls": 0,
+        "callsPerGame": 0,
+        "promptTokens": 0,
+        "completionTokens": 0,
+        "cachedTokens": 0,
+        "tokensPerGame": 0,
+        "cachedRatio": null
+      },
+      "latency": {
+        "p50": null,
+        "p90": null,
+        "max": null,
+        "note": "对每局的 p90 再取分位；空值表示本批没有真实 LLM 调用（mock 局）"
+      },
+      "deathCauses": {
+        "wolf_kill": 94,
+        "vote_out": 113,
+        "poison": 11,
+        "shot": 24
+      },
+      "byRole": {
+        "seer": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 88,
+          "died": 27,
+          "avgSurvived": 2.93,
+          "deathRate": 0.9
+        },
+        "witch": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 95,
+          "died": 23,
+          "avgSurvived": 3.17,
+          "deathRate": 0.767
+        },
+        "villager": {
+          "n": 120,
+          "team": "good",
+          "survivedSum": 358,
+          "died": 91,
+          "avgSurvived": 2.98,
+          "deathRate": 0.758
+        },
+        "wolfking": {
+          "n": 30,
+          "team": "wolf",
+          "survivedSum": 107,
+          "died": 10,
+          "avgSurvived": 3.57,
+          "deathRate": 0.333
+        },
+        "wolf": {
+          "n": 90,
+          "team": "wolf",
+          "survivedSum": 302,
+          "died": 43,
+          "avgSurvived": 3.36,
+          "deathRate": 0.478
+        },
+        "guard": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 98,
+          "died": 25,
+          "avgSurvived": 3.27,
+          "deathRate": 0.833
+        },
+        "hunter": {
+          "n": 30,
+          "team": "good",
+          "survivedSum": 98,
+          "died": 23,
+          "avgSurvived": 3.27,
+          "deathRate": 0.767
+        }
+      },
+      "isolationProblems": 0
+    }
+  }
+}

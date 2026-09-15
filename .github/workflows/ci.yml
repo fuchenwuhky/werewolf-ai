@@ -1,0 +1,66 @@
+# CI 门禁（P1-5）
+#
+# 设计要点：
+#  1. `test` 作业跑 4 个 Node 版本的矩阵 —— **不需要 npm install**（应用运行时零依赖），
+#     所以这一步是"真的在验证代码在 18/20/22/24 上都能跑"，而不是在验证依赖树。
+#  2. `lint` / `coverage` 用到 devDependencies（eslint），单独一个作业装依赖，
+#     不拖慢矩阵。
+#  3. 零依赖的项目不变量检查（scripts/lint.js）同时随 `npm test` 运行
+#     （test/lint.test.js 里有"本仓库必须零违规"的自检），所以矩阵作业里也顺带守住了架构约束。
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ---- 跨 Node 版本跑测试：这是"能在用户机器上跑起来"的核心保证 ----
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18.x', '20.x', '22.x', '24.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      # 零依赖：故意没有 npm install。
+      # 顺带证明"用户 clone 下来直接 node server.js 就能跑"这句话是真的。
+      - name: 单元测试（node --test）
+        run: npm test
+      - name: 项目不变量检查（零依赖 lint）
+        run: npm run lint
+      - name: 模拟对局 + 可见性隔离审计
+        run: node scripts/simulate.js --n=10
+
+  # ---- 覆盖率门禁 + ESLint：只在一个版本上跑，避免重复开销 ----
+  gate:
+    name: coverage & eslint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - name: 安装开发依赖（仅 lint 用；应用运行时不需要）
+        run: npm ci
+      - name: ESLint（语言级错误：未定义变量、重复键、不可达代码…）
+        run: npm run eslint
+      - name: 覆盖率门禁（行 88 / 分支 80 / 函数 78）
+        run: npm run coverage
+      # 评测 harness：固定种子 × 配置矩阵跑 90 局，指标必须落在基线容差内。
+      # 只放在这一个作业里（不放进 4 版本矩阵）：mock 局是确定性的，跨 Node 版本跑没有额外信息，
+      # 反而会把"某个版本的浮点/排序细节不同"引入成假警报。
+      - name: 评测回归门禁（固定种子 × 配置矩阵 vs 基线）
+        run: npm run eval

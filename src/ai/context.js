@@ -12,6 +12,9 @@
  */
 'use strict';
 const { renderEvent, PHASE_LABEL } = require('../engine/render');
+const { spotlightEvent } = require('./spotlight');
+const { estimateTokens } = require('./tokens');
+const { selectMemory } = require('./memory');
 
 const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
@@ -31,11 +34,6 @@ function taskEffort(task, cfg) {
 function taskMaxTokens(task, cfg) {
   if (FAST_TASKS.has(task)) return cfg.fastMaxTokens || 8000;
   return Math.min(cfg.maxTokens || 16000, 12000);
-}
-
-/** 中文为主文本的 token 估算（GLM 约 1.5~1.8 字/token，取保守值） */
-function estimateTokens(text) {
-  return Math.ceil(String(text || '').length / 1.5);
 }
 
 /** 聚合某玩家视角的全部可见事件 → 结构化账本（隔离性由 visibleEvents 保证） */
@@ -103,7 +101,7 @@ function dayFacts(game, dayEvents) {
   for (const e of dayEvents) {
     if (NOISE_TYPES.has(e.type)) continue;
     if (e.type === 'speech' || e.type === 'phase') continue; // 发言进实录层，阶段标题由分区头承担
-    const line = renderEvent(game, e);
+    const line = spotlightEvent(game, e, renderEvent(game, e));
     if (line && line.trim()) lines.push(`  ${line}`);
   }
   return lines;
@@ -142,7 +140,7 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = 
   const fresh = ledger.events.filter((e) => e.seq > lastSeq && !NOISE_TYPES.has(e.type));
   const freshText = fresh.length
     ? '自你上次行动后的新事件（此前实录中未出现的部分）：\n' + fresh.map((e) => {
-      const line = renderEvent(game, e);
+      const line = spotlightEvent(game, e, renderEvent(game, e));
       return line && line.trim() ? '  ◆ ' + line : '';
     }).filter(Boolean).join('\n')
     : '';
@@ -165,20 +163,59 @@ function renderTranscript(game, ledger, days) {
     out.push(`──── 第${d}天实录 ────`);
     for (const e of evs) {
       if (NOISE_TYPES.has(e.type)) continue;
-      const line = renderEvent(game, e);
+      const line = spotlightEvent(game, e, renderEvent(game, e));
       if (line && line.trim()) out.push(line);
     }
   }
   return out.join('\n');
 }
 
-/** L1 纪要拼接（day→digest 有序） */
+/** L1 纪要拼接（day→digest 有序）——不做检索，供测试与非预算路径使用 */
 function renderDigests(digests) {
   const days = [...digests.keys()].sort((a, b) => a - b);
   if (!days.length) return '';
   const parts = ['──── 早期记忆纪要（更早天数的事实与判断要点）────'];
   for (const d of days) parts.push(`◆ 第${d}天纪要：\n${digests.get(d)}`);
   return parts.join('\n');
+}
+
+/**
+ * 当前决策的「检索线索」：我正在盘谁的票 + 手头的话题 + 今日的强事实座位。
+ *
+ * 两个刻意的收窄（P2-5 实现时踩过）：
+ *   ① **不把今天的发言者全塞进线索**。今日发言已经逐字躺在 L2 实录里，
+ *      让 L1 记忆再去重复提供它们毫无价值；线索一宽，"相关度"就退化成常数、检索等于没检索。
+ *   ② 候选过多（超过半数座位）时也不当作线索——那说明这个决定本来就没有区分度。
+ * 只由**已经进入该玩家上下文的信息**构成（候选/怀疑度/今日账本），不引入新信息、不破坏隔离。
+ */
+const QUERY_FOCUS_EVENTS = new Set(['vote_reveal', 'vote_cast', 'exile', 'deaths', 'shoot', 'role_reveal', 'idiot_save', 'badge_pass']);
+const QUERY_MAX_SEATS = 5;
+
+function memoryQuery(game, player, request, ledger, suspicion) {
+  const seats = new Set();
+  const today = game.day || 0;
+  const cands = request.candidates || [];
+  if (cands.length && cands.length <= Math.max(4, Math.floor(game.players.length / 2))) {
+    for (const s of cands) seats.add(Number(s));
+  }
+  const sus = Object.entries(suspicion || {})
+    .filter(([, v]) => Number.isFinite(v))
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 3);
+  for (const [s] of sus) seats.add(Number(s));
+  for (const e of ledger.byDay.get(today) || []) {
+    if (!QUERY_FOCUS_EVENTS.has(e.type)) continue;
+    if (e.actor) seats.add(Number(e.actor));
+    const t = e.data && (e.data.target != null ? e.data.target : e.data.to);
+    if (t) seats.add(Number(t));
+  }
+  seats.delete(player.seat); // 关于自己的记忆本来就在快照的私密区，不需要靠它来检索
+  // 上限：线索必须比"全体座位"小得多，否则相关度没有区分力
+  const focused = new Set([...seats].filter((s) => s > 0).slice(0, QUERY_MAX_SEATS));
+  const terms = [];
+  const taskLabel = { vote: '投票', pk_vote: '投票', sheriff_vote: '投票', speech: '发言', pk_speech: '发言', sheriff_speech: '发言', seer_check: '查验', witch: '用药', night_guard: '守护', wolf_kill: '刀口', wolf_chat: '刀口', night_dream: '摄梦' }[request.task];
+  if (taskLabel) terms.push(taskLabel);
+  return { seats: focused, terms, nowDay: today };
 }
 
 /** 反思失败时的确定性骨架（当天的公开硬事实 + 私密行动） */
@@ -189,7 +226,7 @@ function skeletonDigest(game, ledger, day) {
   for (const e of evs) {
     if (['wolf_kill', 'seer_check', 'witch_action', 'night_guard', 'vote_cast',
       'night_dream', 'wolfbeauty_charm', 'crow_curse', 'admirer_crush'].includes(e.type)) {
-      const line = renderEvent(game, e);
+      const line = spotlightEvent(game, e, renderEvent(game, e));
       if (line) mine.push(`  ${line}`);
     }
   }
@@ -205,12 +242,18 @@ function assembleParts(game, player, request, state) {
   const ledger = aggregate(game, player);
   const today = game.day || 0;
   const days = state.transcriptDays != null ? state.transcriptDays : [today - 1, today].filter((d) => d >= 1);
-  const digestsText = renderDigests(state.digests || new Map());
+  // memoryBudget 由调用方给出（trimToBudget 里按剩余预算算）；不传则退回全量拼接（与旧行为逐字一致）
+  const mem = selectMemory(state.digests || new Map(), {
+    nowDay: today,
+    query: state.memoryBudget != null ? memoryQuery(game, player, request, ledger, state.suspicion) : null,
+    budgetTokens: state.memoryBudget != null ? state.memoryBudget : Infinity,
+  });
+  const digestsText = mem.text;
   const transcriptText = renderTranscript(game, ledger, days);
   const snapshotText = renderSnapshot(game, player, ledger, request, state.lastSeq || 0, state.suspicion || null);
   const { taskInstruction } = require('./prompts');
   const taskText = `## 当前任务（你是 ${player.seat}号）\n${taskInstruction(game, player, request)}`;
-  return { ledger, digestsText, transcriptText, snapshotText, taskText };
+  return { ledger, digestsText, transcriptText, snapshotText, taskText, memory: mem };
 }
 
 /**
@@ -227,15 +270,22 @@ function assemble(game, player, request, state) {
 }
 
 /** 预算裁剪：快照与任务永远完整，只裁记忆区（昨日降级 → 实录保尾 → 丢最旧纪要） */
+/**
+ * 预算裁剪：快照与任务永远完整，只裁记忆区（昨日降级 → 实录保尾 → 记忆按相关度检索）
+ *
+ * P2-5 改动：最后一步从"丢弃最旧的纪要"改为"按 recency × importance × relevance 检索"。
+ * 理由很直接——"第 1 天 3 号跳预言家"通常比"第 5 天 9 号打了个哈欠"重要，
+ * 而旧策略先丢的恰恰是前者。装得下时（短局常态）**不做任何检索**，逐字与旧行为一致。
+ */
 function trimToBudget(game, player, request, state, budgetTokens) {
-  const P = assembleParts(game, player, request, state);
+  const P = assembleParts(game, player, request, state); // 此处不检索：先量出"全量记忆"的体积
   const fixedTokens = estimateTokens(P.snapshotText) + estimateTokens(P.taskText);
   const avail = Math.max(500, budgetTokens - fixedTokens);
-  const digests = new Map(state.digests || []);
   const today = game.day || 0;
   let days = state.transcriptDays != null ? state.transcriptDays.slice() : [today - 1, today].filter((d) => d >= 1);
   let digestsText = P.digestsText;
   let transcriptText = P.transcriptText;
+  let memory = P.memory;
   let trimmed = false;
   const over = () => estimateTokens(digestsText) + estimateTokens(transcriptText) > avail;
   // 1) 昨日实录降级：只留今日逐字（昨日事实仍在快照时间线里）
@@ -250,11 +300,15 @@ function trimToBudget(game, player, request, state, budgetTokens) {
     transcriptText = '（早期实录已因预算截断）\n' + transcriptText.slice(-keepChars);
     trimmed = true;
   }
-  // 3) 丢弃最旧纪要
-  let keep = [...digests.entries()].sort((a, b) => a[0] - b[0]);
-  while (over() && keep.length > 0) {
-    keep = keep.slice(1);
-    digestsText = renderDigests(new Map(keep));
+  // 3) 记忆检索：把剩余预算交给记忆流，按相关度挑条目（取代旧的"丢弃最旧纪要"）
+  if (over() && state.digests && state.digests.size) {
+    const memoryBudget = Math.max(200, avail - estimateTokens(transcriptText));
+    memory = selectMemory(state.digests, {
+      nowDay: today,
+      query: memoryQuery(game, player, request, P.ledger, state.suspicion),
+      budgetTokens: memoryBudget,
+    });
+    digestsText = memory.text;
     trimmed = true;
   }
   // 4) 极端情况：实录再压一档
@@ -266,8 +320,19 @@ function trimToBudget(game, player, request, state, budgetTokens) {
   return {
     text,
     sections: { digests: digestsText, transcript: transcriptText, snapshot: P.snapshotText },
+    // 分区体积（应用自报，供上帝面板/评测查看）：contextBudget 只约束"记忆+实录"，
+    // 快照与任务永不裁剪 —— 没有这几个数，"为什么上下文 3000 tok 而预算是 900"就只能靠猜。
+    sectionTokens: {
+      memory: estimateTokens(digestsText),
+      transcript: estimateTokens(transcriptText),
+      snapshot: estimateTokens(P.snapshotText),
+      task: estimateTokens(P.taskText),
+      total: estimateTokens(text),
+    },
     tokens: estimateTokens(text),
     trimmed,
+    // 记忆检索的可观测结果（上帝面板/评测可直接看到"这一轮检索掉了几条"）
+    memory: { kept: memory.kept, total: memory.total, omitted: memory.omitted, retrieved: memory.retrieved },
     ledger: P.ledger,
   };
 }
@@ -275,5 +340,5 @@ function trimToBudget(game, player, request, state, budgetTokens) {
 module.exports = {
   FAST_TASKS, taskEffort, taskMaxTokens, estimateTokens, aggregate,
   renderSnapshot, renderTranscript, renderDigests, skeletonDigest, dayFacts,
-  privateLedger, assemble, trimToBudget,
+  privateLedger, memoryQuery, assemble, trimToBudget,
 };

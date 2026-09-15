@@ -9,11 +9,16 @@ const el = (tag, cls, html) => { const d = document.createElement(tag); if (cls)
 
 const state = {
   meta: null,            // {roles, boards, ruleMeta, defaultRules}
-  setup: { boardCounts: null, boardId: 'adv12', rules: null, mode: 'play', mySeat: 1 },
+  setup: { boardCounts: null, boardId: 'adv12', rules: null, mode: 'play', mySeat: 'random' },
   game: null,            // {gameId, playerToken, godToken, mock}
   view: null,            // 最近一次 view 响应
   afterSeq: 0,
   pollTimer: null,
+  // SSE 推送（P2-2）：两条流 + 各自最近一帧 + 看门狗时间戳
+  stream: null, godStream: null, streamWatchdog: null, lastStreamAt: 0,
+  playerView: null, godView: null,
+  coachSig: null, // 教练面板的重绘签名（内容没变就不重建 DOM）
+  ready: false,   // 初始化（拉取 meta/config 并绑定事件）是否完成：没完成时点击要明说，不能毫无反应
   godMode: false,
   godLogAfter: 0,
   roleShown: false,
@@ -46,9 +51,12 @@ async function initSetup() {
   $('#cfg-fasteffort').value = cfg.fastEffort || 'low';
   $('#cfg-budget').value = cfg.contextBudget || 12000;
   $('#cfg-cachecontrol').checked = !!cfg.cacheControl;
+  $('#cfg-keepalive').checked = cfg.keepAlive !== false; // 默认开
+  renderPaceSelect(cfg.pace);
   if (cfg.hasKey) $('#cfg-key').placeholder = `已保存（${cfg.apiKeyMasked}），留空则不修改`;
 
   state.setup.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
+  state.setup.mySeat = savedSeatChoice(); // 恢复上次的座位偏好（含 'random'），默认随机
   applyBoardTemplate('adv12');
   renderBoardTemplateSelect();
   renderBoardEditor();
@@ -59,7 +67,11 @@ async function initSetup() {
     $('#play-options').classList.toggle('hidden', state.setup.mode !== 'play');
     renderAiNames(true); renderPersonas();
   }));
-  $('#my-seat').addEventListener('change', () => { renderAiNames(true); renderPersonas(); });
+  $('#my-seat').addEventListener('change', () => {
+    state.setup.mySeat = $('#my-seat').value;
+    persistSeatChoice(state.setup.mySeat);
+    renderAiNames(true); renderPersonas();
+  });
   $('#btn-rand-names').addEventListener('click', () => { renderAiNames(true); renderPersonas(); });
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
@@ -84,6 +96,13 @@ async function initSetup() {
     else resumeGame();
   });
   await checkResume();
+  // 到这里才有 meta/config、事件也才绑上。此前点击按钮什么都不会发生 ——
+  // 冷启动较慢时用户会以为"点了没反应"。所以：开始按钮在 HTML 里就是 disabled，
+  // 这里显式启用；整个加载窗口内的拦截由 index.html 最先执行的那段守卫负责（见 index.html 顶部）。
+  const startBtn = $('#btn-start');
+  if (startBtn) startBtn.disabled = false;
+  state.ready = true;
+  window.__wwReady = true; // 告诉顶部守卫可以放行了
 }
 
 function applyBoardTemplate(id) {
@@ -139,13 +158,39 @@ function updateBoardTotal() {
   renderAiNames(false);
 }
 
+/**
+ * 我的座位下拉：**默认"🎲 随机"**，也可以明确指定某一号。
+ *
+ * 为什么默认随机：老是坐 1 号会很难受 —— 发言顺序固定、首夜被刀/被查的概率体感失衡，
+ * 而且 1 号在很多板子里是"第一个发言"的固定角色。随机之后每局的位置都不一样。
+ *
+ * "随机"的取值是字符串 'random'，由**服务端**抽签（见 api.js createGame）：手机端/桌面端/直连 API
+ * 三条路径行为一致，且显式 seed 时座位也能一起复现。这里只负责把选择记下来。
+ */
 function renderSeatsSelect() {
   const sel = $('#my-seat');
   const total = boardTotal();
-  const cur = Number(sel.value || state.setup.mySeat);
+  const cur = sel.value || state.setup.mySeat; // 'random' 或数字
   sel.innerHTML = '';
+  sel.appendChild(el('option', null, '🎲 随机（推荐）')).value = 'random';
   for (let i = 1; i <= total; i++) sel.appendChild(el('option', null, `${i} 号座位`)).value = i;
-  if (cur >= 1 && cur <= total) sel.value = cur;
+  const wanted = String(cur);
+  sel.value = [...sel.options].some((o) => o.value === wanted) ? wanted : 'random';
+  state.setup.mySeat = sel.value;
+  // 选"随机"时要说明座位号开局才定 —— 否则用户会奇怪"我给某座位填的昵称怎么不见了"
+  const hint = $('#seat-hint');
+  if (hint) {
+    hint.textContent = sel.value === 'random'
+      ? tr('players.seatRandomHint', '🎲 座位开局时随机分配（每局都不一样）。下面每个座位的昵称/人格都会保留，抽到你的那个座位会换成你的昵称。')
+      : '';
+  }
+}
+
+/** 取词：有 i18n.js 就用它，否则退回中文原文案 */
+function tr(key, zh) {
+  const fn = window.I18N && window.I18N.t;
+  const v = fn ? fn(key) : null;
+  return v == null ? zh : v;
 }
 
 function renderRulesEditor() {
@@ -187,10 +232,14 @@ function renderRulesEditor() {
         });
       };
       render();
-      item.innerHTML = '<span class="rlabel"><b>夜晚行动顺序</b></span>';
-      item.appendChild(wrap);
-      item.style.flexDirection = 'column';
-      item.style.alignItems = 'stretch';
+      /* 夜晚行动顺序：8 行编辑器，占 ~390px，把规则卡撑得很高（设置页 2×2 布局里右下会空出一大块）。
+         收进默认折叠的 details：改它的人本来就少，展开后仍占整行宽度。 */
+      const det = el('details', 'rule-order-details');
+      det.innerHTML = '<summary class="rlabel"><b>夜晚行动顺序</b><span class="hint">（默认按官方流程，通常不用改；展开可调整先后）</span></summary>';
+      det.appendChild(wrap);
+      item.innerHTML = '';
+      item.appendChild(det);
+      item.style.gridColumn = '1 / -1'; // 跨两列，别把顺序列表挤进右侧窄列
     }
     box.appendChild(item);
   }
@@ -199,9 +248,12 @@ function renderRulesEditor() {
 function getPath(obj, path) { return path.split('.').reduce((o, k) => (o ? o[k] : undefined), obj); }
 function setPath(obj, path, val) { const ks = path.split('.'); const last = ks.pop(); const t = ks.reduce((o, k) => o[k], obj); t[last] = val; }
 
+/** 可能会是 AI 的座位。选"随机"时座位尚未确定，所以全部座位都要能填昵称/人格。 */
 function aiSeats() {
   const total = boardTotal();
-  const mySeat = state.setup.mode === 'play' ? Number($('#my-seat').value || 1) : 0;
+  const sel = $('#my-seat');
+  const raw = state.setup.mode === 'play' ? String(sel.value || state.setup.mySeat) : '';
+  const mySeat = raw === 'random' ? 0 : Number(raw || 0);
   const seats = [];
   for (let i = 1; i <= total; i++) if (i !== mySeat) seats.push(i);
   return seats;
@@ -258,7 +310,54 @@ function renderPersonas() {
   dl.innerHTML = (state.meta.personas || []).map((p) => `<option value="${p.name}">${p.tag}</option>`).join('');
 }
 
+/**
+ * 节奏档位（P2-6）：把"这一局要快 / 要标准 / 要深"做成一个选择器，
+ * 而不是把 effortPolicy / digestMinEvents / digestKeep / contextBudget 四个内部参数摆给用户。
+ *
+ * 两条刻意的设计：
+ *  ① 选中档位时**同步把可见的输入框填成该档的值**（思考强度/上下文预算），用户看得见改了什么；
+ *     隐藏的两个参数（反思阈值、纪要保留数）在下面用文字如实说明，不做黑箱。
+ *  ② 当前参数与任何档位都不完全一致时，显示"自定义"而不是硬贴一个档位名 —— 设置项谎报状态
+ *     是 keepAlive 复选框那次的教训，这里不再犯。
+ */
+function renderPaceSelect(currentPace) {
+  const sel = $('#cfg-pace');
+  if (!sel) return;
+  const paces = (state.meta && state.meta.paces) || [];
+  const options = paces.map((p) => `<option value="${p.id}">${p.label}</option>`);
+  options.push('<option value="custom">自定义（当前参数与任何档位都不完全一致）</option>');
+  sel.innerHTML = options.join('');
+  sel.value = paces.some((p) => p.id === currentPace) ? currentPace : 'custom';
+  sel.addEventListener('change', () => applyPaceToForm(sel.value));
+  renderPaceHint(sel.value);
+}
+
+/** 把档位值填进可见输入框（这样用户能看见"这一档到底改了什么"） */
+function applyPaceToForm(paceId) {
+  const p = ((state.meta && state.meta.paces) || []).find((x) => x.id === paceId);
+  if (p) {
+    const v = p.values;
+    if (v.reasoningEffort) $('#cfg-effort').value = v.reasoningEffort;
+    if (v.fastEffort) $('#cfg-fasteffort').value = v.fastEffort;
+    if (v.contextBudget) $('#cfg-budget').value = v.contextBudget;
+  }
+  renderPaceHint(paceId);
+}
+
+function renderPaceHint(paceId) {
+  const box = $('#cfg-pace-hint');
+  if (!box) return;
+  const p = ((state.meta && state.meta.paces) || []).find((x) => x.id === paceId);
+  if (!p) {
+    box.textContent = '当前参数与任何档位都不完全一致（例如你手工调过其中某一项）。再选一个档位并保存，即可回到该档的完整参数。';
+    return;
+  }
+  const v = p.values;
+  box.textContent = `${p.desc}（本档同时设定：反思阈值 ${v.digestMinEvents} 条、纪要保留 ${v.digestKeep} 条、思考调度 ${v.effortPolicy === 'flat' ? '按任务名一刀切' : '按信息含量'}）`;
+}
+
 async function saveConfig() {
+  const pace = $('#cfg-pace') ? $('#cfg-pace').value : '';
   const body = {
     baseUrl: $('#cfg-baseurl').value.trim(),
     model: $('#cfg-model').value.trim(),
@@ -268,7 +367,10 @@ async function saveConfig() {
     fastEffort: $('#cfg-fasteffort').value,
     contextBudget: Number($('#cfg-budget').value),
     cacheControl: $('#cfg-cachecontrol').checked,
+    keepAlive: $('#cfg-keepalive').checked,
   };
+  // 档位只在选中具体档时提交；'custom' 表示用户要保留自己调出来的参数，不发 pace（服务端就不会展开档位）
+  if (pace && pace !== 'custom') body.pace = pace;
   const key = $('#cfg-key').value.trim();
   if (key) body.apiKey = key;
   try {
@@ -276,6 +378,9 @@ async function saveConfig() {
     $('#cfg-key').value = '';
     $('#cfg-key').placeholder = `已保存（${r.apiKeyMasked}），留空则不修改`;
     $('#cfg-test-result').textContent = '✓ 已保存';
+    // 保存后按服务端反查结果回显档位：不以客户端的想法为准，避免"界面显示 A、磁盘是 B"
+    const after = await api('GET', '/api/config').catch(() => null);
+    if (after) renderPaceSelect(after.pace);
   } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
 }
 
@@ -293,13 +398,17 @@ async function startGame() {
   $('#setup-error').textContent = '';
   try {
     const total = boardTotal();
-    const mySeat = state.setup.mode === 'play' ? Number($('#my-seat').value || 1) : 0;
+    // 座位：'random'（默认，由服务端抽签）或明确的号数；纯观战没有人类座位
+    const seatChoice = state.setup.mode === 'play' ? String($('#my-seat').value || 'random') : '0';
+    const randomSeat = seatChoice === 'random';
+    const mySeat = randomSeat ? 0 : Number(seatChoice);
+    const humanName = $('#my-name').value.trim() || '我';
     const nameInputs = [...document.querySelectorAll('#ai-names input')];
     const personaInputs = [...document.querySelectorAll('#ai-personas input')];
     const players = [];
     for (let i = 1; i <= total; i++) {
       if (i === mySeat) {
-        players.push({ name: $('#my-name').value.trim() || '我', isHuman: true, personality: '' });
+        players.push({ name: humanName, isHuman: true, personality: '' });
       } else {
         const ni = nameInputs.find((x) => Number(x.dataset.seat) === i);
         const pi = personaInputs.find((x) => Number(x.dataset.seat) === i);
@@ -314,14 +423,27 @@ async function startGame() {
       players,
       mock: useMock,
     };
+    // 随机座位：座位由服务端定（同时把人类昵称一起带过去），建局响应里回传实际座位
+    if (randomSeat) { body.mySeat = 'random'; body.myName = humanName; }
+    persistSeatChoice(seatChoice);
     const created = await api('POST', '/api/games', body);
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken };
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat };
     localStorage.setItem('ww_current', JSON.stringify(state.game));
+    if (created.mySeat) console.info(`[ww] 本局你在 ${created.mySeat} 号座位`);
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGameScreen();
   } catch (e) {
     $('#setup-error').textContent = `✗ ${e.message}`;
   }
+}
+
+/** 记住座位偏好（含 'random'）：否则每次回来都要重新选，默认又会回到 1 号 */
+function persistSeatChoice(choice) {
+  try { localStorage.setItem('ww_seat', String(choice)); } catch (_) { /* 隐私模式忽略 */ }
+}
+
+function savedSeatChoice() {
+  try { return localStorage.getItem('ww_seat') || 'random'; } catch (_) { return 'random'; }
 }
 
 /** 恢复/找回进行中的对局：优先用本地令牌；令牌丢失则从最近未结束存档找回 */
@@ -331,14 +453,17 @@ async function checkResume() {
     try {
       const g = JSON.parse(saved);
       const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-      if (v && !v.finished && v.started && v.live) { $('#resume-box').classList.remove('hidden'); return; }
+      // 注意：判断"能否继续"必须用 inMemory（对局是否还在服务端内存里）。
+      // 曾经这里用的是 v.live —— 那是流式直播缓冲，没人在打字时就是 null，
+      // 于是刷新页面会被误判成"不可恢复"，紧接着把用户令牌删掉（丢档）。
+      if (v && !v.finished && v.started && v.inMemory) { $('#resume-box').classList.remove('hidden'); return; }
       localStorage.removeItem('ww_current'); // 已结束/从未开局（设置页放弃的创建残留）→ 不恢复
     } catch (_) { localStorage.removeItem('ww_current'); }
   }
   // 令牌丢失（如清了浏览器缓存/误点清除）：从最近未结束的对局找回令牌
   try {
     const { rows } = await api('GET', '/api/games');
-    const unfinished = rows.find((r) => !r.finished && r.started && r.live); // 未开局或已随服务器重启失活的对局不可恢复
+    const unfinished = rows.find((r) => !r.finished && r.started && r.inMemory); // 未开局或已随服务器重启失活的对局不可恢复
     if (unfinished) {
       const tokens = await api('GET', `/api/games/${unfinished.id}/tokens`);
       const g = { gameId: unfinished.id, playerToken: tokens.player, godToken: tokens.god };
@@ -384,6 +509,7 @@ function enterGameScreen() {
   $('#screen-game').classList.remove('hidden');
   state.playerAfter = 0;
   state.godAfter = 0;
+  state.playerView = null; state.godView = null; // 清掉上一局的缓存帧，避免切换对局后渲染残留
   state.roleShown = false;
   try { state.tags = JSON.parse(localStorage.getItem(`ww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#stream').innerHTML = '';
@@ -478,10 +604,91 @@ function backHome() {
 
 function startPolling() {
   stopPolling();
+  if (startStream()) return; // 优先 SSE 推送
+  startPollFallback();
+}
+function startPollFallback() {
+  if (state.pollTimer) return;
   state.pollTimer = setInterval(poll, 1200);
   poll();
 }
-function stopPolling() { if (state.pollTimer) clearInterval(state.pollTimer); state.pollTimer = null; }
+function stopPolling() {
+  if (state.pollTimer) clearInterval(state.pollTimer);
+  state.pollTimer = null;
+  stopStream();
+}
+
+/**
+ * SSE 推送（P2-2）：服务端只在**真的有变化**时推一帧，省掉 1.2s 轮询的空转往返。
+ *
+ * 关键设计：推送是**优化而不是依赖**。浏览器不支持、反代缓冲、连接被断——
+ * 任一情况下都自动回退到轮询，游戏照常进行（服务端两条通道共用同一份视图负载，
+ * 所以两种模式的渲染结果逐字段一致，不会出现"刷新一下才对"的差异）。
+ */
+function startStream() {
+  if (typeof window === 'undefined' || !window.EventSource) return false;
+  const g = state.game;
+  if (!g || !g.gameId) return false;
+  try {
+    const playerToken = g.playerToken || g.godToken;
+    state.stream = openViewStream('player', playerToken, () => state.playerAfter || 0);
+    if (state.godMode && g.godToken) {
+      state.godStream = openViewStream('god', g.godToken, () => state.godAfter || 0);
+    }
+    // 心跳/断流兜底：若 8s 内既没有帧也没有心跳，视为连接已死 → 回退轮询
+    state.streamWatchdog = setInterval(() => {
+      if (!state.stream) return;
+      if (Date.now() - (state.lastStreamAt || 0) > 8000) {
+        appendSys('⚠️ 推送连接无响应，已切换为轮询');
+        stopStream();
+        startPollFallback();
+      }
+    }, 4000);
+    return true;
+  } catch (e) {
+    stopStream();
+    return false;
+  }
+}
+
+function openViewStream(kind, token, cursorOf) {
+  const g = state.game;
+  const es = new EventSource(`/api/games/${g.gameId}/stream?token=${token}&after=${cursorOf()}`);
+  const st = { kind, es };
+  es.addEventListener('view', (ev) => {
+    state.lastStreamAt = Date.now();
+    let v;
+    try { v = JSON.parse(ev.data); } catch (_) { return; }
+    // 玩家流传玩家视图，上帝流传上帝视图；applyView 会沿用另一侧的上一帧
+    if (kind === 'god') applyView(null, v);
+    else applyView(v, null);
+  });
+  es.addEventListener('ping', () => { state.lastStreamAt = Date.now(); });
+  es.addEventListener('end', () => {
+    state.lastStreamAt = Date.now();
+    stopStream();
+    // 对局结束/被清理：拉一次终局状态（结算分数、终局事件）后停更
+    poll();
+  });
+  es.addEventListener('error', () => {
+    // 服务端明确报错（视图构造失败等）：不能静默卡死，回退轮询并把原因显示出来
+    if (es.readyState === 2) {
+      stopStream();
+      appendSys('⚠️ 推送通道中断，已切换为轮询');
+      startPollFallback();
+    }
+  });
+  return st;
+}
+
+function stopStream() {
+  for (const key of ['stream', 'godStream']) {
+    const st = state[key];
+    if (st && st.es) { try { st.es.close(); } catch (_) { /* ignore */ } }
+    state[key] = null;
+  }
+  if (state.streamWatchdog) { clearInterval(state.streamWatchdog); state.streamWatchdog = null; }
+}
 
 async function poll() {
   const g = state.game;
@@ -492,26 +699,153 @@ async function poll() {
     // 上帝视图：开启时另拉全量事件
     let gv = null;
     if (state.godMode) gv = await api('GET', `/api/games/${g.gameId}/view?token=${g.godToken}&after=${state.godAfter || 0}`);
-    const primary = state.godMode ? gv : pv;
-    state.view = state.godMode ? { ...gv, me: pv.me, pending: pv.pending } : pv;
-    if ((state.godMode ? state.godAfter : state.playerAfter) === 0) {
-      $('#stream').innerHTML = '';
-      state.seatNames = {};
-      for (const p of primary.players) state.seatNames[p.seat] = p.name;
-    }
-    appendEvents(primary.events);
-    if (state.godMode) state.godAfter = Math.max(state.godAfter || 0, ...gv.events.map((e) => e.seq));
-    state.playerAfter = Math.max(state.playerAfter || 0, ...pv.events.map((e) => e.seq));
-    updateHeader(state.view);
-    updateSeats(state.godMode ? { ...gv, me: pv.me } : pv);
-    renderMyRoleCard(pv);
-    updateActionbar(pv);
-    maybeShowRole(pv);
-    if (pv.error) appendSys(`⚠️ 对局异常：${pv.error}`);
-    if (state.godMode) renderGodStats();
+    applyView(pv, gv);
   } catch (e) {
     appendSys(`⚠️ 拉取失败：${e.message}`);
   }
+}
+
+/**
+ * 渲染一份视图。**SSE 与轮询共用**，所以两条通道的表现逐字段一致——
+ * 这是"推送失败就回退轮询"能放心做的前提。
+ *
+ * pv/gv 允许传 null，含义是"这一侧沿用上一帧"：SSE 分两条流（玩家流 / 上帝流），
+ * 任意一条来帧都要用最新的两份视图重渲染，与轮询每次拿两份的行为完全对应。
+ *
+ * 事件按 seq 游标过滤：SSE 断线重连时服务端可能重发旧事件（浏览器会带 Last-Event-ID，
+ * 服务端也会据此续传），过滤后天然幂等，同一句话不会被画两遍。
+ */
+function applyView(pv, gv) {
+  if (pv) state.playerView = pv;
+  if (gv) state.godView = gv;
+  const P = state.playerView || null;
+  const G = state.godView || null;
+  const primary = state.godMode ? (G || P) : P;
+  if (!primary) return;
+  state.view = state.godMode ? { ...primary, me: P && P.me, pending: P && P.pending } : P;
+  const fresh = (list, cursor) => (list || []).filter((e) => e.seq > (cursor || 0));
+  const playerEvents = fresh(P && P.events, state.playerAfter);
+  const godEvents = fresh(G && G.events, state.godAfter);
+  if ((state.godMode ? state.godAfter : state.playerAfter) === 0) {
+    $('#stream').innerHTML = '';
+    state.seatNames = {};
+    for (const p of primary.players) state.seatNames[p.seat] = p.name;
+  }
+  appendEvents(state.godMode ? godEvents : playerEvents);
+  if (godEvents.length) state.godAfter = Math.max(state.godAfter || 0, ...godEvents.map((e) => e.seq));
+  if (playerEvents.length) state.playerAfter = Math.max(state.playerAfter || 0, ...playerEvents.map((e) => e.seq));
+  const mine = P || primary; // 与"我"相关的面板（角色卡/操作栏/暂停横幅）需要玩家视角
+  state.view.me = mine.me;
+  state.view.pending = mine.pending;
+  updateHeader(state.view);
+  updateSeats(state.godMode ? { ...primary, me: mine.me } : primary);
+  renderMyRoleCard(mine);
+  updateActionbar(mine);
+  updatePausedBanner(mine);
+  updateMemoryChip(mine);
+  renderLive(state.godMode ? state.view : primary);
+  maybeShowRole(mine);
+  renderCoach(state.view); // 终局后的教练面板（含"正在生成/失败原因"）
+  if (mine.error) appendSys(`⚠️ 对局异常：${mine.error}`);
+  if (state.godMode) renderGodStats();
+}
+
+/**
+ * 暂停横幅：配额耗尽 / 套餐受限等外部原因导致对局暂停时，
+ * 明示原因与重置时间，并提供"继续对局"（从锚点续跑，不重复发言）。
+ */
+function updatePausedBanner(v) {
+  const box = $('#paused-banner');
+  if (!box) return;
+  const p = v && v.paused;
+  if (!p) {
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.sig = ''; }
+    return;
+  }
+  const sig = `${p.kind}|${p.code}|${p.nextFlushTime || ''}`;
+  if (box.dataset.sig === sig) return; // 每次轮询都会调用：内容没变就不重建 DOM
+  box.dataset.sig = sig;
+  const title = p.kind === 'quota' ? '账户额度已用尽' : '套餐 / 权限受限';
+  const when = p.nextFlushTime
+    ? `预计 <b>${escapeHtml(String(p.nextFlushTime))}</b> 重置`
+    : '请到服务商控制台确认额度与套餐状态';
+  box.classList.remove('hidden');
+  box.innerHTML =
+    `<div class="pb-title">⏸ 对局已暂停（不是结束）</div>` +
+    `<div class="pb-msg">${title}${p.code ? `（业务码 ${escapeHtml(String(p.code))}）` : ''}：${escapeHtml(String(p.message || ''))}</div>` +
+    `<div class="pb-hint">${when}。当前进度已完整保存，额度恢复后点「继续对局」即可从断点续跑，已发生的发言不会重来。</div>` +
+    `<div class="pb-actions">` +
+    `<button class="btn primary" id="btn-resume-paused">继续对局</button>` +
+    `<button class="btn ghost" id="btn-terminate-paused">终止本局</button>` +
+    `</div>`;
+  $('#btn-resume-paused').addEventListener('click', resumePausedGame);
+  $('#btn-terminate-paused').addEventListener('click', terminateGame);
+}
+
+/** 从暂停态恢复：令牌沿用，前端只需重拉事件流 */
+async function resumePausedGame() {
+  const g = state.game;
+  if (!g) return;
+  const btn = $('#btn-resume-paused');
+  if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
+  try {
+    const r = await api('POST', `/api/games/${g.gameId}/resume`, { token: g.playerToken || g.godToken });
+    state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
+    localStorage.setItem('ww_current', JSON.stringify(state.game));
+    state.playerAfter = 0; state.godAfter = 0;
+    state.playerView = null; state.godView = null; // 换了新对局，缓存帧作废
+    $('#stream').innerHTML = '';
+    const box = $('#paused-banner');
+    if (box) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.sig = ''; }
+    await poll();
+  } catch (e) {
+    alert(`恢复失败：${e.message}`);
+    if (btn) { btn.disabled = false; btn.textContent = '继续对局'; }
+  }
+}
+
+/**
+ * "打字中"气泡：把模型 41s 的空白等待变成即时可见的增量文本。
+ * 公开发言直接显示；私密决策只显示"正在思考"（不泄露目标），上帝视角可见原始增量与独白。
+ */
+function renderLive(v) {
+  const node0 = document.getElementById('live-typing');
+  const l = v && v.live;
+  if (!l) {
+    if (node0) node0.remove();
+    state.liveSig = '';
+    return;
+  }
+  const text = l.text || '';
+  const reasoning = l.reasoning || '';
+  const canSeeText = !!l.public || !!state.godMode;
+  const sig = `${l.seat}|${l.task}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}`;
+  if (node0 && state.liveSig === sig) return; // 1.2s 轮询且文本未增长：不重建 DOM
+  state.liveSig = sig;
+  let node = node0;
+  if (!node) {
+    node = el('div', 'msg typing');
+    node.id = 'live-typing';
+    $('#stream').appendChild(node);
+  }
+  const who = seatLabel(l.seat);
+  const tag = canSeeText && text ? '✍ 正在发言' : '… 正在思考';
+  let html = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span></div>`;
+  if (canSeeText && text) html += `<div class="typing-body">${escapeHtml(text)}<span class="caret"></span></div>`;
+  else html += '<div class="typing-body muted">正在思考…<span class="caret"></span></div>';
+  if (state.godMode && reasoning) html += `<div class="typing-reason">💭 ${escapeHtml(reasoning.slice(-400))}</div>`;
+  node.innerHTML = html;
+  autoScroll();
+}
+
+/** 日切反思进度：日切边界后台整理记忆时给个可见进度（对局不会被它阻塞） */
+function updateMemoryChip(v) {
+  const node = $('#g-memory');
+  if (!node) return;
+  const m = v && v.memory;
+  if (!m) { node.classList.add('hidden'); return; }
+  node.classList.remove('hidden');
+  node.textContent = `🧠 AI 正在整理记忆…（${m.done}/${m.total}）`;
 }
 
 function seatLabel(seat) {
@@ -522,15 +856,16 @@ function seatLabel(seat) {
 
 function roleInfo(rid) { return state.meta.roles[rid]; }
 
-/** 角色卡图：assets/roles/<id>.<ext> 存在则用图，否则回退内置哥特占位卡 */
+/** 角色卡图：assets/roles/<id>.<ext> 存在则用图，否则回退内置哥特占位卡。
+ *  两种都套同一套金属框 —— 缺图时也不该是一张没有装饰的裸框。 */
 function roleArtHtml(rid) {
   const r = roleInfo(rid);
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const corners = '<span class="fr-corner c1"></span><span class="fr-corner c2"></span><span class="fr-corner c3"></span><span class="fr-corner c4"></span><span class="fr-gem"></span><span class="fr-orn">✠</span>';
-  if (ext) {
-    return `<div class="card-frame">${corners}<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}"></div>`;
-  }
-  return `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
+  const orn = '<span class="fr-corner c1"></span><span class="fr-corner c2"></span><span class="fr-corner c3"></span><span class="fr-corner c4"></span><span class="fr-gem"></span><span class="fr-orn">✠</span>';
+  const face = ext
+    ? `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">`
+    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
+  return `<div class="card-frame">${orn}${face}</div>`;
 }
 
 /** 检视模式：大卡 + 指针 3D 倾斜 + 雾气流光 */
@@ -540,8 +875,8 @@ function openInspect(rid) {
   const card = el('div', 'inspect-card');
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
   if (ext) {
-    card.innerHTML = `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">
-      <div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div>`;
+    card.innerHTML = `<div class="inner"><img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">
+      <div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div></div>`;
   } else {
     card.innerHTML = `<div class="in-body"><div class="in-emoji">${r.emoji}</div>
       <div class="in-name gilt-name">${r.name}</div>
@@ -557,13 +892,6 @@ function openInspect(rid) {
   });
   stage.addEventListener('click', () => stage.remove());
   document.body.appendChild(stage);
-}
-
-function renderAll(v) {
-  $('#stream').innerHTML = '';
-  state.seatNames = {};
-  for (const p of v.players) state.seatNames[p.seat] = p.name;
-  appendEvents(v.events);
 }
 
 function autoScroll() {
@@ -1286,7 +1614,6 @@ function openModal(inner) {
 }
 
 function openRulebook() {
-  const v = state.view;
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
   const close = el('button', 'btn ghost small', '✕');
@@ -1377,9 +1704,97 @@ function toggleGod() {
   // 重建消息流：上帝视角从 0 重新拉全量事件
   state.godAfter = 0;
   state.playerAfter = 0;
+  state.playerView = null; state.godView = null;
   $('#stream').innerHTML = '';
   if (state.godMode) { startLogPolling(); } else stopLogPolling();
+  // SSE 模式下要相应地开/关上帝流；轮询模式由下面的 poll() 自己处理
+  if (state.stream || state.godStream) {
+    if (state.godStream) { try { state.godStream.es.close(); } catch (_) { /* ignore */ } state.godStream = null; }
+    if (state.godMode && state.game && state.game.godToken) {
+      state.godStream = openViewStream('god', state.game.godToken, () => state.godAfter || 0);
+      state.lastStreamAt = Date.now();
+    }
+  }
   poll();
+}
+
+/**
+ * 局后 AI 教练面板（P2-4）。
+ *
+ * 只在终局后出现；**不自动触发**调用（要花一次 LLM 调用，由用户点），
+ * 且必须一眼看出这段点评是 AI 写的还是规则生成的 —— 失败就明说原因，
+ * 不做"看起来像 AI 点评、其实是模板"的静默降级。
+ */
+function renderCoach(v) {
+  const box = $('#coach-panel');
+  if (!box) return;
+  if (!v || !v.finished) { box.classList.add('hidden'); box.innerHTML = ''; state.coachSig = null; return; }
+  const r = v.review || null;
+  // 签名：内容没变就不重绘，否则每次视图更新都会把用户正在读的文本重建一遍
+  const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}`;
+  if (sig === state.coachSig) return;
+  state.coachSig = sig;
+  box.classList.remove('hidden');
+  box.innerHTML = '';
+
+  const head = el('div', 'coach-head');
+  head.appendChild(el('h3', '', '🎓 AI 教练点评'));
+  if (r && r.status === 'done') {
+    const again = el('button', 'btn ghost small', r.mode === 'ai' ? '重新生成' : '用 AI 重新点评');
+    again.addEventListener('click', () => requestCoach(true));
+    head.appendChild(again);
+  }
+  box.appendChild(head);
+
+  if (!r) {
+    const btn = el('button', 'btn', '让教练点评这一局');
+    const row = el('div', 'btnrow');
+    row.appendChild(btn);
+    box.append(row, el('div', 'hint', '会调用一次 AI（占用同一通道，约十几秒到一分钟）；点评会存档，重复打开不会重复花钱。'));
+    btn.addEventListener('click', () => requestCoach(false));
+    return;
+  }
+  if (r.status === 'running') {
+    box.appendChild(el('div', 'coach-body', '教练正在看这局的记录…（同一时间只跑一个 AI 调用，其他对局会稍等一下）'));
+    return;
+  }
+  if (r.status === 'error') {
+    box.appendChild(el('div', 'coach-body coach-warn', `点评失败：${r.fallbackReason || '未知原因'}`));
+    const retry = el('button', 'btn', '重试');
+    retry.addEventListener('click', () => requestCoach(true));
+    box.appendChild(retry);
+    return;
+  }
+  box.appendChild(el('div', 'coach-body', r.text || '（空点评）'));
+  const tag = r.mode === 'ai'
+    ? '由 AI 生成；事实来自服务端统计，不含推测。'
+    : `规则点评，未使用 AI${r.fallbackReason ? `（原因：${r.fallbackReason}）` : ''}。`;
+  box.appendChild(el('div', `coach-tag${r.mode === 'ai' ? '' : ' coach-warn'}`, tag));
+}
+
+async function requestCoach(regenerate) {
+  const g = state.game;
+  if (!g) return;
+  const box = $('#coach-panel');
+  const btn = box && box.querySelector('button');
+  if (btn) { btn.disabled = true; btn.textContent = '请求中…'; }
+  try {
+    // 显式带座位：全 AI 局（观战/试玩）没有"人类座位"，服务端需要知道点评谁
+    const me = state.view && state.view.me;
+    const godSel = $('#god-seat');
+    const godSeat = godSel && godSel.value ? Number(godSel.value) : 1;
+    await api('POST', `/api/games/${g.gameId}/review`, {
+      token: g.playerToken || g.godToken,
+      seat: (me && me.seat) || godSeat || 1,
+      regenerate: !!regenerate,
+    });
+    appendSys(regenerate ? '🎓 已请求重新生成教练点评…' : '🎓 已请求教练点评，完成后显示在下方。');
+    state.coachSig = null; // 强制下次视图更新重绘
+    poll(); // 立刻刷一次；后续更新走 SSE（没有 SSE 时走轮询）
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '让教练点评这一局'; }
+    appendSys(`⚠ 教练点评请求失败：${e.message}`);
+  }
 }
 
 function renderGodStats() {
@@ -1387,10 +1802,20 @@ function renderGodStats() {
   const s = v && v.llmStats;
   if (!s) { $('#god-stats').innerHTML = '<span class="hint">等待对局数据…</span>'; return; }
   const hit = s.promptTokens ? Math.round(100 * s.cachedTokens / s.promptTokens) : 0;
+  const ttft = s.ttftCount ? `${Math.round(s.ttftMsTotal / s.ttftCount)}ms（最大 ${(s.ttftMsMax / 1000).toFixed(1)}s）` : '-';
+  const tierNames = { minimal: '极简', low: '低', normal: '常规', high: '高', critical: '关键', flat: '按任务名' };
+  const tierStr = s.byTier
+    ? Object.entries(s.byTier).map(([k, n]) => `${tierNames[k] || k} ${n}`).join(' · ')
+    : '-';
+  const sched = v.scheduler
+    ? `<p>调度器：队列 <b>${v.scheduler.depth}</b>${v.scheduler.busy ? ' · 忙' : ' · 闲'}${v.scheduler.current ? ` · 当前 ${escapeHtml(String(v.scheduler.current.label || ''))}` : ''} ｜ 平均等待 <b>${v.scheduler.avgWaitMs}ms</b> / 最大 <b>${v.scheduler.maxWaitMs}ms</b></p>`
+    : '';
   $('#god-stats').innerHTML = `
-    <p>LLM 调用：<b>${s.calls}</b> 次 ｜ 报错 ${s.errors} 次</p>
+    <p>LLM 调用：<b>${s.calls}</b> 次 ｜ 报错 ${s.errors} 次 ｜ 流式 ${s.streamedCalls || 0} 次</p>
     <p>输入 tokens：<b>${s.promptTokens}</b>（其中缓存命中 <b style="color:var(--accent2)">${s.cachedTokens}</b>，命中率 <b>${hit}%</b>）</p>
-    <p>输出 tokens：<b>${s.completionTokens}</b></p>`;
+    <p>输出 tokens：<b>${s.completionTokens}</b></p>
+    <p>首字延迟 TTFT：<b>${ttft}</b></p>
+    <p>思考预算档位：<b>${tierStr}</b></p>${sched}`;
 }
 
 let logTimer = null;

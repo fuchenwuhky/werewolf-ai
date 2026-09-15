@@ -1,19 +1,32 @@
 {
   "name": "werewolf-ai",
   "version": "0.1.0",
-  "description": "AI 狼人杀 — 本地网页版，1 名人类玩家 + N 名 AI，OpenAI 兼容接口，零依赖",
+  "description": "AI 狼人杀 — 本地网页版，1 名人类玩家 + N 名 AI，OpenAI 兼容接口，运行时零依赖",
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/",
+    "test": "node --test",
+    "lint": "node scripts/lint.js",
+    "eslint": "eslint .",
+    "format": "prettier --write",
+    "coverage": "node scripts/coverage-gate.js",
+    "eval": "node scripts/eval/eval-harness.js --games=30",
+    "gate": "npm run lint && npm run eslint && npm run coverage && npm run eval",
     "simulate": "node scripts/simulate.js",
+    "bench:memory": "node scripts/memory-bench.js",
     "gen-docs": "node scripts/gen-roles-doc.js",
+    "gen-icons": "node scripts/make-icons.js",
+    "ui:check": "node scripts/ui-check.js",
     "app:sync": "node scripts/build-app.js && cd app && npx cap sync android",
     "app:apk": "bash scripts/update-app.sh"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=18.18"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^10.10.0",
+    "prettier": "^3.9.6"
+  }
 }

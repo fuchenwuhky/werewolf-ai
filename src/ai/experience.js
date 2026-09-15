@@ -15,8 +15,9 @@ const MAX_PER_ROLE = 24;
 const INJECT_LIMIT = 6; // 开局注入 system 的经验条数
 
 class ExperienceStore {
-  constructor(dir) {
+  constructor(dir, logger = null) {
     this.file = path.join(dir, 'experiences.json');
+    this.logger = logger;
     this.data = { version: 1, byRole: {} };
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
@@ -29,7 +30,13 @@ class ExperienceStore {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       fs.writeFileSync(this.file, JSON.stringify(this.data, null, 1));
     } catch (e) {
-      console.error('[experience] 保存失败:', e.message);
+      if (this.logger) {
+        this.logger.warn('ai', `经验池保存失败：${e.message}`);
+      } else {
+        // 跨局经验池没有对局上下文，注入的 logger 未必存在，这里是最后兜底（否则错误被静默吞掉）
+        // lint-allow: no-console — 仅用于未注入 logger 的独立脚本/测试场景
+        console.error('[experience] 保存失败:', e.message);
+      }
     }
   }
 

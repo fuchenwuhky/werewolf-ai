@@ -9,6 +9,7 @@
  *  POST /api/games                      创建对局 → {gameId, playerToken, godToken}
  *  POST /api/games/:id/start            开局（后台运行状态机）
  *  GET  /api/games/:id/view             增量拉取（token 决定可见性）
+ *  GET  /api/games/:id/stream           SSE 推送（等价于持续 view，只在变化时推帧）
  *  POST /api/games/:id/action           人类玩家提交操作
  *  GET  /api/games/:id/logs             上帝：日志查询
  *  GET  /api/games/:id/agent            上帝：AI 上下文调试
@@ -19,12 +20,23 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+// SSE 推送参数。
+// 500ms：比 1.2s 轮询的感知延迟低 2.4×，而"没变化就不构造视图"（cheapSignature）让空转成本≈0。
+// 实测取舍（见 docs/upgrade-plan.md §8 P2-2）：空转 30s 下发字节 −95.6%、请求 25→2；
+// 但事件持续饱和时，因为推送比轮询勤，总字节会高于轮询 —— 本应用跑在 localhost/局域网，带宽不是瓶颈，
+// CPU（构造次数）与延迟才是，所以这个方向是对的。
+const STREAM_TICK_MS = 500;
+const STREAM_PING_TICKS = 32; // ≈16s 一次心跳：足够让前端发现断线，也不浪费带宽
 const { ROLES, BOARDS, validateBoard } = require('./engine/roles');
 const { DEFAULT_RULES, RULE_META, mergeRules } = require('./engine/rules');
 const { Game } = require('./engine/game');
 const { runGame } = require('./engine/flow');
 const { computeScores } = require('./engine/score');
 const { makeAgentFactory } = require('./ai/agent');
+const { DecisionJournal } = require('./ai/journal');
+const { makeRng } = require('./engine/rng');
+const { scheduler } = require('./ai/scheduler');
 const { ExperienceStore } = require('./ai/experience');
 const { applyPersonalities, PERSONALITIES } = require('./ai/personalities');
 const { STRATEGY_TEMPLATES } = require('./ai/strategies');
@@ -32,6 +44,9 @@ const { makeMockAgentFactory } = require('../scripts/mock-agent');
 const { testConnection } = require('./ai/llm');
 const { maskKey, makeGameLogger } = require('./log');
 const { ALL: NAME_POOL } = require('./names');
+const { PACES, detectPace } = require('./config');
+const { reviewFacts, humanSeatOf } = require('./engine/review');
+const { generateCoachReview, ruleReview } = require('./ai/coach');
 
 const APP_DATA_DIR = process.env.WW_DATA_DIR || process.env.DATADIR;
 const SAVE_DIR = APP_DATA_DIR
@@ -62,11 +77,23 @@ class Api {
     this.config = config;      // {get(), save(partial)}
     this.logger = logger;
     this.games = new Map();    // gameId → {game, tokens:{player,god}, running, error, saveTimer}
-    this.experience = new ExperienceStore(SAVE_DIR); // 跨局经验池（按角色沉淀 AI 复盘教训）
+    this.experience = new ExperienceStore(SAVE_DIR, logger); // 跨局经验池（按角色沉淀 AI 复盘教训）
+    // 决策 journal：恢复重放时命中磁盘答案 → 零重复 LLM 调用、逐字复现（P1-1/P1-2）
+    this.journalDir = path.join(SAVE_DIR, 'journal');
+    this.journal = new DecisionJournal(this.journalDir, {
+      enabled: this.config.get().journal !== false,
+      logger,
+    });
+    const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
+    if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
     // 定时持久化进行中的对局
     this._saveTimer = setInterval(() => this.saveActive(), 4000);
     this._saveTimer.unref && this._saveTimer.unref();
+    // SSE 订阅：gameId → Set<stream>（P2-2）
+    this.streams = new Map();
+    this._streamTimer = setInterval(() => this.tickStreams(), STREAM_TICK_MS);
+    this._streamTimer.unref && this._streamTimer.unref();
   }
 
   // ---------- 工具 ----------
@@ -93,19 +120,90 @@ class Api {
     });
   }
 
-  getGame(id) { return this.games.get(id); }
+  getGame(id) {
+    const e = this.games.get(id);
+    if (e) e.lastAccess = Date.now();
+    return e;
+  }
 
-  saveGame(entry) {
+  /** 存档元数据：**不含 events**——事件流只在 anchor 里存一份（旧实现两边都存，46.5% 的体积是纯重复） */
+  _saveMeta(game) {
+    const { events, ...meta } = game.toJSON();
+    return meta;
+  }
+
+  /**
+   * 存档：脏标记 + 异步写 + 原子替换。
+   *
+   * 三处改动都有实测依据（真实语料：平均单局 42 分钟、636 次 4s 存盘、每次同步写 1.61ms）：
+   *  1. **去重**：`game.toJSON()` 里的 events 不进存档（只有 anchor 需要它）→ 体积直接减半；
+   *  2. **脏标记**：seq/day/phase/终局/暂停都没变就不写。LLM 调用动辄十几秒，4s 定时器大部分时间在空转；
+   *  3. **异步 + 原子**：先写 `.tmp` 再 rename → 事件循环不再被 writeFileSync 阻塞，进程被杀也不会留下半截存档。
+   */
+  async saveGame(entry, { force = false } = {}) {
+    const game = entry.game;
+    const stamp = `${game.seq}|${game.day}|${game.phase}|${game.finished ? 1 : 0}|${game.paused ? 1 : 0}|${game.winner || ''}`;
+    if (!force && entry.savedStamp === stamp) return false; // 脏标记：没有变化，一次磁盘都不碰
+    if (entry.saving) { entry.pendingSave = true; return false; } // 同一对局不并发写（避免 tmp 互相覆盖）
+    entry.savedStamp = stamp;
+    entry.saving = true;
+    let doc;
     try {
       // 令牌一并存档：本地单机应用，浏览器丢失会话时可从存档恢复对局
-      // anchor：断点恢复锚点（markAnchor 在白天/夜晚边界拍摄的全量快照），服务重启后可从锚点续跑
-      fs.writeFileSync(path.join(SAVE_DIR, `${entry.game.id}.json`), JSON.stringify({
+      doc = JSON.stringify({
         tokens: entry.tokens,
         mock: !!entry.mock,
-        game: entry.game.toJSON(),
-        anchor: entry.game._anchor || null,
-      }));
-    } catch (e) { this.logger.warn('api', `存档失败 ${entry.game.id}: ${e.message}`); }
+        game: this._saveMeta(game),
+        anchor: game._anchor || null,
+        // 局后点评一并存档：点评花钱花时间，重开页面/重启服务后不该再花一次
+        review: entry.review || null,
+        savedAt: Date.now(),
+      });
+    } catch (e) {
+      entry.saving = false;
+      this.logger.warn('api', `存档序列化失败 ${game.id}: ${e.message}`);
+      return false;
+    }
+    const file = path.join(SAVE_DIR, `${game.id}.json`);
+    const tmp = `${file}.tmp`;
+    try {
+      await fs.promises.writeFile(tmp, doc);
+      await fs.promises.rename(tmp, file); // 原子替换：读到的永远是完整存档
+    } catch (e) {
+      this.logger.warn('api', `存档失败 ${game.id}: ${e.message}`);
+    } finally {
+      entry.saving = false;
+      if (entry.pendingSave) { entry.pendingSave = false; this.saveGame(entry).catch(() => {}); }
+    }
+    return true;
+  }
+
+  /**
+   * 内存对局表治理：TTL 清"已结束且久未访问"，LRU 上限兜底。
+   * 两者的对象都已在磁盘上，丢弃只影响内存（再次打开会从存档重建）。
+   * **绝不动正在跑的对局**——驱动循环还持有它，丢掉会让前端 404。
+   */
+  pruneGames({ maxEntries = 50, ttlMs = 30 * 60 * 1000 } = {}) {
+    const now = Date.now();
+    let dropped = 0;
+    for (const [id, e] of [...this.games]) {
+      if (e.running) continue;
+      const idle = now - (e.lastAccess || e.createdAt || now);
+      if (idle > ttlMs) { this.games.delete(id); this.closeStreams(id, 'evicted'); dropped++; }
+    }
+    if (this.games.size > maxEntries) {
+      const victims = [...this.games.entries()]
+        .filter(([, e]) => !e.running)
+        .sort((a, b) => (a[1].lastAccess || 0) - (b[1].lastAccess || 0)); // 最久未访问的先走
+      for (const [id] of victims) {
+        if (this.games.size <= maxEntries) break;
+        this.games.delete(id);
+        this.closeStreams(id, 'evicted');
+        dropped++;
+      }
+    }
+    if (dropped) this.logger.debug('api', `内存对局表清理 ${dropped} 个（剩 ${this.games.size}）`);
+    return dropped;
   }
 
   loadSaveDoc(id) {
@@ -114,7 +212,48 @@ class Api {
     } catch (_) { return null; }
   }
 
-  /** 断点恢复：从锚点快照重建对局（含 AI 记忆），重放锚点标记的阶段并继续驱动 */
+  /**
+   * 统一"从锚点重建"：Game.fromJSON + 回填 AI 记忆（反思纪要/怀疑度/事件游标）。
+   * 服务重启续跑与配额暂停恢复共用这一条路径——两者都只是"锚点从磁盘来"还是"从内存来"的区别。
+   */
+  _rebuildFromAnchor({ id, anchor, mock, tokens, logger, agentFactory, review = null }) {
+    const game = Game.fromJSON(anchor, { agentFactory, logger });
+    for (const [seat, st] of Object.entries(anchor.agentStates || {})) {
+      game.restoreAgentState(Number(seat), st);
+    }
+    game.paused = null; // 恢复即解除暂停标记
+    game.logger.info('engine', `对局 ${id} 从锚点恢复（第 ${game.day} 天 · ${anchor.nextPhase}），记忆回填 ${Object.keys(anchor.agentStates || {}).length} 个 AI`);
+    // 点评状态一并恢复；"上次跑到一半就被中断"的记录不恢复（它是残状态，恢复只会显示假的进行中）
+    const keepReview = review && review.status === 'done' ? review : null;
+    return { game, running: true, error: null, mock, tokens, review: keepReview, createdAt: Date.now(), lastAccess: Date.now() };
+  }
+
+  /** 统一的"驱动到终局"：暂停则保留状态等待恢复，结束时落盘 + 生成跨局经验 */
+  _drive(entry, resumeFrom = null) {
+    const { game } = entry;
+    runGame(game, { resumeFrom }).then(async () => {
+      if (game.paused) {
+        entry.running = false;
+        await this.saveGame(entry, { force: true });
+        this.logger.warn('api', `对局 ${game.id} 已暂停（${game.paused.kind}/${game.paused.code}）：${game.paused.message}`, { gameId: game.id });
+        return; // 不关按局日志、不生成经验：对局尚未结束，恢复后继续
+      }
+      await this.saveGame(entry, { force: true });
+      this.logger.closeGameLog(game.id);
+      // 局终复盘：AI 拿"当时的判断"对照"终局真相"提炼经验，存入跨局经验池（mock 对局/失败静默跳过）
+      this.generateLessons(entry).catch((e) => {
+        this.logger.warn('api', `经验生成失败（不影响对局）: ${e.message}`, { gameId: game.id });
+      });
+    }).catch(async (err) => {
+      entry.error = String(err.stack || err.message || err);
+      entry.running = false;
+      this.logger.error('engine', `对局 ${game.id} 异常终止`, { stack: err.stack });
+      await this.saveGame(entry, { force: true });
+    });
+    return entry;
+  }
+
+  /** 断点恢复（服务重启后）：从存档锚点重建对局，重放锚点标记的阶段并继续驱动 */
   resumeGame(res, entry, body) {
     const id = entry.id;
     if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
@@ -124,40 +263,54 @@ class Api {
     const doc = this.loadSaveDoc(id);
     if (!doc || !doc.anchor) return this.json(res, 404, { error: '没有可恢复的断点（对局可能从未到过白天/夜晚边界）' });
     if (doc.game && doc.game.finished) return this.json(res, 409, { error: '对局已结束' });
-    const anchor = doc.anchor;
-
-    const logger = makeGameLogger(this.logger, id);
     const useMock = !!doc.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key，无法恢复真实 AI 对局' });
-    const agentFactory = useMock
-      ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-      : makeAgentFactory({ ...this.config.get() }, logger, this.experience);
-    const game = Game.fromJSON(doc.anchor, { agentFactory, logger });
-    // 回填 AI 记忆（反思纪要/怀疑度/事件游标）：恢复后无缝续跑，不重新生成
-    for (const [seat, st] of Object.entries(doc.anchor.agentStates || {})) {
-      game.restoreAgentState(Number(seat), st);
-    }
-    game.logger.info('engine', `对局 ${id} 从锚点恢复（第 ${game.day} 天 · ${anchor.nextPhase}），记忆回填 ${Object.keys(doc.anchor.agentStates || {}).length} 个 AI`);
-    const newEntry = {
-      game, running: true, error: null, mock: useMock,
+    const logger = makeGameLogger(this.logger, id);
+    if (typeof logger.openGameLog === 'function') logger.openGameLog(id); // 服务重启后按局日志流需重新打开
+    const newEntry = this._rebuildFromAnchor({
+      id, anchor: doc.anchor, mock: useMock, logger,
       tokens: { player: tokenId(), god: tokenId() },
-    };
-    this.games.set(id, newEntry);
-    runGame(game, { resumeFrom: anchor.nextPhase }).then(() => {
-      this.saveGame(newEntry);
-      this.logger.closeGameLog(id);
-      this.generateLessons(newEntry).catch(() => {});
-    }).catch((err) => {
-      newEntry.error = String(err.stack || err.message || err);
-      this.logger.error('engine', `恢复对局 ${id} 异常终止`, { stack: err.stack });
-      this.saveGame(newEntry);
+      agentFactory: useMock
+        ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
+        : makeAgentFactory({ ...this.config.get() }, logger, this.experience, this.journal),
     });
+    this.games.set(id, newEntry);
+    this._drive(newEntry, doc.anchor.nextPhase);
+    return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
+  }
+
+  /**
+   * 暂停恢复（进程未重启）：锚点就在内存里，沿用原令牌，前端无需重新握手。
+   * 与 resumeGame 的唯一区别是锚点来源与令牌是否轮换。
+   */
+  resumePaused(res, entry, body) {
+    const { game } = entry;
+    const id = game.id;
+    if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
+      return this.json(res, 403, { error: 'token 无效' });
+    }
+    if (!game.paused) return this.json(res, 409, { error: '对局未处于暂停状态' });
+    const anchor = game._anchor;
+    if (!anchor) return this.json(res, 409, { error: '没有可恢复的锚点（对局尚未到过白天/夜晚边界）' });
+    const logger = makeGameLogger(this.logger, id); // 进程未重启，按局日志流仍在
+    const newEntry = this._rebuildFromAnchor({
+      id, anchor, mock: !!entry.mock, logger, tokens: entry.tokens,
+      agentFactory: entry.mock
+        ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
+        : makeAgentFactory({ ...this.config.get() }, logger, this.experience, this.journal),
+    });
+    this.games.set(id, newEntry);
+    this._drive(newEntry, anchor.nextPhase);
     return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
   }
 
   saveActive() {
+    this.pruneGames(); // 内存治理与定时落盘同一个节拍：4s 一次
     for (const entry of this.games.values()) {
-      if (entry.game.started && !entry.game.finished) this.saveGame(entry);
+      if (entry.game.started && !entry.game.finished) {
+        // 脏标记在 saveGame 内部判定：没有新事件的节拍一次磁盘都不碰
+        this.saveGame(entry).catch((e) => this.logger.warn('api', `定时存档失败 ${entry.game.id}: ${e.message}`));
+      }
     }
   }
 
@@ -174,15 +327,23 @@ class Api {
         personas: PERSONALITIES.map((p) => ({ id: p.id, name: p.name, tag: p.tag })),
         roleStrategies: STRATEGY_TEMPLATES,
         roleArt: roleArtMap(),
+        // 节奏档位（P2-6）：设置页据此渲染选择器，并如实展示"这一档动了哪些内部参数"
+        paces: Object.entries(PACES).map(([id, p]) => ({ id, label: p.label, desc: p.desc, values: p.values })),
       });
 
       if (pathname === '/api/config' && method === 'GET') {
         const c = this.config.get();
+        // 直接下发全部配置项（只摘掉密钥），而不是手工维护一份白名单。
+        // 白名单曾经漏掉 keepAlive：设置页把它读成 undefined → 复选框永远显示"已勾选"，
+        // 用户取消勾选后再改别的设置保存，就会把 keepAlive 静默改回 true。
+        // 从 DEFAULT_CONFIG 派生后，新增配置项不会再出现"只能写、读不回来"。
+        const cfg = { ...c };
+        delete cfg.apiKey;
         return this.json(res, 200, {
-          baseUrl: c.baseUrl, model: c.model, apiKeyMasked: maskKey(c.apiKey), hasKey: !!c.apiKey,
-          temperature: c.temperature, maxTokens: c.maxTokens, cacheControl: !!c.cacheControl,
-          reasoningEffort: c.reasoningEffort || 'high', fastEffort: c.fastEffort || 'low',
-          fastMaxTokens: c.fastMaxTokens || 8000, contextBudget: c.contextBudget || 12000,
+          ...cfg,
+          // 档位是**派生**的：按当前参数反查属于哪一档，都不匹配则 'custom'（前端显示"自定义"，不谎报）
+          pace: detectPace(c),
+          apiKeyMasked: maskKey(c.apiKey), hasKey: !!c.apiKey,
         });
       }
       if (pathname === '/api/config' && method === 'PUT') {
@@ -205,20 +366,29 @@ class Api {
       if (gameMatch) {
         const id = gameMatch[1];
         const sub = gameMatch[2] || '';
-        // 断点恢复：对局不在内存（服务重启过）时从存档锚点续跑
+        // 断点恢复：① 内存中因配额/套餐暂停的对局 → 从内存锚点续跑
+        //           ② 服务重启后已不在内存的对局 → 从存档锚点续跑
         if (sub === '/resume' && method === 'POST') {
-          if (this.games.has(id)) return this.json(res, 409, { error: '对局仍在内存中，直接打开即可' });
+          const body = await this.readBody(req);
+          const live = this.games.get(id);
+          if (live) {
+            if (!live.game.paused) return this.json(res, 409, { error: '对局仍在运行中，直接打开即可' });
+            return this.resumePaused(res, live, body);
+          }
           const doc = this.loadSaveDoc(id);
           if (!doc || !doc.game) return this.json(res, 404, { error: '存档不存在' });
-          return this.resumeGame(res, { id, tokens: doc.tokens || {} }, await this.readBody(req));
+          return this.resumeGame(res, { id, tokens: doc.tokens || {} }, body);
         }
         const entry = this.getGame(id);
         if (!entry) return this.json(res, 404, { error: '对局不存在' });
         if (sub === '/start' && method === 'POST') return this.startGame(res, entry, await this.readBody(req));
         if (sub === '/terminate' && method === 'POST') return this.terminateGame(res, entry, await this.readBody(req));
         if (sub === '/view' && method === 'GET') return this.view(res, entry, query);
+        if (sub === '/stream' && method === 'GET') return this.stream(req, res, entry, query);
         if (sub === '/tokens' && method === 'GET') return this.tokens(res, entry);
         if (sub === '/action' && method === 'POST') return this.action(res, entry, await this.readBody(req));
+        if (sub === '/review' && method === 'POST') return this.startReview(res, entry, await this.readBody(req));
+        if (sub === '/review' && method === 'GET') return this.getReview(res, entry, query);
         if (sub === '/explode' && method === 'POST') return this.explodeAction(res, entry, await this.readBody(req));
         if (sub === '/duel' && method === 'POST') return this.duelAction(res, entry, await this.readBody(req));
         if (sub === '/wolftalk' && method === 'POST') return this.wolfTalk(res, entry, await this.readBody(req));
@@ -235,19 +405,20 @@ class Api {
   }
 
   // ---------- 实现 ----------
-  createGame(res, body) {
+  async createGame(res, body) {
     const boardDef = body.boardId && BOARDS[body.boardId] ? BOARDS[body.boardId] : null;
     const board = boardDef ? boardDef.roles : body.board;
     const check = validateBoard(board);
     if (!check.ok) return this.json(res, 400, { error: '板子不合法：' + check.errors.join('；') });
     const players = Array.isArray(body.players) ? body.players : [];
     if (players.length !== check.total) return this.json(res, 400, { error: `玩家数(${players.length})与板子人数(${check.total})不一致` });
-    const humans = players.filter((p) => p.isHuman).length;
+    let humans = players.filter((p) => p.isHuman).length;
     if (humans > 1) return this.json(res, 400, { error: '最多 1 名人类玩家' });
     // 规则优先级：用户设置 > 板子内置板规（如狼美人局女巫不可自救） > 默认值
     const rules = mergeRules({ ...(boardDef && boardDef.rules || {}), ...(body.rules || {}) });
     const useMock = !!body.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key（或在设置中勾选 Mock 试玩）' });
+
 
     const gameId = 'g' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
     const llmCfg = { ...this.config.get() };
@@ -255,20 +426,47 @@ class Api {
     const logger = makeGameLogger(this.logger, gameId);
     const agentFactory = useMock
       ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-      : makeAgentFactory(llmCfg, logger, this.experience);
+      : makeAgentFactory(llmCfg, logger, this.experience, this.journal);
 
-    // 性格：玩家自定义优先，未填写的 AI 随机分配（每局不重样）
-    applyPersonalities(players, Math.random);
-    const game = new Game({ id: gameId, board, rules, players, agentFactory, logger });
+    // 性格：玩家自定义优先，未填写的 AI 随机分配（每局不重样）。
+    // 显式 seed 时改用同一随机源，保证"同种子 + 同配置 = 同一局"（配合决策 journal 可完整复现）。
+    const seed = Number.isInteger(body.seed) ? body.seed : null;
+    const seedRng = seed == null ? Math.random : makeRng(seed);
+
+    // 人类座位：默认由前端在 players 里标好 isHuman；mySeat:'random' 时在这里随机挑一个。
+    // 为什么放在服务端而不是前端：手机端/桌面端/直接调 API 三条路径行为一致，
+    // 而且随机源与性格分配共用同一个 seedRng —— 显式 seed 时"同种子 = 同一局"连座位也一起复现。
+    // 注意必须在 applyPersonalities 之前：它会跳过人类座位（否则人类会被分到 AI 人格）。
+    let mySeat = 0;
+    if (body.mySeat === 'random') {
+      if (humans === 1) return this.json(res, 400, { error: "mySeat:'random' 与 players 里的 isHuman 只能二选一" });
+      const seat = 1 + Math.floor(seedRng() * players.length);
+      const target = players[seat - 1];
+      target.name = String(body.myName || target.name || '我');
+      target.isHuman = true;      // Game 构造时会 sanitizeInline 截断，这里不重复处理
+      target.personality = '';
+      humans = 1;
+      mySeat = seat;
+    } else {
+      mySeat = players.findIndex((p) => p.isHuman) + 1; // 无人类（观战）时为 0
+    }
+
+    applyPersonalities(players, seedRng);
+    const game = new Game({ id: gameId, board, rules, players, agentFactory, logger, seed });
     const entry = {
       game, running: false, error: null,
+      // mock 必须存在 entry 上：存档写的就是 entry.mock，恢复时按 doc.mock 决定用 Mock 还是真实 agentFactory。
+      // 曾经漏了这一行 → 试玩局存档里 mock=false，服务重启/暂停恢复后**会当成真实局去调付费 API**
+      // （用户以为在免费试玩，实际在花钱）。这条与"不静默降级"是同一类问题：状态丢失后行为悄悄变了。
+      mock: useMock,
       tokens: { player: humans ? tokenId() : null, god: tokenId() },
+      createdAt: Date.now(), lastAccess: Date.now(), // 内存治理（TTL/LRU）用
     };
     this.games.set(gameId, entry);
     logger.openGameLog(gameId);
-    logger.info('api', `对局已创建 ${gameId}（${useMock ? 'Mock' : llmCfg.model}，${check.total}人）`, { gameId });
-    this.saveGame(entry);
-    return this.json(res, 200, { gameId, playerToken: entry.tokens.player, godToken: entry.tokens.god, mock: useMock });
+    logger.info('api', `对局已创建 ${gameId}（${useMock ? 'Mock' : llmCfg.model}，${check.total}人${mySeat ? '，你在 ' + mySeat + ' 号' : '，纯观战'}）`, { gameId });
+    await this.saveGame(entry, { force: true });
+    return this.json(res, 200, { gameId, playerToken: entry.tokens.player, godToken: entry.tokens.god, mock: useMock, mySeat });
   }
 
   startGame(res, entry, body) {
@@ -277,18 +475,7 @@ class Api {
       return this.json(res, 403, { error: 'token 无效' });
     }
     entry.running = true;
-    runGame(entry.game).then(() => {
-      this.saveGame(entry);
-      this.logger.closeGameLog(entry.game.id);
-      // 局终复盘：AI 拿"当时的判断"对照"终局真相"提炼经验，存入跨局经验池（mock 对局/失败静默跳过）
-      this.generateLessons(entry).catch((e) => {
-        this.logger.warn('api', `经验生成失败（不影响对局）: ${e.message}`, { gameId: entry.game.id });
-      });
-    }).catch((err) => {
-      entry.error = String(err.stack || err.message || err);
-      this.logger.error('engine', `对局 ${entry.game.id} 异常终止`, { stack: err.stack });
-      this.saveGame(entry);
-    });
+    this._drive(entry);
     return this.json(res, 200, { ok: true });
   }
 
@@ -364,7 +551,7 @@ class Api {
   }
 
   /** 手动终止对局（玩家或上帝令牌均可）；未开局的对局直接标记完结并落盘 */
-  terminateGame(res, entry, body) {
+  async terminateGame(res, entry, body) {
     const { game } = entry;
     if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
       return this.json(res, 403, { error: 'token 无效' });
@@ -375,24 +562,49 @@ class Api {
       game.finished = true;
       game.winner = null;
       game.winReason = '对局未开始即被终止';
-      this.saveGame(entry);
+      await this.saveGame(entry, { force: true });
       this.logger.info('api', `未开局对局 ${game.id} 已被终止清理`);
       return this.json(res, 200, { ok: true, settled: true });
     }
-    if (!entry.running) return this.json(res, 409, { error: '对局不在进行中' });
+    if (!entry.running && !game.paused) return this.json(res, 409, { error: '对局不在进行中' });
+    // 暂停中的对局没有驱动循环在跑，直接结算（不能让它永远挂在暂停态）
+    if (game.paused) {
+      game.terminate('暂停中的对局被玩家终止');
+      game.finish();
+      await this.saveGame(entry, { force: true });
+      this.logger.info('api', `暂停中的对局 ${game.id} 已被终止并结算`);
+      return this.json(res, 200, { ok: true, settled: true });
+    }
     game.terminate('玩家手动终止对局');
     return this.json(res, 200, { ok: true });
   }
 
   view(res, entry, query) {
-    const { game } = entry;
     const token = query.get('token');
     const after = Number(query.get('after') || 0);
-    let viewer;
-    if (token === entry.tokens.god) viewer = 'god';
-    else if (token && token === entry.tokens.player) viewer = game.players.find((p) => p.isHuman).seat;
-    else return this.json(res, 403, { error: 'token 无效' });
+    const viewer = this.viewerOf(entry, token);
+    if (viewer == null) return this.json(res, 403, { error: 'token 无效' });
+    return this.json(res, 200, this.buildView(entry, viewer, after));
+  }
 
+  /** token → 视角（'god' | 座位号 | null） */
+  viewerOf(entry, token) {
+    if (!token) return null;
+    if (token === entry.tokens.god) return 'god';
+    if (token === entry.tokens.player) {
+      const human = entry.game.players.find((p) => p.isHuman);
+      return human ? human.seat : null;
+    }
+    return null;
+  }
+
+  /**
+   * 构造某个视角的视图负载。
+   * `view()`（轮询）与 `/stream`（SSE 推送）共用这一份构造逻辑——
+   * 两条通道必须给出**逐字段一致**的数据，否则前端会出现"刷新一下才对"的诡异差异。
+   */
+  buildView(entry, viewer, after) {
+    const { game } = entry;
     const events = game.visibleEvents(viewer, after);
     const isGod = viewer === 'god';
     const players = game.players.map((p) => {
@@ -423,17 +635,288 @@ class Api {
       explode: game.explodeRequest && (!isMe || game.explodeRequest.seat === viewer) ? game.explodeRequest : null,
       duel: game.duelRequest && (!isMe || game.duelRequest.seat === viewer) ? game.duelRequest : null,
     };
-    return this.json(res, 200, {
+    return {
       gameId: game.id, day: game.day, phase: game.phase,
-      started: game.started, live: this.games.has(game.id), finished: game.finished, winner: game.winner, winReason: game.winReason,
+      started: game.started, inMemory: this.games.has(game.id), finished: game.finished, winner: game.winner, winReason: game.winReason,
       error: entry.error,
+      // 暂停态：配额/套餐等外部原因，前端据此显示横幅与"恢复对局"
+      paused: game.paused || null,
       players, events, pending, queued, rules: game.rules, wolfTalk,
       // 终局评分（MVP 体系）：对局结束后计算并缓存
       score: game.finished ? (entry.score || (entry.score = computeScores(game))) : undefined,
+      // 局后 AI 教练（P2-4）：状态与文本随视图下发，SSE 会把它推给前端（无需额外轮询）
+      review: entry.review ? {
+        status: entry.review.status,
+        mode: entry.review.mode || null,
+        text: entry.review.text || '',
+        fallbackReason: entry.review.fallbackReason || null,
+        seat: entry.review.seat || null,
+        at: entry.review.at || null,
+      } : null,
       me: me ? { seat: me.seat, name: me.name, role: me.role, alive: me.alive, isSheriff: me.isSheriff, lostVote: me.lostVote, teammates: game.wolves().some((w) => w.seat === me.seat) ? game.wolves().filter((w) => w.alive && w.seat !== me.seat).map((w) => w.seat) : [] } : null,
+      // 流式直播缓冲（"打字中"）：公开发言全员可见，私密决策仅本人与上帝，reasoning 仅上帝
+      live: game.liveFor(viewer), // 流式直播缓冲（只在 AI 正在输出时才非 null，不能拿它判断"能否继续对局"）
+      // 日切反思进度（"AI 正在整理记忆…"）
+      memory: game.memory || null,
       llmStats: isGod ? game.llmStats : undefined,
+      // 单并发通道状态（队列积压/当前任务/等待时长）：只有上帝视角可见
+      scheduler: isGod ? scheduler.snapshot() : undefined,
       board: game.board,
+    };
+  }
+
+  // ---------- 局后 AI 教练（P2-4）----------
+  /**
+   * 起一次局后点评。
+   *
+   * 三个刻意的取舍：
+   *  ① **不自动触发**：点评要花一次 LLM 调用（单 key 单并发下还会占用通道），
+   *     所以由用户点按钮决定；且结果缓存在对局上，重复打开页面不会重复调用。
+   *  ② **异步执行**：一次生成十几秒到几分钟，HTTP 不能挂着。状态与文本随视图下发，
+   *     由 SSE 推给前端（没有 SSE 时轮询也能拿到），前端不需要额外的轮询循环。
+   *  ③ **不静默降级**：调用失败时不但要能玩，还要让用户知道为什么——
+   *     `generateCoachReview` 会退回规则点评并带上 `fallbackReason`，前端如实标注。
+   */
+  startReview(res, entry, body) {
+    const viewer = this.viewerOf(entry, body.token);
+    if (viewer == null) return this.json(res, 403, { error: 'token 无效' });
+    const game = entry.game;
+    if (!game.finished) return this.json(res, 409, { error: '对局还没结束，打完了再来点评' });
+    // 显式指定座位时先校验：报"座位 99 不存在"比笼统说"没有人类玩家座位"有用得多
+    const requested = body.seat === undefined || body.seat === null ? null : Number(body.seat);
+    if (requested !== null) {
+      if (!Number.isInteger(requested) || !game.player(requested)) return this.json(res, 400, { error: `座位 ${body.seat} 不存在` });
+    }
+    const seat = requested !== null ? requested : (humanSeatOf(game) || null);
+    if (!seat) return this.json(res, 400, { error: '本局没有人类玩家座位；请显式指定要点评的座位号' });
+    if (entry.review && entry.review.status === 'running') return this.json(res, 200, { ok: true, status: 'running' });
+    if (entry.review && entry.review.status === 'done' && !body.regenerate) {
+      return this.json(res, 200, { ok: true, status: 'done', cached: true });
+    }
+    const facts = reviewFacts(game, seat);
+    if (!facts) return this.json(res, 400, { error: `座位 ${seat} 不存在` });
+    // Mock 试玩按定义"不调用 API"：直接给规则点评，避免"试玩却偷偷花了一次真调用"
+    if (entry.mock) {
+      entry.review = {
+        status: 'done', mode: 'rule', text: ruleReview(facts), seat, at: Date.now(), ms: 0,
+        fallbackReason: '本局是 Mock 试玩（不调用 API），因此只给规则点评',
+      };
+      this.saveGame(entry, { force: true }).catch(() => {});
+      return this.json(res, 200, { ok: true, status: 'done', mode: 'rule' });
+    }
+    // 新一次生成：中止上一次（用户连点/重新生成时不该有两份在跑，单并发通道更该珍惜）
+    if (entry.reviewAbort) { try { entry.reviewAbort.abort(); } catch (_) { /* ignore */ } }
+    const ac = new AbortController();
+    entry.reviewAbort = ac;
+    entry.review = { status: 'running', seat, at: Date.now() };
+    this.logger.info('api', `局后点评开始：${game.id} 座位 ${seat}`);
+    generateCoachReview({ game, facts, llmCfg: this.config.get(), logger: this.logger, signal: ac.signal })
+      .then((r) => {
+        if (entry.reviewAbort !== ac) return; // 已被新一次生成取代
+        entry.review = { status: 'done', mode: r.mode, text: r.text, fallbackReason: r.fallbackReason || null, seat, at: Date.now(), ms: r.ms };
+        if (r.mode === 'rule') this.logger.warn('api', `局后点评退化为规则点评：${r.fallbackReason}`);
+        else this.logger.info('api', `局后点评完成：${game.id} ${r.ms}ms`);
+      })
+      .catch((e) => { // generateCoachReview 内部已兜底，这里只防意外
+        if (entry.reviewAbort !== ac) return;
+        entry.review = { status: 'error', seat, at: Date.now(), fallbackReason: e && e.message ? e.message : String(e), text: '' };
+      })
+      .then(() => { this.saveGame(entry, { force: true }).catch(() => {}); });
+    return this.json(res, 202, { ok: true, status: 'running' });
+  }
+
+  getReview(res, entry, query) {
+    const viewer = this.viewerOf(entry, query.get('token'));
+    if (viewer == null) return this.json(res, 403, { error: 'token 无效' });
+    return this.json(res, 200, { review: entry.review || null });
+  }
+
+  // ---------- SSE 推送（P2-2）----------
+  /**
+   * 用服务端推送替代前端 1.2s 轮询。
+   *
+   * 为什么值得做：轮询的每次请求都要重建一次视图负载（含全部增量事件的 JSON 序列化），
+   * 而绝大多数轮询是"没有任何变化"的空转；SSE 只在**真的变了**的时候推一帧，
+   * 并且省掉了每次往返的 TCP/头部开销。对局暂停等待人类输入时更是完全静默。
+   *
+   * 本轮询更关键的一点：**推送与轮询共用 buildView**，两条通道数据逐字段一致，
+   * 前端即使因为环境不支持而回退轮询，行为也完全一样（这是敢改前端的底气）。
+   *
+   * 帧格式（标准 SSE）：
+   *   event: view  → 一帧视图负载；客户端按 seq 游标增量应用
+   *   event: ping  → 心跳（前端据此判断连接是否还活着）
+   *   event: end   → 对局已结束/被清理，客户端应收尾并停止重连
+   */
+  stream(req, res, entry, query) {
+    const viewer = this.viewerOf(entry, query.get('token'));
+    if (viewer == null) return this.json(res, 403, { error: 'token 无效' });
+    const gameId = entry.game.id;
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no', // nginx 等反代必须禁用缓冲，否则推送会被攒着不发
     });
+    res.write(': stream open\n\n'); // 注释帧：让客户端立刻确认"连上了"（不触发 onmessage）
+    // 断线重连：浏览器会自动带上 Last-Event-ID（即我们发过的最后一个 id），
+    // 以它为准续传，避免重连后把已经渲染过的事件再发一遍。
+    const lastId = Number(req.headers['last-event-id'] || 0);
+    const st = {
+      res, viewer, entry, gameId,
+      after: Math.max(Number(query.get('after') || 0), Number.isFinite(lastId) ? lastId : 0),
+      sig: null,
+      cheap: null,
+      ticks: 0,
+      closed: false,
+      sawFinished: false,
+    };
+    if (!this.streams.has(gameId)) this.streams.set(gameId, new Set());
+    this.streams.get(gameId).add(st);
+    this.logger.debug('api', `SSE 订阅 ${gameId} viewer=${viewer}（当前 ${this.streams.get(gameId).size} 条）`);
+    const drop = () => this.dropStream(st);
+    req.on('close', drop);
+    req.on('error', drop);
+    // 立刻推一帧：客户端不必等下一个定时器周期，也让"打开页面到看见内容"的延迟与轮询一致
+    this.pushStream(st);
+    return undefined;
+  }
+
+  dropStream(st) {
+    if (st.closed) return;
+    st.closed = true;
+    const set = this.streams.get(st.gameId);
+    if (set) {
+      set.delete(st);
+      if (!set.size) this.streams.delete(st.gameId);
+    }
+    try { st.res.end(); } catch (_) { /* 对端可能已断开 */ }
+  }
+
+  /** 关闭某局（或全部）的推送连接 */
+  closeStreams(gameId, reason = 'end') {
+    const ids = gameId ? [gameId] : [...this.streams.keys()];
+    for (const id of ids) {
+      const set = this.streams.get(id);
+      if (!set) continue;
+      for (const st of [...set]) {
+        try { st.res.write(`event: end\ndata: ${JSON.stringify({ reason })}\n\n`); } catch (_) { /* ignore */ }
+        this.dropStream(st);
+      }
+    }
+  }
+
+  /**
+   * **廉价指纹**：只读对局状态里的几个标量，不构造视图、不序列化。
+   *
+   * 为什么需要它：SSE 每 400~500ms 拍一次，如果每拍都调 buildView（含 12 名玩家 + 规则 + 全量增量事件的
+   * JSON 构造），那比 1.2s 轮询还费 CPU —— 推送就白做了。绝大多数拍其实是"什么都没变"，
+   * 这里用几个字段的比较把它挡掉，只有真的变了才去构造视图。
+   */
+  cheapSignature(entry, viewer) {
+    const { game: g } = entry;
+    const live = g.live;
+    const liveVisible = live && (viewer === 'god' || live.public || live.seat === Number(viewer));
+    return [
+      g.seq, g.day, g.phase, g.finished ? 1 : 0, g.winner || '',
+      g.paused ? `${g.paused.kind}:${g.paused.code || ''}` : '',
+      g.pending ? `${g.pending.seat}:${g.pending.request.task}` : '',
+      g.wolfTalk && g.wolfTalk.active ? `wt${g.wolfTalk.round}/${g.wolfTalk.rounds}` : '',
+      g.memory ? `m${g.memory.day}/${g.memory.done}` : '',
+      g.explodeRequest ? 'E' : '', g.duelRequest ? 'D' : '',
+      liveVisible ? `L${live.seat}:${(live.text || '').length}:${live.updatedAt || ''}` : '',
+      entry.error ? 'err' : '',
+      entry.review ? `R${entry.review.status}${(entry.review.text || '').length}` : '', // 教练状态/文本变化要推帧
+      viewer === 'god' ? `c${(g.llmStats && g.llmStats.calls) || 0}` : '',
+    ].join('|');
+  }
+
+  /** 变化指纹：只有它变了才推帧（避免空转帧把带宽和前端渲染都浪费掉） */
+  streamSignature(entry, viewer, payload) {
+    const { game } = entry;
+    const live = payload.live;
+    const sched = payload.scheduler;
+    return [
+      game.seq, game.day, game.phase, game.finished ? 1 : 0, game.winner || '',
+      payload.paused ? `${payload.paused.kind}:${payload.paused.code || ''}` : '',
+      payload.pending ? payload.pending.task : '',
+      payload.memory ? `${payload.memory.day}/${payload.memory.done}` : '',
+      payload.queued.explode ? 1 : 0, payload.queued.duel ? 1 : 0,
+      payload.review ? `R${payload.review.status}:${(payload.review.text || '').length}` : '',
+      live ? `${live.seat || ''}:${live.chars != null ? live.chars : (live.text || '').length}` : '',
+      viewer === 'god' && sched ? `${sched.current ? sched.current.task : ''}|${sched.queued != null ? sched.queued : (sched.queue || []).length}|${(payload.llmStats || {}).calls || 0}` : '',
+      // 座位状态（存活/警长/翻牌）变化也要推：否则头像上的"出局"标记不会更新
+      payload.players.map((p) => `${p.alive ? 1 : 0}${p.isSheriff ? 's' : ''}${p.revealed ? 'r' : ''}${p.role || ''}`).join(''),
+    ].join('|');
+  }
+
+  /** 推一帧（若有变化）。返回是否真的推了 */
+  pushStream(st) {
+    if (st.closed) return false;
+    const entry = this.games.get(st.gameId);
+    if (!entry) { // 对局已被清理（TTL/LRU 逐出）
+      try { st.res.write(`event: end\ndata: ${JSON.stringify({ reason: 'evicted' })}\n\n`); } catch (_) { /* ignore */ }
+      this.dropStream(st);
+      return false;
+    }
+    // 先用廉价指纹挡掉没变化的拍：绝大多数拍走这条路，一次 buildView 都不做。
+    // 注意：终局收尾必须在这条快路径里也能发生——否则"已完成的流"会因为状态不再变化而永远不关。
+    const finishUp = () => {
+      try { st.res.write(`event: end\ndata: ${JSON.stringify({ reason: 'finished' })}\n\n`); } catch (_) { /* ignore */ }
+      this.dropStream(st);
+    };
+    const cheap = this.cheapSignature(entry, st.viewer);
+    if (cheap === st.cheap && st.cheap != null) {
+      if (st.sawFinished) finishUp();
+      return false;
+    }
+    st.cheap = cheap;
+    let payload;
+    try {
+      payload = this.buildView(entry, st.viewer, st.after);
+    } catch (e) {
+      // 绝不能静默卡死：轮询模式下这里会返回 500 让前端看见错误，
+      // SSE 若不作为，客户端只会看到"永远没有新内容"——比报错难查得多。
+      // 因此发一帧 error 并关流，前端据此回退轮询。
+      this.logger.warn('api', `SSE 构造视图失败 ${st.gameId}: ${e.message}`);
+      try { st.res.write(`event: error\ndata: ${JSON.stringify({ error: String(e.message || e) })}\n\n`); } catch (_) { /* ignore */ }
+      this.dropStream(st);
+      return false;
+    }
+    const sig = this.streamSignature(entry, st.viewer, payload);
+    const hasNew = payload.events.length > 0;
+    let pushed = false;
+    if (hasNew || sig !== st.sig) {
+      st.sig = sig;
+      for (const e of payload.events) if (e.seq > st.after) st.after = e.seq;
+      try {
+        // id: 让浏览器在断线重连时用 Last-Event-ID 告诉服务端"我收到哪了"
+        st.res.write(`id: ${st.after}\nevent: view\ndata: ${JSON.stringify(payload)}\n\n`);
+        pushed = true;
+      } catch (_) {
+        this.dropStream(st);
+        return false;
+      }
+    }
+    // 终局收尾：先让客户端完整拿到终局帧（含结算分数），下一拍再送 end 关流
+    if (payload.finished) {
+      if (st.sawFinished) finishUp();
+      else st.sawFinished = true;
+    }
+    return pushed;
+  }
+
+  /** 统一推进所有订阅（单一定时器：连接数再多也只有一个 timer） */
+  tickStreams() {
+    if (!this.streams.size) return;
+    for (const set of [...this.streams.values()]) {
+      for (const st of [...set]) {
+        this.pushStream(st);
+        st.ticks++;
+        if (st.ticks % STREAM_PING_TICKS === 0 && !st.closed) {
+          try { st.res.write(`event: ping\ndata: ${JSON.stringify({ t: Date.now() })}\n\n`); } catch (_) { this.dropStream(st); }
+        }
+      }
+    }
   }
 
   action(res, entry, body) {
@@ -507,6 +990,10 @@ class Api {
     return this.json(res, 200, {
       seat, turns: agent.turns, contextTokens: agent.contextTokens || 0,
       task: agent.lastRequestTask || '', digests: [...(agent.digests ? agent.digests.keys() : [])],
+      // 记忆检索结果（P2-5）：检索了多少条、省了多少条 —— 让"上下文被裁剪过"这件事可见
+      memory: agent.lastMemory || null,
+      // 分区体积（应用自报）：看清楚 token 花在记忆/实录/快照/任务的哪一块
+      sectionTokens: agent.lastSectionTokens || null,
       tail,
     });
   }
@@ -558,9 +1045,12 @@ class Api {
           const j = JSON.parse(fs.readFileSync(path.join(SAVE_DIR, f), 'utf8'));
           const g = j.game || j; // 兼容新旧存档格式
           return {
-            id: g.id, day: g.day, phase: g.phase, finished: g.finished, started: !!g.started, live: this.games.has(g.id),
+            id: g.id, day: g.day, phase: g.phase, finished: g.finished, started: !!g.started, inMemory: this.games.has(g.id),
             winner: g.winner, winReason: g.winReason,
-            resumable: !!(j.anchor && g.started && !g.finished && !this.games.has(g.id)), // 服务重启后有锚点可续跑
+            paused: g.paused || null,
+            mock: !!j.mock, // 让界面能标出"试玩局"，也便于排查"恢复后是否还走 Mock"
+            // 服务重启后（不在内存）或内存中处于暂停态的对局，都可以从锚点续跑
+            resumable: !!(j.anchor && g.started && !g.finished && (!this.games.has(g.id) || !!g.paused)),
             seats: g.players.length, date: fs.statSync(path.join(SAVE_DIR, f)).mtime,
           };
         } catch (_) { return null; }

@@ -4,7 +4,6 @@
  */
 'use strict';
 const http = require('http');
-const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
 const { Logger, maskKey } = require('./src/log');
@@ -29,36 +28,9 @@ const logger = new Logger({ dir: path.join(DATA_DIR, 'logs'), level: process.env
 const api = new Api({ config, logger });
 
 // ---------- 静态文件 ----------
-const MIME = {
-  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml',
-  '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8',
-  '.webmanifest': 'application/manifest+json; charset=utf-8',
-};
-
-function serveStatic(req, res, pathname) {
-  let file = pathname === '/' ? '/index.html' : pathname;
-  const full = path.normalize(path.join(WEB_DIR, file));
-  if (!full.startsWith(WEB_DIR)) { res.writeHead(403); return res.end('forbidden'); }
-  // 目录请求（如 /m/）自动补 index.html
-  let target = full;
-  try {
-    if (fs.statSync(target).isDirectory()) target = path.join(target, 'index.html');
-  } catch (_) { /* 不存在则走 404/SPA */ }
-  fs.readFile(target, (err, data) => {
-    if (err) {
-      // SPA 兜底
-      fs.readFile(path.join(WEB_DIR, 'index.html'), (e2, d2) => {
-        if (e2) { res.writeHead(404); return res.end('not found'); }
-        res.writeHead(200, { 'Content-Type': MIME['.html'] });
-        res.end(d2);
-      });
-      return;
-    }
-    res.writeHead(200, { 'Content-Type': MIME[path.extname(target)] || 'application/octet-stream' });
-    res.end(data);
-  });
-}
+// 实现搬到 src/static.js：缓存头与"缺失资源必须 404"这两条 PWA 关键行为在那边有单测
+const { serveStatic } = require('./src/static');
+const serveWeb = (req, res, pathname) => serveStatic(req, res, pathname, { webDir: WEB_DIR });
 
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://localhost');
@@ -83,7 +55,7 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  serveStatic(req, res, pathname);
+  serveWeb(req, res, pathname);
 });
 
 server.listen(PORT, () => {

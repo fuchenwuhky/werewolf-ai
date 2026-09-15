@@ -1,15 +1,25 @@
 {
+  "id": "/m/",
   "name": "AI 狼人杀",
   "short_name": "AI狼人杀",
   "description": "与 AI 玩家同桌的哥特暗黑风狼人杀",
+  "lang": "zh-CN",
+  "dir": "ltr",
   "start_url": "/m/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#0b0a10",
   "theme_color": "#0b0a10",
+  "categories": ["games", "entertainment"],
   "icons": [
     { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
-    { "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "开一局", "short_name": "开局", "url": "/m/?action=new" },
+    { "name": "桌面版", "short_name": "桌面版", "url": "/?desktop=1" }
   ]
 }

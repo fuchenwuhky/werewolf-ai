@@ -97,7 +97,6 @@ async function main() {
           try { await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, payload: { text: '   ' } }); }
           catch (_) { badSubmitRejected = true; }
         }
-        const alive = view.players.filter((x) => x.alive && x.seat !== view.me.seat).map((x) => x.seat);
         let payload = null;
         switch (p.task) {
           case 'speech': case 'pk_speech': case 'sheriff_speech': case 'lastwords': case 'wolf_propose':

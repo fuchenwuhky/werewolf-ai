@@ -88,57 +88,14 @@ function makeMockAgentFactory(rnd = Math.random, opts = {}) {
   });
 }
 
-/** 隔离审计：校验每条事件的可见性标签是否泄漏私密信息 */
+
+/**
+ * 隔离审计：校验每条事件的可见性标签是否泄漏私密信息。
+ * 权威实现在 src/engine/visibility.js —— 与 emit() 的 fail-closed 断言共用同一份类型表，
+ * 这里只做转发，避免"两份表各改各的"导致审计形同虚设。
+ */
 function auditIsolation(game) {
-  const problems = [];
-  const { ROLES } = require('../src/engine/roles');
-  const role = (s) => (game.player(s) ? game.player(s).role : null);
-  const isWolfSeat = (s) => !!ROLES[role(s)] && ROLES[role(s)].team === 'wolf';
-  for (const e of game.events) {
-    const vis = e.visibleTo;
-    const seats = Array.isArray(vis) ? vis : null;
-    switch (e.type) {
-      case 'deal':
-        if (!seats || seats.length !== 1) problems.push(`deal 事件可见性异常 seq=${e.seq}`);
-        break;
-      case 'teammates':
-      case 'wolf_propose':
-      case 'wolf_kill':
-      case 'wolf_kill_vote':
-        if (!seats || seats.some((s) => !isWolfSeat(s))) {
-          problems.push(`狼队私密事件泄漏 seq=${e.seq} type=${e.type} vis=${vis}`);
-        }
-        break;
-      case 'seer_check':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'seer') problems.push(`查验结果泄漏 seq=${e.seq}`);
-        break;
-      case 'witch_info':
-      case 'witch_action':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'witch') problems.push(`女巫信息泄漏 seq=${e.seq}`);
-        break;
-      case 'night_guard':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'guard') problems.push(`守卫目标泄漏 seq=${e.seq}`);
-        break;
-      case 'night_dream':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'dreamer') problems.push(`摄梦目标泄漏 seq=${e.seq}`);
-        break;
-      case 'wolfbeauty_charm':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'wolfbeauty') problems.push(`魅惑目标泄漏 seq=${e.seq}`);
-        break;
-      case 'crow_curse':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'crow') problems.push(`诅咒目标泄漏 seq=${e.seq}`);
-        break;
-      case 'admirer_crush':
-        if (!seats || seats.length !== 1 || role(seats[0]) !== 'admirer') problems.push(`暗恋对象泄漏 seq=${e.seq}`);
-        break;
-      case 'vote_cast':
-        if (!seats || seats.length !== 1 || seats[0] !== e.actor) problems.push(`投票保密性被破坏 seq=${e.seq}`);
-        break;
-      default:
-        break;
-    }
-  }
-  return problems;
+  return require('../src/engine/visibility').auditEventSemantics(game);
 }
 
 module.exports = { makeMockAgentFactory, auditIsolation };

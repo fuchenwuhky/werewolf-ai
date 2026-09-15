@@ -9,47 +9,66 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="AI狼人杀">
 <link rel="manifest" href="../manifest.webmanifest">
-<link rel="apple-touch-icon" href="../assets/icon.svg">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../assets/apple-touch-icon.png">
 <title>AI 狼人杀 · APP</title>
 <link rel="stylesheet" href="m.css">
 </head>
 <body>
-<div id="m-app">
+<script>
+/* 初始化守卫：与桌面版同一套逻辑（见 web/index.html 的说明）。手机端还多一层意义：
+   从 /m/ 进来时 m.js 要先拉 /api/meta 才渲染板子列表，这段窗口里的点击同样不能"毫无反应"。
+   两条安全线：m.js 初始化完成后置 __wwReady=true 放行；8 秒兜底放行，避免界面被永久点死。 */
+(function () {
+  window.__wwReady = false;
+  var deadline = Date.now() + 8000;
+  document.addEventListener('click', function (e) {
+    if (window.__wwReady || Date.now() > deadline) return;
+    var box = document.getElementById('m-err');
+    if (box) box.textContent = '⏳ 界面正在加载配置，请稍候…';
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+})();
+</script>
+<a class="skip-link" href="#m-app" data-i18n="skip.toMain">跳到主内容</a>
+<div id="m-app" role="main" tabindex="-1">
 
   <!-- 屏1：选择板子 -->
   <section id="m-boards" class="m-screen">
     <header class="m-head">
-      <h1>🦇 AI 狼人杀</h1>
-      <p class="m-sub">✠ 选择你的战场 ✠</p>
+      <h1 data-i18n="m.title">🦇 AI 狼人杀</h1>
+      <p class="m-sub" data-i18n="m.sub">✠ 选择你的战场 ✠</p>
     </header>
     <div id="m-board-grid" class="m-grid"></div>
     <div class="m-foot">
-      <button class="btn" id="m-settings-btn">⚙ 设置</button>
+      <button class="btn" id="m-settings-btn" data-i18n="m.settings">⚙ 设置</button>
+      <button class="btn" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
       <span class="hint" id="m-hint"></span>
-      <button class="btn primary" id="m-next" disabled>下一步 →</button>
+      <button class="btn primary" id="m-next" disabled data-i18n="m.next">下一步 →</button>
     </div>
   </section>
 
   <!-- 屏2：规则确认 -->
   <section id="m-rules" class="m-screen hidden">
     <header class="m-head">
-      <button class="btn small" id="m-back">←</button>
-      <h2 id="m-rules-title">对局规则</h2>
+      <button class="btn small" id="m-back" data-i18n-title="m.back" title="返回">←</button>
+      <h2 id="m-rules-title" data-i18n="m.rulesTitle">对局规则</h2>
     </header>
     <div class="m-scroll">
       <div id="m-board-summary" class="m-summary"></div>
       <div id="m-custom-editor" class="hidden"></div>
-      <h3 class="m-h3">⚔ 对局规则</h3>
+      <h3 class="m-h3" data-i18n="m.rulesSection">⚔ 对局规则</h3>
       <div id="m-rules-list"></div>
       <div class="row2">
-        <label>我的座位<select id="m-my-seat"></select></label>
-        <label>我的昵称<input id="m-my-name" value="我" maxlength="12"></label>
+        <label><span data-i18n="players.seat">我的座位</span><select id="m-my-seat"></select></label>
+        <label><span data-i18n="players.name">我的昵称</span><input id="m-my-name" value="我" maxlength="12"></label>
       </div>
-      <p class="hint" style="margin-top:10px">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
+      <p class="hint" style="margin-top:10px" data-i18n="m.aiNamesHint">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
     </div>
     <div class="m-foot">
       <span class="hint" id="m-err"></span>
-      <button class="btn primary big" id="m-start">⚔ 开始游戏</button>
+      <button class="btn primary big" id="m-start" data-i18n="m.start">⚔ 开始游戏</button>
     </div>
   </section>
 
@@ -59,14 +78,18 @@
       <div class="m-status">
         <b id="m-day"></b>
         <span id="m-phase" class="m-phase-chip"></span>
+        <span id="m-memory" class="m-phase-chip hidden"></span>
       </div>
       <div class="m-top-actions">
-        <button class="btn small ghost" id="m-log-btn" title="事件记录">📜</button>
-        <button class="btn small ghost" id="m-me-btn" title="我的身份">🎴</button>
-        <button class="btn small ghost" id="m-rulebook-btn" title="规则书">📖</button>
-        <button class="btn small danger" id="m-terminate-btn" title="结束本局">⏹</button>
+        <button class="btn small ghost" id="m-log-btn" title="事件记录" data-i18n-title="m.logTitle">📜</button>
+        <button class="btn small ghost" id="m-me-btn" title="我的身份" data-i18n-title="m.meTitle">🎴</button>
+        <button class="btn small ghost" id="m-rulebook-btn" title="规则书" data-i18n-title="game.rulebookTitle">📖</button>
+        <button class="btn small danger" id="m-terminate-btn" title="结束本局" data-i18n-title="game.terminate">⏹</button>
       </div>
     </header>
+
+    <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
+    <div id="m-paused-banner" class="m-paused-banner hidden"></div>
 
     <!-- 圆桌座位层 -->
     <div id="m-table" class="m-table">
@@ -97,12 +120,12 @@
   <div class="drawer-mask" id="m-drawer-mask"></div>
   <div class="drawer-panel">
     <div class="drawer-tabs">
-      <button class="dtab sel" data-tab="log">📜 记录</button>
-      <button class="dtab" data-tab="me">🎴 我的身份</button>
+      <button class="dtab sel" data-tab="log" data-i18n="m.tabLog">📜 记录</button>
+      <button class="dtab" data-tab="me" data-i18n="m.tabMe">🎴 我的身份</button>
       <span style="flex:1"></span>
       <button class="btn ghost small" id="m-drawer-close">✕</button>
     </div>
-    <div class="drawer-body">
+    <div class="drawer-body" role="log" aria-live="polite" data-i18n-aria="game.streamAria">
       <div id="m-drawer-log" class="dtab-page stream"></div>
       <div id="m-drawer-me" class="dtab-page hidden"></div>
     </div>
@@ -114,16 +137,18 @@
 <div id="m-flip" class="m-flip hidden">
   <div class="flip-card" id="m-flip-card">
     <div class="flip-inner">
-      <div class="flip-back">身份牌<br>点击翻开</div>
+      <div class="flip-back" data-i18n-html="m.flipHint">身份牌<br>点击翻开</div>
       <div class="flip-front" id="m-flip-front"></div>
     </div>
   </div>
   <div class="flip-caption" id="m-flip-caption"></div>
   <div class="flip-tools">
-    <button class="btn primary" id="m-flip-done">开始游戏</button>
-    <button class="btn" id="m-inspect-btn">🔍 检视</button>
+    <button class="btn primary" id="m-flip-done" data-i18n="m.start">开始游戏</button>
+    <button class="btn" id="m-inspect-btn" data-i18n="m.inspect">🔍 检视</button>
   </div>
 </div>
+<script src="../i18n.js"></script>
+<script src="../pwa.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b0a10">
+<title>离线 · AI 狼人杀</title>
+<!-- 样式内联：这个页面必须在"任何外部资源都取不到"时仍然能看 -->
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0a10; color: #e8e3d6;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
+  .wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; gap: 14px; }
+  .ring { width: 120px; height: 120px; border-radius: 50%; border: 6px solid #6b5416; box-shadow: inset 0 0 0 4px #c9a227; background: #8a1c2b; display: flex; align-items: center; justify-content: center; font-size: 48px; }
+  h1 { font-size: 20px; margin: 6px 0 0; letter-spacing: 1px; }
+  p { margin: 0; color: #a99f8a; line-height: 1.7; font-size: 14px; max-width: 30em; }
+  .hint { color: #c9a227; }
+  button { margin-top: 8px; padding: 10px 22px; border-radius: 999px; border: 1px solid #c9a227;
+    background: transparent; color: #e2c979; font-size: 15px; cursor: pointer; }
+  button:hover { background: rgba(201,162,39,.12); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="ring">🐺</div>
+  <h1>现在没有网络</h1>
+  <p>离线时打不开新对局：<span class="hint">AI 在服务器端调用模型</span>，断网就没法继续了。</p>
+  <p>已经打开过的页面可以脱离网络显示，但任何推进对局的操作都需要联网——这是单并发、串行调用的必然结果，不是缓存能绕开的。</p>
+  <button onclick="location.reload()">重试</button>
+</div>
+<script>
+  // 网络恢复就自动回首页（离线页不该困住用户）
+  window.addEventListener('online', () => location.replace('/'));
+</script>
+</body>
+</html>

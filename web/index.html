@@ -4,97 +4,132 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI 狼人杀</title>
+<meta name="theme-color" content="#0b0a10">
+<meta name="description" content="与 AI 玩家同桌的哥特暗黑风狼人杀（1 名人类 + AI）">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="app">
+<script>
+/* 初始化守卫（必须是最先执行的脚本）：app.js 还在下载/解析时，按钮虽然点得到但事件还没绑上，
+   点了毫无反应 —— 冷启动慢的设备上会让人以为界面坏了。这里在捕获阶段统一给一句说明。
+   两条安全线：① app.js 初始化完成后置 window.__wwReady=true 放行；
+             ② 8 秒兜底放行 —— 万一初始化失败（比如接口挂了），也不能把界面永久点死。 */
+(function () {
+  window.__wwReady = false;
+  var deadline = Date.now() + 8000;
+  document.addEventListener('click', function (e) {
+    if (window.__wwReady || Date.now() > deadline) return;
+    var box = document.getElementById('setup-error');
+    if (box) box.textContent = '⏳ 界面正在加载配置，请稍候…';
+    e.preventDefault();
+    e.stopPropagation();
+  }, true);
+})();
+</script>
+<a class="skip-link" href="#app" data-i18n="skip.toMain">跳到主内容</a>
+<div id="app" role="main" tabindex="-1">
 
   <!-- ============ 设置页 ============ -->
   <section id="screen-setup" class="screen">
     <header class="topbar">
-      <h1>🐺 AI 狼人杀</h1>
-      <span class="sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</span>
+      <h1 data-i18n="app.title">🐺 AI 狼人杀</h1>
+      <span class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</span>
+      <button class="btn ghost small" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
     </header>
 
     <div class="setup-grid">
+      <!-- 左列：① API 配置 + ② 板子 -->
+      <div class="setup-col">
       <!-- API 配置 -->
       <div class="card" id="card-api">
-        <h2>① API 配置</h2>
-        <label>接口地址 base_url<input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
-        <label>模型 model<input id="cfg-model" placeholder="deepseek-chat"></label>
-        <label>API Key<input id="cfg-key" type="password" placeholder="sk-..."></label>
+        <h2 data-i18n="api.title">① API 配置</h2>
+        <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
+        <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
+        <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
         <div class="row2">
-          <label>温度 temperature<input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
-          <label>最大回复 tokens（建议 16000，思考过程也计入）<input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
+          <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
+          <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
         </div>
+        <label><span data-i18n="api.pace">节奏档位（一次设定思考强度 / 反思频率 / 上下文预算）</span>
+          <select id="cfg-pace"></select></label>
+        <div class="hint" id="cfg-pace-hint"></div>
         <div class="row2">
-          <label>发言思考强度（发言/遗言/PK）
+          <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
             <select id="cfg-effort">
-              <option value="low">最低 low（最快）</option>
-              <option value="high">普通 high（默认）</option>
+              <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
+              <option value="high" data-i18n="api.effortHigh">普通 high（默认）</option>
             </select></label>
-          <label>快速任务思考强度（夜晚/投票等）
+          <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
             <select id="cfg-fasteffort">
-              <option value="low">最低 low（默认，最丝滑）</option>
-              <option value="high">普通 high</option>
+              <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
+              <option value="high" data-i18n="api.fastEffortHigh">普通 high</option>
             </select></label>
         </div>
-        <label>上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）
+        <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>
           <input id="cfg-budget" type="number" step="1000" min="3000"></label>
-        <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> 给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</label>
+        <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> <span data-i18n="api.cacheControl">给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</span></label>
+        <label class="checkline"><input id="cfg-keepalive" type="checkbox"> <span data-i18n="api.keepAlive">复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可</span></label>
         <div class="btnrow">
-          <button class="btn" id="btn-save-config">保存配置</button>
-          <button class="btn ghost" id="btn-test-config">测试连接</button>
+          <button class="btn" id="btn-save-config" data-i18n="common.save">保存配置</button>
+          <button class="btn ghost" id="btn-test-config" data-i18n="common.test">测试连接</button>
           <span id="cfg-test-result" class="hint"></span>
         </div>
       </div>
 
       <!-- 板子 -->
       <div class="card" id="card-board">
-        <h2>② 板子</h2>
-        <label>模板
+        <h2 data-i18n="board.title">② 板子</h2>
+        <label><span data-i18n="board.template">模板</span>
           <select id="board-template"></select>
         </label>
         <div id="board-editor" class="board-editor"></div>
         <div class="hint" id="board-total"></div>
       </div>
+      </div><!-- /左列 -->
 
+      <!-- 右列：③ 规则开关 + ④ 玩家 -->
+      <div class="setup-col">
       <!-- 规则开关 -->
       <div class="card" id="card-rules">
-        <h2>③ 规则开关 <span class="hint">默认 = 网易12人守卫局</span></h2>
+        <h2><span data-i18n="rules.title">③ 规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
         <div id="rules-editor"></div>
       </div>
 
       <!-- 玩家 -->
       <div class="card" id="card-players">
-        <h2>④ 玩家</h2>
-        <label class="checkline"><input type="radio" name="mode" value="play" checked> 我当玩家（其余全是 AI）</label>
-        <label class="checkline"><input type="radio" name="mode" value="watch"> 纯观战（上帝视角看 AI 互杀）</label>
+        <h2 data-i18n="players.title">④ 玩家</h2>
+        <label class="checkline"><input type="radio" name="mode" value="play" checked> <span data-i18n="players.modePlay">我当玩家（其余全是 AI）</span></label>
+        <label class="checkline"><input type="radio" name="mode" value="watch"> <span data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</span></label>
         <div id="play-options">
           <div class="row2">
-            <label>我的座位
+            <label><span data-i18n="players.seat">我的座位</span>
               <select id="my-seat"></select>
             </label>
-            <label>我的昵称<input id="my-name" value="我" maxlength="12"></label>
+            <label><span data-i18n="players.name">我的昵称</span><input id="my-name" value="我" maxlength="12"></label>
           </div>
+          <div class="hint" id="seat-hint"></div>
         </div>
-        <label class="checkline"><input id="use-mock" type="checkbox"> Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</label>
-        <h3>AI 玩家昵称</h3>
+        <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
+        <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
         <div id="ai-names" class="ai-names"></div>
-        <div class="btnrow"><button class="btn ghost" id="btn-rand-names">随机昵称</button></div>
-        <p class="hint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
-        <details><summary class="hint">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
+        <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button></div>
+        <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
+        <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
       </div>
+      </div><!-- /右列 -->
     </div>
 
     <div class="setup-actions">
-      <button class="btn primary big" id="btn-start">🎮 开始游戏</button>
+      <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
       <span class="hint" id="setup-error"></span>
     </div>
     <div id="resume-box" class="hidden card">
-      <h2>发现进行中的对局</h2>
-      <div class="btnrow"><button class="btn primary" id="btn-resume">继续对局</button>
-      <button class="btn ghost" id="btn-discard">放弃并清除</button></div>
+      <h2 data-i18n="resume.title">发现进行中的对局</h2>
+      <div class="btnrow"><button class="btn primary" id="btn-resume" data-i18n="resume.continue">继续对局</button>
+      <button class="btn ghost" id="btn-discard" data-i18n="resume.discard">放弃并清除</button></div>
     </div>
   </section>
 
@@ -105,22 +140,27 @@
         <strong id="g-day">第0天</strong>
         <span id="g-phase" class="phase-chip">开局</span>
         <span id="g-me" class="me-chip"></span>
+        <span id="g-memory" class="me-chip hidden"></span>
       </div>
       <div class="top-actions">
-        <button class="btn ghost" id="btn-rulebook">📖 规则书</button>
-        <button class="btn ghost" id="btn-god">👁 上帝</button>
-        <button class="btn danger" id="btn-terminate">⏹ 结束本局</button>
-        <a class="btn ghost" href="/m/" title="手机 APP 端">📱 APP端</a>
-        <button class="btn ghost" id="btn-home">🏠 首页</button>
+        <button class="btn ghost" id="btn-rulebook" data-i18n="game.rulebook">📖 规则书</button>
+        <button class="btn ghost" id="btn-god" data-i18n="game.god">👁 上帝</button>
+        <button class="btn danger" id="btn-terminate" data-i18n="game.terminate">⏹ 结束本局</button>
+        <a class="btn ghost" href="/m/" title="手机 APP 端" data-i18n="game.appLink" data-i18n-title="game.appLinkTitle">📱 APP端</a>
+        <button class="btn ghost" id="btn-home" data-i18n="game.home">🏠 首页</button>
       </div>
     </header>
+
+    <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
+    <div id="paused-banner" class="paused-banner hidden"></div>
 
     <main class="game-layout">
       <div class="left-col">
         <div id="my-role-card" class="my-role hidden"></div>
         <aside id="seats" class="seats"></aside>
       </div>
-      <section id="stream" class="stream"></section>
+      <section id="stream" class="stream" role="log" aria-live="polite" aria-label="对局事件流" data-i18n-aria="game.streamAria"></section>
+      <section id="coach-panel" class="coach-panel hidden"></section>
     </main>
 
     <footer id="actionbar" class="actionbar">
@@ -130,24 +170,24 @@
 
     <aside id="god-drawer" class="god-drawer hidden">
       <div class="drawer-head">
-        <h3>👁 上帝 / 开发者面板</h3>
-        <button class="btn ghost small" id="btn-god-close" title="关闭面板（返回玩家视角）">✕ 关闭</button>
+        <h3 data-i18n="god.title">👁 上帝 / 开发者面板</h3>
+        <button class="btn ghost small" id="btn-god-close" title="关闭面板（返回玩家视角）" data-i18n-title="god.closeTitle"><span data-i18n="common.close">✕ 关闭</span></button>
       </div>
       <div id="god-stats"></div>
-      <h4>AI 上下文调试</h4>
+      <h4 data-i18n="god.context">AI 上下文调试</h4>
       <div class="row2">
         <select id="god-seat"></select>
-        <button class="btn ghost" id="god-agent-refresh">刷新</button>
+        <button class="btn ghost" id="god-agent-refresh" data-i18n="common.refresh">刷新</button>
       </div>
       <pre id="god-agent" class="god-agent"></pre>
-      <h4>日志查看器</h4>
+      <h4 data-i18n="god.logs">日志查看器</h4>
       <div class="row2">
         <select id="log-level">
-          <option value="">全部级别</option><option value="debug">DEBUG+</option>
+          <option value="" data-i18n="god.allLevels">全部级别</option><option value="debug">DEBUG+</option>
           <option value="info">INFO+</option><option value="warn">WARN+</option><option value="error">仅 ERROR</option>
         </select>
         <select id="log-module">
-          <option value="">全部模块</option>
+          <option value="" data-i18n="god.allModules">全部模块</option>
           <option>engine</option><option>ai</option><option>llm</option><option>api</option><option>server</option>
         </select>
       </div>
@@ -162,17 +202,19 @@
   <div class="flip-wrap">
     <div class="flip-card" id="flip-card">
       <div class="flip-inner">
-        <div class="flip-back"><img class="cb-img" src="assets/roles/card_back.png" alt="" onload="this.nextElementSibling.style.display='none'" onerror="this.remove()"><span class="cb-txt">❓<br>点击翻看你的身份</span></div>
+        <div class="flip-back"><img class="cb-img" src="assets/roles/card_back.png" alt="" onload="this.nextElementSibling.style.display='none'" onerror="this.remove()"><span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span></div>
         <div class="flip-front" id="flip-front"></div>
       </div>
     </div>
     <div class="flip-caption" id="flip-caption"></div>
     <div class="flip-tools">
-      <button class="btn primary" id="btn-flip-done">我记住了，开始游戏</button>
-      <button class="btn" id="btn-inspect">🔍 检视卡牌</button>
+      <button class="btn primary" id="btn-flip-done" data-i18n="overlay.flipDone">我记住了，开始游戏</button>
+      <button class="btn" id="btn-inspect" data-i18n="overlay.inspect">🔍 检视卡牌</button>
     </div>
   </div>
 </div>
+<script src="i18n.js"></script>
+<script src="pwa.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

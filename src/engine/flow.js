@@ -4,153 +4,196 @@
  */
 'use strict';
 const { ROLES } = require('./roles');
+const { resolveNightDamage, triggersCharm } = require('./damage');
 
 // ---------- 输入校验（人类与 AI 共用同一套） ----------
+/**
+ * 任务 → 载荷校验器注册表（P2-1）。
+ *
+ * 之前这是一个 140 行的 switch，且"哪些任务共用同一段校验"只能靠 `fall through` 注释表达
+ * （speech/sheriff_speech/pk_speech 三合一、night_guard/wolf_kill/vote/… 五合一）。
+ * 那种写法有两个具体代价：加任务要在长 switch 里找位置、共用关系一改就容易漏改注释；
+ * 而"必须从候选中选一名"这类语义会散在多处各写一遍。
+ *
+ * 现在共用语义有名字（pickTarget / mustPickOther / textOnly…），任务表一眼能看出谁和谁同类；
+ * 未登记的任务会明确报"未知任务"（不是静默接受任意载荷）。
+ */
+const V = {
+  /** 白天发言（含竞选发言与 PK 发言）：可附带自爆意图 */
+  speech: ({ payload, req, p, game, asInt, inCand, fail, task }) => {
+    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+    if (!text) return fail('发言内容不能为空');
+    const value = { text, explode: false, target: 0, withdraw: false };
+    if (payload.explode) {
+      if (!req.canExplode) return fail('当前不能自爆');
+      if (!game.rules.allowSelfExplode) return fail('本局规则不允许自爆');
+      value.explode = true;
+      if (p.role === 'whitewolfking') {
+        const t = asInt(payload.target);
+        if (!inCand(t)) return fail('白狼王自爆必须选择一名带走的目标');
+        value.target = t;
+      }
+    }
+    if (task === 'sheriff_speech') value.withdraw = !!payload.withdraw;
+    return { ok: true, value };
+  },
+  /** 只要求一段文本（遗言 / 狼队提议） */
+  textOnly: ({ payload, fail }) => {
+    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+    if (!text) return fail('内容不能为空');
+    return { ok: true, value: { text } };
+  },
+  /** 狼队讨论：发言必填，可带刀口建议（0 = 建议空刀） */
+  wolfChat: ({ payload, req, asInt, inCand, fail }) => {
+    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+    if (!text) return fail('讨论发言不能为空');
+    let target = 0;
+    const raw = payload.target;
+    if (raw !== undefined && raw !== null && raw !== 0 && raw !== '0') {
+      const t = asInt(raw);
+      if (!inCand(t)) return fail('建议的刀口目标不合法');
+      target = t;
+    } else if (!req.allowNone) {
+      return fail('本局不允许空刀，请给出一名建议目标');
+    }
+    return { ok: true, value: { text, target } };
+  },
+  /** 骑士决斗：可选，选了就必须给存活的其他玩家 */
+  duelCheck: ({ payload, seat, alive, asInt, fail }) => {
+    const value = { duel: !!payload.duel, target: 0 };
+    if (value.duel) {
+      const t = asInt(payload.target);
+      if (!Number.isInteger(t) || t === seat || !alive.includes(t)) return fail('决斗目标不合法（需一名存活的其他玩家）');
+      value.target = t;
+    }
+    return { ok: true, value };
+  },
+  /** 自爆请求：白狼王必须带走一名存活的其他玩家 */
+  explodeCheck: ({ payload, p, seat, alive, asInt, fail }) => {
+    const value = { explode: !!payload.explode, target: 0 };
+    if (value.explode && p.role === 'whitewolfking') {
+      const t = asInt(payload.target);
+      if (!Number.isInteger(t) || t === seat || !alive.includes(t)) return fail('白狼王自爆必须带走一名存活的其他玩家');
+      value.target = t;
+    }
+    return { ok: true, value };
+  },
+  /** 人类狼轮到自己说话：可发一言，也可空手跳过 */
+  wolfSay: ({ payload }) => {
+    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+    return { ok: true, value: { text, skipped: !text } };
+  },
+  /** 选一名候选（可空过）：守卫/刀人/各种投票共用 */
+  pickTarget: ({ payload, noneOk, asInt, inCand, fail }) => {
+    if (payload.abstain) payload.target = 0;
+    const raw = payload.target;
+    const t = asInt(raw);
+    if (raw === undefined || raw === null || !Number.isInteger(t)) return fail('缺少目标（需要 target 字段）');
+    if (t === 0) {
+      if (!noneOk) return fail('不能弃票/空过，必须选择一名目标');
+      return { ok: true, value: { target: 0 } };
+    }
+    if (!inCand(t)) return fail('目标不合法');
+    return { ok: true, value: { target: t } };
+  },
+  /** 查验：不能查自己 */
+  seerCheck: ({ payload, seat, asInt, inCand, fail }) => {
+    const t = asInt(payload.target);
+    if (!inCand(t)) return fail('查验目标不合法');
+    if (t === seat) return fail('不能查验自己');
+    return { ok: true, value: { target: t } };
+  },
+  /** 摄梦/诅咒/魅惑/暗恋：必须从候选中选一名（候选已排除自己），不允许空过 */
+  mustPickOther: ({ payload, seat, asInt, inCand, fail }) => {
+    const t = asInt(payload.target);
+    if (!Number.isInteger(t)) return fail('缺少目标（需要 target 字段）');
+    if (!inCand(t)) return fail('目标不合法');
+    if (t === seat) return fail('不能选择自己');
+    return { ok: true, value: { target: t } };
+  },
+  /** 女巫用药：每晚最多一瓶，且受板规限制（能否自救等） */
+  witch: ({ payload, req, seat, alive, asInt, fail }) => {
+    const ex = req.extra || {};
+    const value = { antidote: false, poison: 0 };
+    if (payload.antidote) {
+      if (!ex.canAntidote) return fail('解药不可用（已用完或今晚无人被袭击）');
+      value.antidote = true;
+    }
+    const poison = asInt(payload.poison || 0);
+    if (Number.isInteger(poison) && poison > 0) {
+      if (!ex.canPoison) return fail('毒药已用完');
+      if (!alive.includes(poison)) return fail('毒药目标不合法');
+      value.poison = poison;
+    }
+    if (value.antidote && value.poison) return fail('每晚最多使用一瓶药');
+    if (value.antidote && ex.killTarget === seat && !ex.selfSaveAllowed) return fail('本局规则不允许女巫自救');
+    return { ok: true, value };
+  },
+  sheriffRun: ({ payload }) => ({ ok: true, value: { run: !!payload.run } }),
+  badgePass: ({ payload, alive, asInt, fail }) => {
+    const t = asInt(payload.target || 0);
+    if (!Number.isInteger(t) || t === 0) return { ok: true, value: { target: 0 } };
+    if (!alive.includes(t)) return fail('警徽只能移交给存活玩家');
+    return { ok: true, value: { target: t } };
+  },
+  direction: ({ payload, fail }) => {
+    if (payload.direction !== 'cw' && payload.direction !== 'ccw') return fail('方向必须是 cw（顺时针）或 ccw（逆时针）');
+    return { ok: true, value: { direction: payload.direction } };
+  },
+  /** 开枪：可放弃（target 0） */
+  shoot: ({ payload, alive, asInt, fail }) => {
+    const t = asInt(payload.target || 0);
+    if (!Number.isInteger(t) || t === 0) return { ok: true, value: { target: 0 } };
+    if (!alive.includes(t)) return fail('开枪目标不合法');
+    return { ok: true, value: { target: t } };
+  },
+};
+
+const TASK_VALIDATORS = {
+  speech: V.speech,
+  sheriff_speech: V.speech,
+  // pk_speech 同属"白天发言阶段"（rules.md：狼人白天发言阶段可自爆）：
+  // 若只返回 text，flow 里的 `if (v.explode)` 永远取不到值 → 该能力变成死代码
+  pk_speech: V.speech,
+  lastwords: V.textOnly,
+  wolf_propose: V.textOnly,
+  wolf_chat: V.wolfChat,
+  duel_check: V.duelCheck,
+  explode_check: V.explodeCheck,
+  wolf_say: V.wolfSay,
+  night_guard: V.pickTarget,
+  wolf_kill: V.pickTarget,
+  vote: V.pickTarget,
+  pk_vote: V.pickTarget,
+  sheriff_vote: V.pickTarget,
+  seer_check: V.seerCheck,
+  night_dream: V.mustPickOther,
+  crow_curse: V.mustPickOther,
+  wolfbeauty_charm: V.mustPickOther,
+  admirer_crush: V.mustPickOther,
+  witch: V.witch,
+  sheriff_run: V.sheriffRun,
+  badge_pass: V.badgePass,
+  direction: V.direction,
+  shoot: V.shoot,
+};
+
 function validatePayload(task, payload, req, game, seat) {
   const p = game.player(seat);
   const alive = game.aliveSeats();
   const cand = req.candidates || [];
-  const inCand = (t) => Number.isInteger(t) && cand.includes(t);
-  const noneOk = !!req.allowNone;
-  payload = payload && typeof payload === 'object' ? payload : {};
-  const fail = (error) => ({ ok: false, error });
-  const asInt = (v) => { const n = Number(v); return Number.isInteger(n) ? n : NaN; };
-
-  switch (task) {
-    case 'speech':
-    case 'sheriff_speech': {
-      const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
-      if (!text) return fail('发言内容不能为空');
-      const value = { text, explode: false, target: 0, withdraw: false };
-      if (payload.explode) {
-        if (!req.canExplode) return fail('当前不能自爆');
-        if (!game.rules.allowSelfExplode) return fail('本局规则不允许自爆');
-        value.explode = true;
-        if (p.role === 'whitewolfking') {
-          const t = asInt(payload.target);
-          if (!inCand(t)) return fail('白狼王自爆必须选择一名带走的目标');
-          value.target = t;
-        }
-      }
-      if (task === 'sheriff_speech') value.withdraw = !!payload.withdraw;
-      return { ok: true, value };
-    }
-    case 'lastwords':
-    case 'pk_speech':
-    case 'wolf_propose': {
-      const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
-      if (!text) return fail('内容不能为空');
-      return { ok: true, value: { text } };
-    }
-    case 'wolf_chat': {
-      // 狼队讨论：发言必填，可带刀口建议（0 = 建议空刀）
-      const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
-      if (!text) return fail('讨论发言不能为空');
-      let target = 0;
-      const raw = payload.target;
-      if (raw !== undefined && raw !== null && raw !== 0 && raw !== '0') {
-        const t = asInt(raw);
-        if (!inCand(t)) return fail('建议的刀口目标不合法');
-        target = t;
-      } else if (!req.allowNone) {
-        return fail('本局不允许空刀，请给出一名建议目标');
-      }
-      return { ok: true, value: { text, target } };
-    }
-    case 'duel_check': {
-      const value = { duel: !!payload.duel, target: 0 };
-      if (value.duel) {
-        const t = asInt(payload.target);
-        if (!Number.isInteger(t) || t === seat || !alive.includes(t)) return fail('决斗目标不合法（需一名存活的其他玩家）');
-        value.target = t;
-      }
-      return { ok: true, value };
-    }
-    case 'explode_check': {
-      const value = { explode: !!payload.explode, target: 0 };
-      if (value.explode && p.role === 'whitewolfking') {
-        const t = asInt(payload.target);
-        if (!Number.isInteger(t) || t === seat || !alive.includes(t)) return fail('白狼王自爆必须带走一名存活的其他玩家');
-        value.target = t;
-      }
-      return { ok: true, value };
-    }
-    case 'wolf_say': {
-      // 轮到人类狼发言：可发一言，也可空手跳过
-      const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
-      return { ok: true, value: { text, skipped: !text } };
-    }
-    case 'night_guard':
-    case 'wolf_kill':
-    case 'vote':
-    case 'pk_vote':
-    case 'sheriff_vote': {
-      if (payload.abstain) payload.target = 0;
-      const raw = payload.target;
-      const t = asInt(raw);
-      if (raw === undefined || raw === null || !Number.isInteger(t)) return fail('缺少目标（需要 target 字段）');
-      if (t === 0) {
-        if (!noneOk) return fail('不能弃票/空过，必须选择一名目标');
-        return { ok: true, value: { target: 0 } };
-      }
-      if (!inCand(t)) return fail('目标不合法');
-      return { ok: true, value: { target: t } };
-    }
-    case 'seer_check': {
-      const t = asInt(payload.target);
-      if (!inCand(t)) return fail('查验目标不合法');
-      if (t === seat) return fail('不能查验自己');
-      return { ok: true, value: { target: t } };
-    }
-    // 摄梦/诅咒/魅惑/暗恋：必须从候选中选一名（候选已排除自己），不允许空过
-    case 'night_dream':
-    case 'crow_curse':
-    case 'wolfbeauty_charm':
-    case 'admirer_crush': {
-      const t = asInt(payload.target);
-      if (!Number.isInteger(t)) return fail('缺少目标（需要 target 字段）');
-      if (!inCand(t)) return fail('目标不合法');
-      if (t === seat) return fail('不能选择自己');
-      return { ok: true, value: { target: t } };
-    }
-    case 'witch': {
-      const ex = req.extra || {};
-      const value = { antidote: false, poison: 0 };
-      if (payload.antidote) {
-        if (!ex.canAntidote) return fail('解药不可用（已用完或今晚无人被袭击）');
-        value.antidote = true;
-      }
-      const poison = asInt(payload.poison || 0);
-      if (Number.isInteger(poison) && poison > 0) {
-        if (!ex.canPoison) return fail('毒药已用完');
-        if (!alive.includes(poison)) return fail('毒药目标不合法');
-        value.poison = poison;
-      }
-      if (value.antidote && value.poison) return fail('每晚最多使用一瓶药');
-      if (value.antidote && ex.killTarget === seat && !ex.selfSaveAllowed) return fail('本局规则不允许女巫自救');
-      return { ok: true, value };
-    }
-    case 'sheriff_run':
-      return { ok: true, value: { run: !!payload.run } };
-    case 'badge_pass': {
-      const t = asInt(payload.target || 0);
-      if (!Number.isInteger(t) || t === 0) return { ok: true, value: { target: 0 } };
-      if (!alive.includes(t)) return fail('警徽只能移交给存活玩家');
-      return { ok: true, value: { target: t } };
-    }
-    case 'direction': {
-      if (payload.direction !== 'cw' && payload.direction !== 'ccw') return fail('方向必须是 cw（顺时针）或 ccw（逆时针）');
-      return { ok: true, value: { direction: payload.direction } };
-    }
-    case 'shoot': {
-      const t = asInt(payload.target || 0);
-      if (!Number.isInteger(t) || t === 0) return { ok: true, value: { target: 0 } };
-      if (!alive.includes(t)) return fail('开枪目标不合法');
-      return { ok: true, value: { target: t } };
-    }
-    default:
-      return fail('未知任务 ' + task);
-  }
+  const ctx = {
+    p, alive, cand, seat, req, task,
+    game,
+    noneOk: !!req.allowNone,
+    payload: payload && typeof payload === 'object' ? payload : {},
+    fail: (error) => ({ ok: false, error }),
+    inCand: (t) => Number.isInteger(t) && cand.includes(t),
+    asInt: (v) => { const n = Number(v); return Number.isInteger(n) ? n : NaN; },
+  };
+  const validator = TASK_VALIDATORS[task];
+  if (!validator) return { ok: false, error: '未知任务 ' + task };
+  return validator(ctx);
 }
 
 // ---------- 通用询问（人类挂起 / AI 校验重试 + 降级） ----------
@@ -176,15 +219,36 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
 const fb = (fn) => ({ fallback: fn });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const NIGHT_STEP_LABEL = {
-  admirer: '暗恋者行动', guard: '守卫行动', dreamer: '摄梦人行动', wolf: '狼人行动',
-  wolfbeauty: '狼美人行动', seer: '预言家行动', witch: '女巫行动', crow: '乌鸦行动',
+/**
+ * 夜晚步骤注册表（P2-1 能力注册表）。
+ *
+ * 重构前，"某个角色今晚会不会行动"这件事散落在**三处**：
+ *   ① `activeSteps` 过滤（哪些步骤要播报）
+ *   ② `if (step === 'admirer') … else if …` 派发链（怎么跑）
+ *   ③ `hasAliveActor` 判定（全员出局时要不要补固定停顿）
+ * 加一个角色必须同时改三处，漏一处就会出现"夜里没动作但也不播报"或"播报了却没人行动"这类难查的问题，
+ * 而且三处的条件写法并不一致（比如 wolf 用的是狼队而不是 aliveOfRole('wolf')）。
+ *
+ * 现在每个步骤一行：`present`（这个步骤是否存在）、`actors`（谁算行动者）、`run`（怎么跑）、`label`（播报名）。
+ * 顺序仍由 `rules.nightOrder` 决定 —— 那是可配置项，不进代码。
+ */
+const NIGHT_STEPS = {
+  admirer: {
+    label: '暗恋者行动',
+    present: (g) => g.day === 1 && (g.board.admirer || 0) > 0,
+    actors: (g) => g.aliveOfRole('admirer'),
+    run: admirerStep,
+  },
+  guard: { label: '守卫行动', present: (g) => (g.board.guard || 0) > 0, actors: (g) => g.aliveOfRole('guard'), run: guardStep },
+  dreamer: { label: '摄梦人行动', present: (g) => (g.board.dreamer || 0) > 0, actors: (g) => g.aliveOfRole('dreamer'), run: dreamerStep },
+  wolf: { label: '狼人行动', present: (g) => g.wolves().length > 0, actors: (g) => g.nightWolves(), run: wolfStep },
+  wolfbeauty: { label: '狼美人行动', present: (g) => (g.board.wolfbeauty || 0) > 0, actors: (g) => g.aliveOfRole('wolfbeauty'), run: wolfbeautyStep },
+  seer: { label: '预言家行动', present: (g) => (g.board.seer || 0) > 0, actors: (g) => g.aliveOfRole('seer'), run: seerStep },
+  witch: { label: '女巫行动', present: (g) => (g.board.witch || 0) > 0, actors: (g) => g.aliveOfRole('witch'), run: witchStep },
+  crow: { label: '乌鸦行动', present: (g) => (g.board.crow || 0) > 0, actors: (g) => g.aliveOfRole('crow'), run: crowStep },
 };
 
-/** 狼美人殉情触发死因：毒/放逐/枪/摄梦系死亡触发连带；骑士决斗（duel_win）不触发 */
-const CHARM_TRIGGER_CAUSES = ['poison', 'vote_out', 'shot', 'dream', 'dream_follow'];
-
-// ---------- 小工具 ----------
+/** 小工具 */
 function wolfVis(game) { return game.nightWolves().map((p) => p.seat); }
 
 function randomOf(arr, rnd = Math.random) { return arr[Math.floor(rnd() * arr.length)]; }
@@ -236,10 +300,15 @@ async function settleDeath(game, seat, cause, opts = {}) {
   const p = game.player(seat);
   if (!p.alive) return;
   p.alive = false;
+  // 死亡台账：纯记账字段，不参与任何规则判定。
+  // 它让"谁在第几天因何出局"变成权威数据——事件流里放逐/自爆死因是分散的，
+  // 评测指标、上帝面板、赛后复盘都要用它（players 会原样进存档/锚点，故可往返）。
+  p.deathDay = game.day;
+  p.deathCause = cause;
   // 翻牌
   if (game.rules.revealOnDeath) {
     p.revealed = true;
-    game.emit('role_reveal', { actor: seat, data: { seat, role: p.role } });
+    game.emit('role_reveal', { visibleTo: 'all', actor: seat, data: { seat, role: p.role } });
   } else {
     game.emit('role_reveal', { actor: seat, visibleTo: [seat], data: { seat, role: p.role } });
   }
@@ -263,10 +332,11 @@ async function settleDeath(game, seat, cause, opts = {}) {
     game.logger.info('engine', `${seat}号(${ROLES[p.role].name}) 因 ${cause} 触发开枪技能`);
   }
   // 狼美人殉情链：她被毒/放逐/枪/摄梦系带走时，被魅惑者殉情出局（骑士决斗死不触发，魅惑作废）
+  // 触发与否由 damage.js 的死因规则表决定（原来是写死在这里的数组，P2-1 归到规则表）
   if (p.role === 'wolfbeauty') {
     const ts = game.charmMap[seat];
     delete game.charmMap[seat];
-    if (ts != null && CHARM_TRIGGER_CAUSES.includes(cause)) {
+    if (ts != null && triggersCharm(cause)) {
       const tp = game.player(ts);
       if (tp && tp.alive) {
         game.logger.info('engine', `${ts}号 因狼美人（${seat}号）出局而殉情`);
@@ -281,7 +351,7 @@ async function badgeResolve(game, seat) {
   p.isSheriff = false;
   const aliveOthers = game.aliveSeats();
   if (!aliveOthers.length) { game.emit('badge_pass', { actor: seat, data: { to: 0 } }); return; }
-  const v = await askValidated(game, seat, { task: 'badge_pass', _allowDead: true }, fb(() => ({ target: 0 })));
+  const v = await askValidated(game, seat, { task: 'badge_pass', _allowDead: true, candidates: game.aliveSeats() }, fb(() => ({ target: 0 })));
   if (v && v.target && game.player(v.target).alive) {
     game.player(v.target).isSheriff = true;
     game.emit('badge_pass', { actor: seat, data: { to: v.target } });
@@ -309,30 +379,20 @@ async function nightPhase(game) {
   game.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
   game.activeCurse = []; // 乌鸦诅咒只在"次日的放逐投票"生效，新的一夜先清空
   game.emit('phase', { data: { title: `第${game.day}夜 · 天黑请闭眼` } });
+  // 日切边界：上一个白天已完整结束 → 让已创建的 AI 在后台整理纪要（优先级 1，不阻塞流程）。
+  // 这样"反思"不再压在新一天的首个决策里，也就不会再出现"某 AI 首答异常慢"。
+  if (game.day > 1 && typeof game.scheduleReflection === 'function') game.scheduleReflection(game.day - 1);
   // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播；暗恋者仅首夜行动
-  const activeSteps = game.rules.nightOrder.filter((s) => {
-    if (s === 'wolf') return game.wolves().length > 0;
-    if (s === 'admirer') return game.day === 1 && (game.board.admirer || 0) > 0;
-    return (game.board[s] || 0) > 0;
-  });
+  const activeSteps = game.rules.nightOrder.filter((s) => NIGHT_STEPS[s] && NIGHT_STEPS[s].present(game));
   let idx = 0;
   for (const step of game.rules.nightOrder) {
-    if (!activeSteps.includes(step)) continue;
+    const cap = NIGHT_STEPS[step];
+    if (!cap || !activeSteps.includes(step)) continue;
     idx++;
-    game.emit('night_step', { data: { step, label: NIGHT_STEP_LABEL[step] || step, index: idx, total: activeSteps.length } });
-    if (step === 'admirer') await admirerStep(game);
-    else if (step === 'guard') await guardStep(game);
-    else if (step === 'dreamer') await dreamerStep(game);
-    else if (step === 'wolf') await wolfStep(game);
-    else if (step === 'wolfbeauty') await wolfbeautyStep(game);
-    else if (step === 'seer') await seerStep(game);
-    else if (step === 'witch') await witchStep(game);
-    else if (step === 'crow') await crowStep(game);
+    game.emit('night_step', { data: { step, label: cap.label, index: idx, total: activeSteps.length } });
+    await cap.run(game);
     // 该角色已全员出局时步骤会"秒过"，加固定停顿避免时长推断
-    const hasAliveActor = step === 'wolf'
-      ? game.nightWolves().length > 0
-      : game.aliveOfRole(step).length > 0;
-    if (!hasAliveActor) await sleep(game.stepPauseMs != null ? game.stepPauseMs : 2000);
+    if (!cap.actors(game).length) await sleep(game.stepPauseMs != null ? game.stepPauseMs : 2000);
   }
   resolveNightDeaths(game);
 }
@@ -486,7 +546,7 @@ async function wolfStep(game) {
       if (n > max) { max = n; tops = [Number(t)]; }
       else if (n === max) tops.push(Number(t));
     }
-    final = randomOf(tops);
+    final = randomOf(tops, game.rnd);
   }
   game.emit('wolf_kill', { visibleTo: vis, data: { target: final } });
   game.night.wolfKill = final;
@@ -526,57 +586,21 @@ async function witchStep(game) {
   }
 }
 
+/**
+ * 夜晚结算：伤害清单交给 damage.js 的规则表算（P2-1），这里只负责
+ * 把结果落到 game.pendingDeaths，并更新跨夜状态。
+ *
+ * 为什么保留这个薄封装：`_internals.resolveNightDeaths` 是既有测试与调试入口，
+ * 名字也仍然准确（"结算夜晚死亡"）；真正的判定逻辑已经搬进规则表，不再藏在本文件的 if/else 顺序里。
+ */
 function resolveNightDeaths(game) {
-  const { wolfKill, saved, guardActions, poisonTargets } = game.night;
-  const dreamActions = game.night.dreamActions || [];
-  const charmActions = game.night.charmActions || [];
-  const curses = game.night.curses || [];
-  const deaths = [];
-  const guarded = guardActions.some((g) => g.target === wolfKill && wolfKill > 0);
-  if (wolfKill > 0) {
-    if (saved && guarded) {
-      // 同守同救：按开关判定
-      if (game.rules.milkThrough === 'die') {
-        deaths.push({ seat: wolfKill, cause: 'wolf_kill' });
-      } else if (game.rules.milkThrough === 'guardDies') {
-        const selfGuard = guardActions.some((g) => g.target === wolfKill && g.seat === wolfKill);
-        if (selfGuard) deaths.push({ seat: wolfKill, cause: 'wolf_kill' });
-      } // cancel：无人死
-    } else if (!saved && !guarded) {
-      deaths.push({ seat: wolfKill, cause: 'wolf_kill' });
-    }
-    // 被救未守 / 被守未救 → 存活
-  }
-  for (const pt of poisonTargets) deaths.push({ seat: pt, cause: 'poison' });
-
-  // ---------- 摄梦结算（官方规则） ----------
-  // ① 摄梦人当晚死亡 → 梦游者连带出局（不可守护、不可救治）
-  // ② 摄梦人存活 → 梦游者当夜免疫狼刀与毒杀（技能视为落空，药照耗）
-  // ③ 连续两晚摄梦同一人 → 梦游者死亡（女巫救不活，死因不计入猎人/狼王开枪）
-  const dreamTargets = new Set(dreamActions.map((a) => a.target));
-  for (const a of dreamActions) {
-    const dreamerDies = deaths.some((d) => d.seat === a.seat);
-    if (dreamerDies) {
-      deaths.push({ seat: a.target, cause: 'dream_follow' });
-      continue;
-    }
-    for (let i = deaths.length - 1; i >= 0; i--) {
-      if (deaths[i].seat === a.target) deaths.splice(i, 1); // 夜间伤害落空
-    }
-    if (game.lastDreamMap && game.lastDreamMap[a.seat] === a.target) {
-      deaths.push({ seat: a.target, cause: 'dream' });
-    }
-  }
-
-  // 去重（同一人只死一次；毒 > 连摄死 > 其余，同座位按原因优先级保留）
-  const prio = (c) => (c === 'poison' ? 0 : c === 'dream' ? 1 : 2);
-  const seen = new Set();
-  game.pendingDeaths = deaths
-    .sort((a, b) => prio(a.cause) - prio(b.cause) || a.seat - b.seat)
-    .filter((d) => { if (seen.has(d.seat)) return false; seen.add(d.seat); return true; });
+  game.pendingDeaths = resolveNightDamage(game);
   game.lastNightDeaths = game.pendingDeaths.slice();
 
   // ---------- 跨夜状态更新 ----------
+  const dreamActions = (game.night && game.night.dreamActions) || [];
+  const charmActions = (game.night && game.night.charmActions) || [];
+  const curses = (game.night && game.night.curses) || [];
   game.lastDreamMap = {};
   for (const a of dreamActions) game.lastDreamMap[a.seat] = a.target;
   for (const a of charmActions) game.charmMap[a.seat] = a.target; // 最新魅惑覆盖旧的
@@ -606,10 +630,10 @@ async function handleExplode(game, seat, v, { inElection }) {
     const mode = game.rules.badgeSwallow;
     if (mode === 'single' || (mode === 'double' && game.swallowCount >= 2)) {
       game.badgeSwallowed = true;
-      game.emit('system', { text: '警徽被吞掉，本局不再有警长。' });
+      game.emit('system', { visibleTo: 'all', text: '警徽被吞掉，本局不再有警长。' });
     } else {
       game.sheriffElectionPending = true;
-      game.emit('system', { text: '警长竞选被打断，今日直接天黑；警徽保留，明日重新竞选。' });
+      game.emit('system', { visibleTo: 'all', text: '警长竞选被打断，今日直接天黑；警徽保留，明日重新竞选。' });
     }
     if (v.target) await settleDeath(game, v.target, 'shot', {});
     await processShots(game);
@@ -633,7 +657,7 @@ async function consumeExplodeRequest(game) {
   // 排队期间目标可能已出局（如被开枪带走）：降级为不带人并公告，避免玩家以为目标被带走
   let target = req.target || 0;
   if (target && !game.player(target).alive) {
-    game.emit('system', { text: `⚠️ ${p.seat}号（${ROLES[p.role].name}）自爆：原目标 ${target}号 已出局，本次自爆不带人，天黑了。` });
+    game.emit('system', { visibleTo: 'all', text: `⚠️ ${p.seat}号（${ROLES[p.role].name}）自爆：原目标 ${target}号 已出局，本次自爆不带人，天黑了。` });
     target = 0;
   }
   game.logger.info('engine', `${req.seat}号 随时自爆生效（target=${target || 0}）`);
@@ -646,20 +670,20 @@ async function handleDuel(game, knightSeat, target) {
   // 发动决斗 = 翻牌：骑士身份当场公开（不受翻牌规则限制，这是技能的一部分）
   const kp = game.player(knightSeat);
   kp.revealed = true;
-  game.emit('role_reveal', { actor: knightSeat, data: { seat: knightSeat, role: kp.role } });
+  game.emit('role_reveal', { visibleTo: 'all', actor: knightSeat, data: { seat: knightSeat, role: kp.role } });
   game.emit('duel', { actor: knightSeat, data: { target } });
   const tp = game.player(target);
   if (tp && tp.alive && ROLES[tp.role].team === 'wolf') {
     await settleDeath(game, target, 'duel_win', {});
     await processShots(game);
     checkEnd(game);
-    game.emit('system', { text: `⚔️ 决斗成功：${target}号 是狼人，立即出局，天黑了。` });
+    game.emit('system', { visibleTo: 'all', text: `⚔️ 决斗成功：${target}号 是狼人，立即出局，天黑了。` });
     return 'dayEnded';
   }
   await settleDeath(game, knightSeat, 'duel_fail', {});
   await processShots(game);
   checkEnd(game);
-  game.emit('system', { text: `⚔️ 决斗失败：${target}号 是好人，骑士以死谢罪，白天继续。` });
+  game.emit('system', { visibleTo: 'all', text: `⚔️ 决斗失败：${target}号 是好人，骑士以死谢罪，白天继续。` });
   return 'duelFail';
 }
 
@@ -673,7 +697,7 @@ async function consumeDuelRequest(game) {
   const tp = Number.isInteger(req.target) ? game.player(req.target) : null;
   if (!tp || !tp.alive || req.target === req.seat) {
     // 目标在排队期间出局：公告取消（此前为静默丢弃，玩家会以为决斗没提交上）
-    game.emit('system', { text: `⚠️ ${req.seat}号（骑士）的决斗目标已出局，本次决斗取消。` });
+    game.emit('system', { visibleTo: 'all', text: `⚠️ ${req.seat}号（骑士）的决斗目标已出局，本次决斗取消。` });
     return false;
   }
   game.logger.info('engine', `${req.seat}号(骑士) 随时决斗生效（target=${req.target}）`);
@@ -684,7 +708,7 @@ async function consumeDuelRequest(game) {
 async function daySkillCheck(game) {
   const actors = game.alivePlayers().filter((p) => !p.isHuman && (p.role === 'whitewolfking' || p.role === 'knight'));
   for (let i = actors.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(game.rnd() * (i + 1));
     [actors[i], actors[j]] = [actors[j], actors[i]];
   }
   for (const p of actors) {
@@ -721,14 +745,14 @@ async function electionPhase(game) {
     }
     game.emit('sheriff_run', { actor: p.seat, data: { run: v.run } });
   }
-  game.emit('system', { text: candidates.length ? `🎩 上警名单：${candidates.join('、')} 号` : '🎩 无人上警，本局没有警长。' });
+  game.emit('system', { visibleTo: 'all', text: candidates.length ? `🎩 上警名单：${candidates.join('、')} 号` : '🎩 无人上警，本局没有警长。' });
   // 2. 警上演讲（可退水/自爆）
   const campaignOrder = [];
   for (const s of candidates) {
     const p = game.player(s);
     if (!p.alive) continue;
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: true }, fb(() => ({ text: '大家好。', withdraw: false })));
+    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: true, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '大家好。', withdraw: false })));
     if (v.explode) {
       const r = await handleExplode(game, s, v, { inElection: true });
       if (game.badgeSwallowed) { game.emit('sheriff_none', {}); return 'ok'; }
@@ -752,13 +776,13 @@ async function electionPhase(game) {
   if (r.allZero) { game.emit('sheriff_none', {}); return 'ok'; }
   if (r.topSeats.length === 1) { electSheriff(game, r.topSeats[0]); return 'ok'; }
   // 4. 平票 PK（与竞选发言顺序相反）后再投
-  game.emit('system', { text: `警长竞选平票，${r.topSeats.join('、')} 号 PK 后重新投票。` });
+  game.emit('system', { visibleTo: 'all', text: `警长竞选平票，${r.topSeats.join('、')} 号 PK 后重新投票。` });
   const pkOrder = campaignOrder.filter((s) => r.topSeats.includes(s)).reverse();
   for (const s of pkOrder) {
     const p = game.player(s);
     if (!p.alive) continue;
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: false }, fb(() => ({ text: '再给大家讲讲我的逻辑。' })));
+    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: false, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '再给大家讲讲我的逻辑。' })));
     if (v.explode) {
       const r2 = await handleExplode(game, s, v, { inElection: true });
       if (game.badgeSwallowed) { game.emit('sheriff_none', {}); return 'ok'; }
@@ -870,9 +894,9 @@ async function speechPhase(game) {
   } else {
     let anchor;
     if (game.rules.noSheriffSpeechStart === 'afterDeath' && deaths.length) anchor = deaths[0].seat;
-    else anchor = randomOf(game.aliveSeats());
+    else anchor = randomOf(game.aliveSeats(), game.rnd);
     order = buildSpeechOrder(game, anchor, 1, false);
-    game.emit('system', { text: order.length ? `今天从 ${order[0]}号 开始顺时针依次发言。` : '' });
+    game.emit('system', { visibleTo: 'all', text: order.length ? `今天从 ${order[0]}号 开始顺时针依次发言。` : '' });
   }
   game.lastSpeechOrder = order;
   for (const s of order) {
@@ -881,7 +905,10 @@ async function speechPhase(game) {
     if (!p.alive) continue;
     if (await consumeExplodeRequest(game)) return 'dayEnded'; // 当前发言者开口前
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'speech', canExplode }, fb(() => ({ text: '我过。' })));
+    // candidates 必须传：白狼王自爆带人的目标由 validatePayload 用 inCand 校验，
+    // 不传则 inCand 恒为 false → 技能永远无法通过校验（等于死代码 + 每次白烧两次重试）。
+    const explodeTargets = () => game.aliveSeats().filter((x) => x !== s);
+    const v = await askValidated(game, s, { task: 'speech', canExplode, candidates: explodeTargets() }, fb(() => ({ text: '我过。' })));
     if (v.explode) {
       await handleExplode(game, s, v, { inElection: false });
       return 'dayEnded';
@@ -907,7 +934,7 @@ async function votePhase(game) {
   if (await consumeExplodeRequest(game)) return; // 计票完成前自爆 → 本轮投票作废
   if (await consumeDuelRequest(game)) return;
   if (r.allZero) {
-    game.emit('system', { text: '全员弃票，今天无人被放逐。' });
+    game.emit('system', { visibleTo: 'all', text: '全员弃票，今天无人被放逐。' });
     return;
   }
   if (r.topSeats.length === 1) {
@@ -916,7 +943,7 @@ async function votePhase(game) {
   }
   // 平票 PK
   game.phase = 'pk';
-  game.emit('system', { text: `平票！${r.topSeats.join('、')} 号进行 PK 发言。` });
+  game.emit('system', { visibleTo: 'all', text: `平票！${r.topSeats.join('、')} 号进行 PK 发言。` });
   const pkOrder = (game.lastSpeechOrder || []).filter((s) => r.topSeats.includes(s)).reverse();
   const missing = r.topSeats.filter((s) => !pkOrder.includes(s));
   pkOrder.push(...missing);
@@ -925,7 +952,7 @@ async function votePhase(game) {
     if (!p.alive) continue;
     if (await consumeExplodeRequest(game)) return;
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'pk_speech', canExplode }, fb(() => ({ text: '我再说明一下，我不是狼。' })));
+    const v = await askValidated(game, s, { task: 'pk_speech', canExplode, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '我再说明一下，我不是狼。' })));
     if (v.explode) {
       await handleExplode(game, s, v, { inElection: false });
       return;
@@ -937,7 +964,7 @@ async function votePhase(game) {
   const voters2 = voters.filter((s) => !r.topSeats.includes(s));
   const r2 = await secretVote(game, { task: 'pk_vote', voters: voters2, candidates: r.topSeats, allowNone: true });
   if (r2.allZero || r2.topSeats.length !== 1) {
-    game.emit('system', { text: 'PK 后仍未分出胜负，今天无人被放逐。' });
+    game.emit('system', { visibleTo: 'all', text: 'PK 后仍未分出胜负，今天无人被放逐。' });
     return;
   }
   await exile(game, r2.topSeats[0]);
@@ -966,8 +993,25 @@ async function runGame(game, opts = {}) {
       game.logger.info('engine', `对局已被手动终止并结算：${game.winReason}，共 ${game.day} 天`);
       return;
     }
+    // 外部原因暂停（配额/套餐/鉴权）：不判负、不置 finished，状态与锚点原样保留
+    if (err && err.code === 'GAME_PAUSED') {
+      game.logger.warn('engine', `对局已暂停并等待恢复：${game.paused && game.paused.message}（第 ${game.day} 天 · ${game.phase}）`);
+      return;
+    }
     throw err;
   }
+}
+
+/**
+ * 首夜后的警长竞选。抽成函数是因为**恢复路径也必须重放它**：
+ * 旧实现只在"开新局"分支里调用，从 night 锚点恢复时会整段跳过竞选 →
+ * 事件流从这一刻起与原局分叉（seq 全面错位），决策 journal 全部落空，恢复局走向也变了。
+ */
+async function firstNightElection(game) {
+  if (game.day !== 1 || game.winner) return false;
+  if (!game.rules.sheriff || game.badgeSwallowed) return false;
+  const r = await electionPhase(game);
+  return r === 'dayEnded';
 }
 
 async function runGameInner(game, resumeFrom = null) {
@@ -990,10 +1034,7 @@ async function runGameInner(game, resumeFrom = null) {
     const pw = checkWinWithPending(game);
     if (pw) setWinner(game, pw);
     // 警长竞选（首夜后、宣布死讯前）
-    if (!game.winner && game.rules.sheriff && !game.badgeSwallowed) {
-      const r = await electionPhase(game);
-      if (r === 'dayEnded') game._dayEnded = true;
-    }
+    if (await firstNightElection(game)) game._dayEnded = true;
     await dawnPhase(game);
     dayEnded = !!game._dayEnded;
     game._dayEnded = false;
@@ -1018,6 +1059,8 @@ async function runGameInner(game, resumeFrom = null) {
     await nightPhase(game);
     const pw2 = checkWinWithPending(game);
     if (pw2) setWinner(game, pw2);
+    // 恢复重放到"首夜"时，这里同样要补上警长竞选（与开新局路径严格一致）
+    if (resumeFrom === 'night' && await firstNightElection(game)) dayEnded = true;
     await dawnPhase(game);
   }
   game.finish();
@@ -1028,4 +1071,4 @@ async function runGameInner(game, resumeFrom = null) {
 
 module.exports = { runGame, validatePayload, secretVote, buildSpeechOrder, checkWinWithPending,
   // 供单元测试直接驱动内部阶段
-  _internals: { nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep } };
+  _internals: { nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS } };
