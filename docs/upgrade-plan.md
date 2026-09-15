@@ -1349,6 +1349,28 @@ UI 勾选的 Mock 真的落到存档、全程**零 JS 异常 / 零 console 错�
 - **英文模式下仍有中文残留 142 处**（设置页 60 / 翻牌页 31 / 对局页 29 / 手机首页 22），实测见 `%TEMP%\ww-i18nscan.js`。其中相当一部分是**不该翻译的数据**（AI 昵称、AI 发言），其余是引擎侧内容（角色名、规则名与说明、节奏档位说明、事件流正文）。`web/i18n.js` 开头**明确写了覆盖范围**：只翻"界面外壳"，不翻"游戏内容"（硬翻会破坏中文规则术语的一致性）。这属于既定范围而非本次回归；若要推进多语言，建议单独排期，从"引擎元数据 + 术语表"入手，而不是零散补 key。
 - 24 处字号/间距裸值（如 7px/10px/18px/22px/24px/30px）**刻意保留**：它们在字号阶与间距阶里没有等值 token，套用最近的 token 会改变实际尺寸（例如 24px 角色名会变成 26px），不属于"等值重构"。
 
+---
+
+## 11. Android 打包
+
+视觉改完才打包（避免包里的样式与仓库不一致）。链路与本机前置：
+
+| 项 | 值 |
+|---|---|
+| 打包命令 | `node scripts/build-app.js` → `cd app && npx cap sync android` → `app/android/gradlew.bat assembleDebug` |
+| 一键脚本 | `npm run app:apk`（`scripts/update-app.sh`，bash；含 adb 安装） |
+| JDK | `D:\jdk-21.0.12.1+1`（JDK 21；PATH 上的 Java 17 不够，gradle 用 `JAVA_HOME`） |
+| Android SDK | `D:\android-sdk`（platforms/android-36、build-tools 36.0.0、platform-tools、licenses 齐备；路径写在 `app/android/local.properties`） |
+| Gradle | wrapper 8.14.3（`~/.gradle/wrapper/dists` 已有缓存） |
+| AGP / SDK 版本 | AGP 8.13.0；compileSdk 36 / targetSdk 36 / minSdk 24 |
+
+产物与校验：
+
+- 产物：`app/android/app/build/outputs/apk/debug/app-debug.apk`（debug 包；根目录另存一份 `werewolf-ai-1.1-debug.apk` 便于取用）
+- 版本：`versionCode 2` / `versionName "1.1"`（上次是 1/1.0，便于区分新旧包）
+- 内容校验：直接解析 APK（zip）读出内嵌前端资源，确认 `style.css` / `app.js` / `m/m.css` / `i18n.js` 都是本次这一版（脚本 `%TEMP%\ww-apkcheck.js`；注意 GNU tar 读不了 zip，`tar -tf app.apk` 会静默失败，别用它校验）
+- 安装：`adb install -r werewolf-ai-1.1-debug.apk`（本次构建时 `adb devices` 为空，未自动安装）
+
 
 
 
