@@ -9,7 +9,7 @@
  */
 'use strict';
 const llm = require('./llm');
-const { buildSystemPrompt, reflectionInstruction } = require('./prompts');
+const { buildSystemPrompt, reflectionInstruction, lessonInstruction } = require('./prompts');
 const ctx = require('./context');
 const { renderEvent } = require('../engine/render');
 
@@ -44,7 +44,7 @@ function extractJson(text) {
 const DIGEST_MAX_CHARS = 700;
 
 class Agent {
-  constructor(player, game, llmCfg, logger) {
+  constructor(player, game, llmCfg, logger, experienceStore = null) {
     this.player = player;
     this.game = game;
     this.llmCfg = llmCfg;
@@ -53,11 +53,16 @@ class Agent {
     this.turns = 0;
     this.lastPromptTokens = 0;
     this.contextTokens = 0;      // 本次决策上下文估算（上帝面板可见）
+    this.lastReasoning = '';     // 最近一次的内心独白（思考模型的 reasoning 轨迹，上帝面板/复盘用）
     this.compressions = 0;       // 兼容旧统计字段名：实际为"纪要生成次数"
     this.digests = new Map();    // day -> 纪要文本（L1）
+    this.suspicion = {};         // seat -> 怀疑度（-100 确定好人 ~ +100 确定是狼，随每日反思更新）
     this._reflecting = new Map(); // day -> Promise（防并发重复反思）
     this._cacheWarned = false;   // 缓存告警每座每局只报一次（服务商缓存 TTL 过期属预期，不必刷屏）
-    const sys = { role: 'system', content: buildSystemPrompt(game, player) };
+    // 跨局经验：开局时按角色从经验池检索（局内稳定，保前缀缓存）
+    this.experienceStore = experienceStore;
+    const expText = experienceStore ? experienceStore.forRole(player.role).map((t) => `- ${t}`).join('\n') : '';
+    const sys = { role: 'system', content: buildSystemPrompt(game, player, expText) };
     if (llmCfg.cacheControl) {
       sys.content = [{ type: 'text', text: sys.content, cache_control: { type: 'ephemeral' } }];
     }
@@ -100,17 +105,55 @@ class Agent {
           meta: { label: `${this.player.seat}号`, task: `第${day}天反思`, seat: this.player.seat },
         });
       let text = (out.content || '').trim();
+      // 反思现在输出 JSON {summary, suspicion}：纪要进 L1，怀疑度进 agent 状态（解析失败降级为纯文本纪要）
+      try {
+        const parsed = extractJson(text);
+        if (parsed && typeof parsed.summary === 'string' && parsed.summary.trim()) {
+          text = parsed.summary.trim();
+          if (parsed.suspicion && typeof parsed.suspicion === 'object') {
+            for (const [k, v] of Object.entries(parsed.suspicion)) {
+              const s = parseInt(k, 10);
+              const n = Number(v);
+              if (Number.isInteger(s) && g.player(s) && s !== this.player.seat && Number.isFinite(n)) {
+                this.suspicion[s] = Math.max(-100, Math.min(100, Math.round(n)));
+              }
+            }
+          }
+        }
+      } catch (_) { /* 非 JSON 输出：按纯文本纪要处理 */ }
       if (text.length > DIGEST_MAX_CHARS) text = text.slice(0, DIGEST_MAX_CHARS) + '…';
       if (!text) throw new Error('empty digest');
       this.compressions++;
       if (g.llmStats) g.llmStats.compressions = (g.llmStats.compressions || 0) + 1;
-      this.logger.info('ai', `${this.player.seat}号 第${day}天纪要生成完成（${text.length}字）`);
+      this.logger.info('ai', `${this.player.seat}号 第${day}天纪要生成完成（${text.length}字，怀疑度 ${Object.keys(this.suspicion).length} 人）`);
       return text;
     } catch (err) {
       this.logger.warn('ai', `${this.player.seat}号 第${day}天反思失败，降级为事实骨架：${err.message}`);
       const ledger = ctx.aggregate(g, this.player);
       return ctx.skeletonDigest(g, ledger, day);
     }
+  }
+
+  /** 局终复盘：对照自己的反思纪要与终局真相提炼跨局经验（供经验池入库；mock 智能体无此能力） */
+  async generateLessons() {
+    const g = this.game;
+    const digestLines = [...this.digests.entries()].sort((a, b) => a[0] - b[0])
+      .map(([d, t]) => `◆ 第${d}天：${t}`).join('\n');
+    const out = await llm.chatCompletion(this.llmCfg,
+      [{ role: 'user', content: lessonInstruction(g, this.player, digestLines) }],
+      {
+        logger: this.logger,
+        effort: this.llmCfg.fastEffort || 'low',
+        maxTokens: 2000,
+        meta: { label: `${this.player.seat}号`, task: '局终复盘', seat: this.player.seat },
+      });
+    const parsed = extractJson(out.content || '');
+    if (!parsed || !Array.isArray(parsed.lessons)) return [];
+    const role = this.player.role;
+    return parsed.lessons
+      .filter((t) => typeof t === 'string' && t.trim())
+      .slice(0, 3)
+      .map((text) => ({ role, text: text.trim(), boardSize: g.players.length }));
   }
 
   async decide(request) {
@@ -123,6 +166,7 @@ class Agent {
       digests: new Map(this.digests),
       lastSeq: this.lastSeq,
       transcriptDays: [g.day - 1, g.day].filter((d) => d >= 1),
+      suspicion: this.suspicion,
     };
     const budget = Number(this.llmCfg.contextBudget) > 0 ? Number(this.llmCfg.contextBudget) : 12000;
     const built = ctx.trimToBudget(g, this.player, request, state, budget);
@@ -141,6 +185,11 @@ class Agent {
     // 3. 更新"新事件"游标（本次调用时点之前的都算已读）
     this.lastSeq = g.visibleEvents(seat, 0).reduce((m, e) => Math.max(m, e.seq), 0);
     this.turns++;
+    // 3.5 内心独白：思考模型的 reasoning 轨迹，仅上帝可见（绝不进任何 AI 上下文——NOISE_TYPES 已过滤）
+    if (out.reasoning) {
+      this.lastReasoning = out.reasoning;
+      g.emit('ai_reasoning', { actor: seat, visibleTo: 'god', data: { task: request.task, text: out.reasoning.slice(0, 1500) } });
+    }
     // 4. 遥测
     this.lastPromptTokens = out.usage.promptTokens;
     g.llmStats.calls++;
@@ -167,9 +216,9 @@ class Agent {
   }
 }
 
-/** 供 server 使用的工厂 */
-function makeAgentFactory(llmCfg, logger) {
-  return (player, game) => new Agent(player, game, llmCfg, logger);
+/** 供 server 使用的工厂（experienceStore：跨局经验池，可为 null） */
+function makeAgentFactory(llmCfg, logger, experienceStore = null) {
+  return (player, game) => new Agent(player, game, llmCfg, logger, experienceStore);
 }
 
 module.exports = { Agent, makeAgentFactory, extractJson };

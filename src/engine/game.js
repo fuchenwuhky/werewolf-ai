@@ -75,6 +75,7 @@ class Game {
     this.witch = { antidoteUsed: false, poisonUsed: false };
     this._agents = new Map();
     this._abort = new AbortController(); // terminate() 时中断在途 LLM 调用，结束对局立即生效
+    this._anchor = null;       // 断点恢复锚点（markAnchor 在白天/夜晚边界拍摄）
     this.llmStats = { calls: 0, promptTokens: 0, cachedTokens: 0, completionTokens: 0, errors: 0, compressions: 0 };
     this.stepPauseMs = opts.stepPauseMs != null ? opts.stepPauseMs : 2000; // 夜晚死角色步骤的固定停顿（测试可置 0）
   }
@@ -251,6 +252,83 @@ class Game {
       day: this.day, phase: this.phase, winner: this.winner, winReason: this.winReason,
       started: this.started, finished: this.finished, llmStats: this.llmStats,
     };
+  }
+
+  /** AI 智能体状态快照（反思纪要/怀疑度/事件游标），供断点恢复后无缝续跑 */
+  serializeAgents() {
+    const out = {};
+    for (const [seat, agent] of this._agents) {
+      if (!agent || typeof agent.digests !== 'object') continue;
+      out[seat] = { digests: [...agent.digests.entries()], suspicion: agent.suspicion || {}, lastSeq: agent.lastSeq || 0 };
+    }
+    return out;
+  }
+
+  restoreAgentState(seat, state) {
+    if (!this._agents.has(seat) || !state) return;
+    const agent = this._agents.get(seat);
+    if (Array.isArray(state.digests)) agent.digests = new Map(state.digests);
+    if (state.suspicion && typeof state.suspicion === 'object') agent.suspicion = state.suspicion;
+    agent.lastSeq = state.lastSeq || 0;
+  }
+
+  /**
+   * 断点恢复锚点：在"白天发言开始前"与"夜晚开始前"两个可安全重放的边界拍摄全量快照。
+   * 从锚点恢复 = 完整重建对局（含 AI 记忆），重放锚点标记的阶段——无信息丢失、无重复发言。
+   */
+  markAnchor(nextPhase) {
+    this._anchor = {
+      ...this.toJSON(),
+      seq: this.seq,
+      pendingDeaths: this.pendingDeaths, lastNightDeaths: this.lastNightDeaths,
+      night: this.night, witch: this.witch,
+      crush: this.crush, charmMap: this.charmMap, lastDreamMap: this.lastDreamMap,
+      activeCurse: this.activeCurse, lastProtect: this.lastProtect, lastProtectMap: this.lastProtectMap,
+      lastSpeechOrder: this.lastSpeechOrder, _shots: this._shots,
+      swallowCount: this.swallowCount, badgeSwallowed: this.badgeSwallowed,
+      sheriffElectionPending: this.sheriffElectionPending,
+      nextPhase,
+      agentStates: this.serializeAgents(),
+    };
+    return this._anchor;
+  }
+
+  /** 从锚点快照重建对局实例（events/players 全量恢复，agent 惰性重建后用 restoreAgentState 回填记忆） */
+  static fromJSON(data, opts = {}) {
+    const playersMeta = (data.players || []).map((p) => ({
+      name: p.name, isHuman: !!p.isHuman, personality: p.personality || '',
+      personaName: p.personaName || '', personaTag: p.personaTag || '',
+    }));
+    const g = new Game({
+      id: data.id, board: data.board, rules: data.rules, players: playersMeta,
+      agentFactory: opts.agentFactory || null, logger: opts.logger, stepPauseMs: opts.stepPauseMs,
+    });
+    g.players.forEach((p, i) => { if (data.players[i]) Object.assign(p, data.players[i]); });
+    g.events = data.events || [];
+    g.seq = data.seq || (g.events.length ? g.events[g.events.length - 1].seq : 0);
+    g.day = data.day || 0;
+    g.phase = data.phase || 'setup';
+    g.started = !!data.started;
+    g.finished = !!data.finished;
+    g.winner = data.winner != null ? data.winner : null;
+    g.winReason = data.winReason || null;
+    g.pendingDeaths = data.pendingDeaths || [];
+    g.lastNightDeaths = data.lastNightDeaths || [];
+    g.night = data.night || null;
+    g.witch = data.witch || { antidoteUsed: false, poisonUsed: false };
+    g.crush = data.crush || {};
+    g.charmMap = data.charmMap || {};
+    g.lastDreamMap = data.lastDreamMap || {};
+    g.activeCurse = data.activeCurse || [];
+    g.lastProtect = data.lastProtect || 0;
+    g.lastProtectMap = data.lastProtectMap || {};
+    g.lastSpeechOrder = data.lastSpeechOrder || [];
+    g._shots = data._shots || [];
+    g.swallowCount = data.swallowCount || 0;
+    g.badgeSwallowed = !!data.badgeSwallowed;
+    g.sheriffElectionPending = !!data.sheriffElectionPending;
+    if (data.llmStats) g.llmStats = data.llmStats;
+    return g;
   }
 
   configSnapshot() {

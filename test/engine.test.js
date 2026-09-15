@@ -1492,3 +1492,174 @@ test('打断请求消费期目标失效：自爆降级不带人、决斗公告�
   assert.ok(g2.events.some((e) => e.type === 'system' && e.text.includes('决斗取消')), '应公告决斗取消');
   assert.strictEqual(g2.player(2).alive, true, '骑士不应被误杀');
 });
+
+// ==================== 借鉴头部项目的五项增强（经验池/怀疑度/独白/MVP/断点恢复） ====================
+
+test('怀疑度表：反思 JSON 解析更新 suspicion 并注入快照', async () => {
+  const llm = require('../src/ai/llm');
+  const ctx = require('../src/ai/context');
+  const { Agent } = require('../src/ai/agent');
+  const g = makeDay2Game();
+  const orig = llm.chatCompletion;
+  llm.chatCompletion = async () => ({
+    content: '{"summary":"今天8号很可疑，发言前后矛盾。","suspicion":{"8":60,"9":-20,"99":5,"me":1}}',
+    usage: { promptTokens: 10, cachedTokens: 0, completionTokens: 20 },
+  });
+  try {
+    const agent = new Agent(g.player(5), g, { baseUrl: 'x', model: 'm', apiKey: 'k', fastEffort: 'low' }, silentLogger);
+    const digest = await agent._reflect(1);
+    assert.strictEqual(agent.suspicion['8'], 60, '合法座位怀疑度应更新');
+    assert.strictEqual(agent.suspicion['9'], -20);
+    assert.ok(!('99' in agent.suspicion) && !('me' in agent.suspicion), '非法座位/自己应被忽略');
+    assert.ok(digest.includes('8号很可疑'), '纪要应为 JSON 的 summary');
+    // 快照注入怀疑度
+    const built = ctx.assemble(g, g.player(5), { task: 'speech' }, { digests: new Map(), lastSeq: 0, transcriptDays: [1], suspicion: agent.suspicion });
+    assert.ok(built.text.includes('怀疑度') && built.text.includes('8号+60'), '快照应含怀疑度行');
+  } finally {
+    llm.chatCompletion = orig;
+  }
+});
+
+test('跨局经验池：入库去重/持久化/按角色检索 + 提示词注入', () => {
+  const os = require('os');
+  const fs = require('fs');
+  const path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exp-test-'));
+  const { ExperienceStore } = require('../src/ai/experience');
+  const store = new ExperienceStore(dir);
+  assert.strictEqual(store.add([
+    { role: 'seer', text: '对跳时先看谁的上警路线与票型更自洽' },
+    { role: 'seer', text: '对跳时先看谁的上警路线与票型更自洽' },
+  ]), 1, '重复经验不重复入库');
+  store.add([{ role: 'wolf', text: '悍跳要提前在狼队频道商量好分工' }]);
+  assert.deepStrictEqual(store.forRole('seer'), ['对跳时先看谁的上警路线与票型更自洽']);
+  assert.strictEqual(store.forRole('villager').length, 0);
+  // personal 提示词注入（有经验才有该段）
+  const g = makeGame({});
+  assignRoles(g, { 1: 'seer', 2: 'wolf', 3: 'villager' });
+  const sp = buildPersonalPrompt(g, g.player(2), '- 悍跳要提前在狼队频道商量好分工');
+  assert.ok(sp.includes('过往对局的经验教训') && sp.includes('悍跳要提前'), 'personal 应注入经验段');
+  assert.ok(!buildPersonalPrompt(g, g.player(3)).includes('过往对局的经验教训'), '无经验不注入');
+  // 持久化：新实例读取同一目录
+  const store2 = new ExperienceStore(dir);
+  assert.strictEqual(store2.forRole('wolf')[0], '悍跳要提前在狼队频道商量好分工');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('内心独白：reasoning 提取 + god 事件 + 绝不进 AI 上下文', async () => {
+  const llm = require('../src/ai/llm');
+  const ctx = require('../src/ai/context');
+  const { Agent } = require('../src/ai/agent');
+  const g = makeDay2Game();
+  const orig = llm.chatCompletion;
+  llm.chatCompletion = async () => ({
+    content: '{"text":"我过。"}',
+    reasoning: '8号的票型很怪，我怀疑他和9号是狼队友。',
+    usage: { promptTokens: 100, cachedTokens: 0, completionTokens: 10 },
+  });
+  try {
+    const agent = new Agent(g.player(5), g, { baseUrl: 'x', model: 'm', apiKey: 'k', fastEffort: 'low' }, silentLogger);
+    await agent.decide({ task: 'speech' });
+    assert.ok(agent.lastReasoning.includes('8号的票型很怪'), 'agent 应保存最近独白');
+    const ev = g.events.filter((e) => e.type === 'ai_reasoning').pop();
+    assert.ok(ev && ev.visibleTo === 'god' && ev.data.text.includes('9号是狼队友'), '应发出仅 god 可见的独白事件');
+    // 独白绝不进任何 AI 上下文（NOISE 过滤 + god 可见性双保险）
+    for (const p of g.players) {
+      const built = ctx.assemble(g, p, { task: 'speech' }, { digests: new Map(), lastSeq: 0, transcriptDays: [g.day] });
+      assert.ok(!built.text.includes('9号是狼队友'), `独白不应进 ${p.seat}号 的上下文`);
+    }
+  } finally {
+    llm.chatCompletion = orig;
+  }
+});
+
+test('MVP 评分：胜负/投票准确率/技能价值量化', () => {
+  const { computeScores } = require('../src/engine/score');
+  const g = makeGame({});
+  assignRoles(g, { 1: 'wolf', 2: 'wolf', 3: 'seer', 4: 'villager', 5: 'witch', 6: 'hunter' });
+  g.phase = 'over'; g.finished = true; g.winner = 'good'; g.winReason = '测试';
+  g.player(1).alive = false; g.player(2).alive = false;
+  g.events.push({ type: 'seer_check', actor: 3, data: { target: 1, isWolf: true } });
+  g.events.push({ type: 'vote_cast', actor: 3, phase: 'vote', data: { target: 1 } });
+  g.events.push({ type: 'vote_cast', actor: 4, phase: 'vote', data: { target: 3 } });
+  g.events.push({ type: 'shoot', actor: 6, data: { target: 1 } });
+  g.events.push({ type: 'deaths', day: 2, data: { deaths: [{ seat: 1, cause: 'shot' }] } });
+  g.events.push({ type: 'wolf_kill', day: 2, data: { target: 1 } });
+  const s = computeScores(g);
+  const seer = s.rows.find((r) => r.seat === 3);
+  const wolf1 = s.rows.find((r) => r.seat === 1);
+  assert.ok(seer.score > wolf1.score, `好预言家应高于出局的狼：${seer.score} vs ${wolf1.score}`);
+  assert.ok(seer.details.some((d) => d.includes('验出狼')), '预言家验狼得分');
+  assert.ok(seer.details.some((d) => d.includes('投中狼')), '投票准确率得分');
+  assert.ok(!wolf1.details.some((d) => d.includes('阵营获胜')), '失败的狼不应有获胜加分');
+  assert.ok(s.mvp && s.title.includes('MVP'), '应产出 MVP');
+  assert.ok(s.rows[0].score >= s.rows[s.rows.length - 1].score, '按分数降序');
+});
+
+test('断点恢复：锚点快照 + fromJSON 重建 + resume 继续运行', async () => {
+  // 用计数 mock：第 4 次决策时捕获此刻的锚点，然后让对局继续跑几步后强停
+  let calls = 0;
+  let captured = null;
+  const g = makeGame({ id: 'anchor-test' });
+  g.agentFactory = (player, game) => ({
+    async decide(req) {
+      if (++calls === 4) captured = game._anchor;
+      if (calls >= 7) { game.terminate('捕获后终止'); }
+      return { text: '过。', target: 0 };
+    },
+  });
+  await runGame(g);
+  assert.ok(captured, '对局进行中应有锚点');
+  assert.ok(captured.nextPhase === 'speech' || captured.nextPhase === 'night');
+  assert.ok(captured.events.length > 0 && captured.players.length === g.players.length);
+  // 从锚点重建并继续跑到终局
+  const g2 = Game.fromJSON(captured, { agentFactory: makeMockAgentFactory(Math.random, {}), logger: silentLogger, stepPauseMs: 1 });
+  assert.strictEqual(g2.day, captured.day);
+  // 回填 AI 记忆
+  const { Agent } = require('../src/ai/agent');
+  const agent = new Agent(g2.player(5), g2, { baseUrl: 'x', model: 'm', apiKey: 'k' }, silentLogger);
+  g2._agents.set(5, agent);
+  g2.restoreAgentState(5, { digests: [[1, '第1天纪要']], suspicion: { 3: 50 }, lastSeq: 7 });
+  assert.strictEqual(agent.digests.get(1), '第1天纪要');
+  assert.strictEqual(agent.suspicion['3'], 50);
+  await runGame(g2, { resumeFrom: captured.nextPhase });
+  assert.ok(g2.finished, '恢复的对局应能跑到终局');
+  assert.ok(g2.day >= captured.day, '恢复后天数不回退');
+});
+
+test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接口续跑', async () => {
+  const fs = require('fs');
+  const path = require('path');
+  const { Api } = require('../src/api');
+  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger });
+  const g = makeGame({ id: 'resume-api-test', humanSeat: null });
+  assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'villager', 4: 'witch', 5: 'villager' });
+  g.started = true;
+  g.markAnchor('speech');
+  const entry = { game: g, tokens: { player: 'pt', god: 'gt' }, running: false, mock: true };
+  api.saveGame(entry);
+  const saveFile = path.join('saves', 'resume-api-test.json');
+  try {
+    assert.ok(fs.existsSync(saveFile), '存档应写入');
+    const doc = JSON.parse(fs.readFileSync(saveFile, 'utf8'));
+    assert.ok(doc.anchor && doc.anchor.nextPhase === 'speech', '存档应含锚点');
+    const lres = fakeRes();
+    api.listSaves(lres);
+    const row = JSON.parse(lres.body).rows.find((r) => r.id === 'resume-api-test');
+    assert.ok(row && row.resumable === true, '列表应标记 resumable');
+    const rres = fakeRes();
+    api.resumeGame(rres, { id: 'resume-api-test', tokens: { player: 'pt' } }, { token: 'pt' });
+    assert.strictEqual(rres.code, 200, `resume 应成功：${rres.body}`);
+    assert.ok(JSON.parse(rres.body).resumed);
+    assert.ok(api.games.has('resume-api-test'));
+    // 恢复的对局用默认 stepPauseMs（夜晚停顿 2s），mock 速度可能未跑完 → 主动终止并等停顿周期走完
+    await new Promise((r) => setTimeout(r, 150));
+    const live = api.games.get('resume-api-test');
+    if (live && !live.game.finished) live.game.terminate('测试收尾');
+    await new Promise((r) => setTimeout(r, 2600));
+    assert.ok(api.games.get('resume-api-test').game.finished, '恢复对局应已结算');
+  } finally {
+    fs.rmSync(saveFile, { force: true });
+  }
+});
+

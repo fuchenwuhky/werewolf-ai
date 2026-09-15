@@ -64,6 +64,7 @@ async function initSetup() {
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
       localStorage.removeItem('ww_current');
+      localStorage.removeItem('ww_resumable');
       $('#resume-box').classList.add('hidden');
     }
   });
@@ -78,7 +79,10 @@ async function initSetup() {
     if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); renderRulesEditor(); }
   });
   $('#btn-start').addEventListener('click', startGame);
-  $('#btn-resume').addEventListener('click', () => resumeGame());
+  $('#btn-resume').addEventListener('click', () => {
+    if (localStorage.getItem('ww_resumable')) resumeFromAnchor();
+    else resumeGame();
+  });
   await checkResume();
 }
 
@@ -335,16 +339,39 @@ async function checkResume() {
   try {
     const { rows } = await api('GET', '/api/games');
     const unfinished = rows.find((r) => !r.finished && r.started && r.live); // 未开局或已随服务器重启失活的对局不可恢复
-    if (!unfinished) return;
-    const tokens = await api('GET', `/api/games/${unfinished.id}/tokens`);
-    const g = { gameId: unfinished.id, playerToken: tokens.player, godToken: tokens.god };
-    const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-    if (v && !v.finished) {
-      localStorage.setItem('ww_current', JSON.stringify(g));
+    if (unfinished) {
+      const tokens = await api('GET', `/api/games/${unfinished.id}/tokens`);
+      const g = { gameId: unfinished.id, playerToken: tokens.player, godToken: tokens.god };
+      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+      if (v && !v.finished) {
+        localStorage.setItem('ww_current', JSON.stringify(g));
+        $('#resume-box').classList.remove('hidden');
+        $('#resume-box h2').textContent = '发现进行中的对局（已自动找回会话）';
+        return;
+      }
+    }
+    // 服务重启后内存丢失的对局：有断点锚点，可从存档恢复续跑
+    const resumable = rows.find((r) => r.resumable);
+    if (resumable) {
+      localStorage.setItem('ww_resumable', JSON.stringify({ gameId: resumable.id, day: resumable.day }));
       $('#resume-box').classList.remove('hidden');
-      $('#resume-box h2').textContent = '发现进行中的对局（已自动找回会话）';
+      $('#resume-box h2').textContent = `发现中断的对局（进行到第 ${resumable.day} 天，服务重启过）`;
+      $('#btn-resume').textContent = '从断点恢复对局';
+      return;
     }
   } catch (_) { /* 无可恢复对局 */ }
+}
+
+async function resumeFromAnchor() {
+  try {
+    const info = JSON.parse(localStorage.getItem('ww_resumable') || 'null');
+    if (!info) return;
+    const r = await api('POST', `/api/games/${info.gameId}/resume`, {});
+    localStorage.removeItem('ww_resumable');
+    localStorage.setItem('ww_current', JSON.stringify({ gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken }));
+    state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
+    enterGameScreen();
+  } catch (e) { alert(`恢复失败：${e.message}`); }
 }
 
 function resumeGame() {
@@ -627,9 +654,18 @@ function renderEventNode(e) {
         return b;
       }
       const good = d.winner === 'good';
+      const wrap = el('div');
       const b = el('div', `banner ${good ? '' : 'night'}`, good ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！');
       b.style.fontSize = '16px';
-      return b;
+      wrap.appendChild(b);
+      const score = state.view && state.view.score;
+      if (score && score.title) {
+        const m = el('div', 'msg event', `🏆 ${escapeHtml(score.title)}`);
+        const detail = score.rows.slice(0, 3).map((r) => `${r.seat}号 ${r.score}分`).join('，');
+        m.appendChild(el('div', 'hint', `前三：${detail}`));
+        wrap.appendChild(m);
+      }
+      return wrap;
     }
     // ---- 私密事件（只出现在自己/上帝视野；上帝视角按行动者显示） ----
     case 'deal': {
@@ -685,6 +721,10 @@ function renderEventNode(e) {
     case 'vote_cast': {
       const who = isMine(e) ? '你' : seatLabel(e.actor);
       return el('div', 'msg private', `🔒 ${who}投给了 ${d.target ? seatLabel(d.target) : '弃票'}`);
+    }
+    case 'ai_reasoning': {
+      const text = (d.text || '').slice(0, 900);
+      return el('div', 'msg private', `💭 ${seatLabel(e.actor)} 的内心独白（${escapeHtml(d.task || '')}）<div class="hint" style="margin-top:4px;white-space:pre-wrap">${escapeHtml(text)}${(d.text || '').length > 900 ? '…' : ''}</div>`);
     }
     case 'ai_thinking':
     case 'await_input':

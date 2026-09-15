@@ -82,6 +82,9 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
       const data = await res.json();
       const choice = data.choices && data.choices[0];
       const content = choice && choice.message && choice.message.content;
+      // 内心独白（思考模型的 reasoning 轨迹，智谱/DeepSeek 风格 reasoning_content）：只给上帝面板与复盘用
+      const rawReasoning = choice && choice.message && (choice.message.reasoning_content || choice.message.reasoning);
+      const reasoning = typeof rawReasoning === 'string' && rawReasoning.trim() ? rawReasoning.trim().slice(0, 6000) : null;
       // 服务商返回 200 但没有可用回复 → 明确报错并记录原始响应体
       if (!choice || typeof content !== 'string' || !content.trim()) {
         // 思考模型把 max_tokens 全花在 reasoning 上（finish_reason=length）→ 预算逐步翻倍直至硬上限
@@ -107,6 +110,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
       const usage = data.usage || {};
       const out = {
         content,
+        reasoning,
         usage: {
           promptTokens: usage.prompt_tokens || 0,
           cachedTokens: (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens) || 0,

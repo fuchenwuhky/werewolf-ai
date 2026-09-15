@@ -13,7 +13,7 @@
 'use strict';
 const { renderEvent, PHASE_LABEL } = require('../engine/render');
 
-const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error']);
+const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
 // lastwords：遗言是一次性短内容，high 档推理曾出现 7k tokens/286s 的极差体验，策略菜单已由提示词托底
 const FAST_TASKS = new Set([
@@ -110,7 +110,7 @@ function dayFacts(game, dayEvents) {
 }
 
 /** 局面快照：时钟 + 座位 + 确知/不知 + 公开硬事实 + 新事件清单（易变区，放最末保证缓存前缀稳定） */
-function renderSnapshot(game, player, ledger, request, lastSeq = 0) {
+function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = null) {
   const phaseName = PHASE_LABEL[game.phase] || game.phase;
   const head = `【局面快照】当前时刻：第 ${game.day} 天 · ${phaseName}${request && request.task === 'speech' ? '（正在逐个发言）' : ''} —— 一切以本快照为准，这是"现在"的唯一事实。`;
   const seatLine = game.players
@@ -124,6 +124,10 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0) {
     })
     .join('；');
   const secret = privateLedger(game, player, ledger.events);
+  const susEntries = suspicion ? Object.entries(suspicion).filter(([, v]) => Number.isFinite(v)) : [];
+  if (susEntries.length) {
+    secret.push(`你对各座位的怀疑度（+100 确定是狼 / 0 未知 / -100 确定好人，随每日反思更新）：${susEntries.map(([s, v]) => `${s}号${v > 0 ? '+' : ''}${v}`).join('、')}`);
+  }
   const youKnow = secret.length ? secret.map((s) => `  · ${s}`).join('\n') : '  · （暂无私密信息）';
   const notKnow = [];
   notKnow.push('未翻牌玩家的真实身份——夜里你只获得系统明确告诉你的信息，其余一概不知');
@@ -203,7 +207,7 @@ function assembleParts(game, player, request, state) {
   const days = state.transcriptDays != null ? state.transcriptDays : [today - 1, today].filter((d) => d >= 1);
   const digestsText = renderDigests(state.digests || new Map());
   const transcriptText = renderTranscript(game, ledger, days);
-  const snapshotText = renderSnapshot(game, player, ledger, request, state.lastSeq || 0);
+  const snapshotText = renderSnapshot(game, player, ledger, request, state.lastSeq || 0, state.suspicion || null);
   const { taskInstruction } = require('./prompts');
   const taskText = `## 当前任务（你是 ${player.seat}号）\n${taskInstruction(game, player, request)}`;
   return { ledger, digestsText, transcriptText, snapshotText, taskText };

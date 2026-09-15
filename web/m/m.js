@@ -405,6 +405,7 @@ function renderEventNode(e) {
     case 'wolfbeauty_charm': return el('div', 'msg private', `🔒 ${isMine(e) ? '你魅惑了' : seatLabel(e.actor) + '（狼美人）魅惑了'} ${seatLabel(d.target)}`);
     case 'crow_curse': return el('div', 'msg private', `🔒 ${isMine(e) ? '你诅咒了' : seatLabel(e.actor) + '（乌鸦）诅咒了'} ${seatLabel(d.target)}（明日+0.5票）`);
     case 'admirer_crush': return el('div', 'msg private', `🔒 ${isMine(e) ? '你暗恋上了' : seatLabel(e.actor) + '（暗恋者）暗恋上了'} ${seatLabel(d.target)}`);
+    case 'ai_reasoning': return el('div', 'msg private', `💭 ${seatLabel(e.actor)} 内心独白（${escapeHtml(d.task || '')}）：${escapeHtml((d.text || '').slice(0, 400))}${(d.text || '').length > 400 ? '…' : ''}`);
     case 'vote_cast': return el('div', 'msg private', `🔒 ${isMine(e) ? '你' : seatLabel(e.actor)}投给了 ${d.target ? seatLabel(d.target) : '弃票'}`);
     default: return null;
   }

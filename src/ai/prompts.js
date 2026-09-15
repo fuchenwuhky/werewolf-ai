@@ -7,6 +7,7 @@
 const { ROLES } = require('../engine/roles');
 const { describeRules } = require('../engine/rules');
 const { strategyBlockFor, badgeHoldFor, badgePassFor } = require('./strategies');
+const { INJECT_LIMIT } = require('./experience');
 
 /**
  * 警长专属提示段（只在 player.isSheriff 时非空）：
@@ -166,7 +167,7 @@ function buildCommonPrompt(game) {
 }
 
 /** system 个性部分：座位/身份/技能/队友/性格/阵营立场铁律（各玩家不同，置于公共段之后） */
-function buildPersonalPrompt(game, player) {
+function buildPersonalPrompt(game, player, experienceText = '') {
   const role = ROLES[player.role];
   const mates = game.matesOf(player).map((p) => `${p.seat}号${p.name}`);
   const lines = [];
@@ -193,6 +194,11 @@ function buildPersonalPrompt(game, player) {
     lines.push(strat);
     lines.push('');
   }
+  if (experienceText) {
+    lines.push('## 你过往对局的经验教训（由你历史对局的复盘提炼，供参考）');
+    lines.push(experienceText);
+    lines.push('');
+  }
   if (player.role === 'admirer') {
     lines.push('## 立场铁律（暗恋者）');
     lines.push('- 你的胜负阵营由暗恋对象决定（绑定结果见快照"你确知"中的暗恋记录；对象的阵营需要你自己推理）。');
@@ -217,25 +223,48 @@ function buildPersonalPrompt(game, player) {
   return lines.join('\n');
 }
 
-/** system 消息：整局不变 = 公共段（全场共享前缀）+ 个性段 */
-function buildSystemPrompt(game, player) {
-  return buildCommonPrompt(game) + '\n\n' + buildPersonalPrompt(game, player);
+/** system 消息：整局不变 = 公共段（全场共享前缀）+ 个性段（experienceText：跨局经验池按角色检索的注入） */
+function buildSystemPrompt(game, player, experienceText = '') {
+  return buildCommonPrompt(game) + '\n\n' + buildPersonalPrompt(game, player, experienceText);
 }
 
-/** 每日反思指令：把刚结束的一天压缩成结构化纪要（Generative-Agents 式 reflection） */
+/** 局终复盘指令：对照"当时的判断"与"终局真相"提炼跨局经验（借鉴清华 Werewolf 框架 critical mind） */
+function lessonInstruction(game, player, digestsText) {
+  const truth = game.players
+    .map((p) => `${p.seat}号 ${p.name}=${ROLES[p.role].name}（${p.alive ? '存活' : '出局'}）`)
+    .join('；');
+  return [
+    `你是狼人杀游戏中的 ${player.seat}号，本局身份【${ROLES[player.role].name}】，本局已结束：${game.winner === 'good' ? '好人阵营获胜' : '狼人阵营获胜'}，你所在的阵营${(ROLES[player.role].team === 'good') === (game.winner === 'good') ? '获胜' : '失败'}。`,
+    '',
+    '—— 你本局的每日反思纪要（你当时的判断与状态）——',
+    digestsText || '（本局没有留下反思纪要）',
+    '',
+    '—— 终局真相 ——',
+    truth,
+    '',
+    '请对照"你当时的判断"与"终局真相"，提炼 2~3 条可复用的经验教训：哪些判断被证实、哪些被证伪、哪类局面下你该改变策略。',
+    '要求：每条不超过 80 字；具体、可执行、贴合你的身份视角（如"双预言家对跳时，先看谁的上警路线与票型更自洽再站边"），不要"多思考""要谨慎"这类空话。',
+    '只输出一个 JSON 对象：{"lessons":["...","..."]}',
+  ].join('\n');
+}
+
+/** 每日反思指令：把刚结束的一天压缩成结构化纪要 + 更新怀疑度表（借鉴 AgentVerse/清华框架的 reflection） */
 function reflectionInstruction(game, player, day, eventsText) {
   return [
     `你是狼人杀游戏中的 ${player.seat}号。第 ${day} 天已经结束，下面是你以自己的视角看到的这一天全部事件。`,
-    '请把它压缩成一份不超过 400 字的纪要，供你在之后的天数里回忆这一天。必须包含：',
+    '请完成两件事，只输出一个 JSON 对象（不要任何其他文字或代码围栏）：',
+    '{"summary":"...","suspicion":{"<座位号>":<-100~100的整数>}}',
+    'summary 要求（不超过 400 字）：',
     '1.【身份判断】对每个仍在场玩家的一句话判断（怀疑谁/信任谁 + 核心理由 + 置信度高/中/低）；',
     '2.【关键发言】这一天最重要的 3~5 条发言（谁、什么立场、声称了什么）；',
     '3.【硬事实】死亡、翻牌、票型中的关键结论；',
     '4.【我的状态】我说过的话、做过的承诺、暴露程度，以及我下一步的打算。',
-    '直接输出纪要正文，不要任何解释或开场白。',
+    'suspicion 要求：对每个仍存活的其他玩家给一个怀疑度分值——+100 表示基本确定是狼，0 表示未知，-100 表示基本确定是好人；',
+    '基于今天及之前的发言、票型、死讯与你掌握的私密信息修正；宁近勿远：拿不准就在 ±30 以内小幅调整。',
     '',
     '──── 第' + day + '天事件 ────',
     eventsText,
   ].join('\n');
 }
 
-module.exports = { buildSystemPrompt, buildCommonPrompt, buildPersonalPrompt, taskInstruction, reflectionInstruction };
+module.exports = { buildSystemPrompt, buildCommonPrompt, buildPersonalPrompt, taskInstruction, reflectionInstruction, lessonInstruction };

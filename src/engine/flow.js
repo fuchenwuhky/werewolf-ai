@@ -303,6 +303,7 @@ async function processShots(game) {
 
 // ---------- 夜晚 ----------
 async function nightPhase(game) {
+  if (typeof game.markAnchor === 'function') game.markAnchor('night'); // 断点恢复锚点：夜晚可安全重放（夜事件全程私密）
   game.day++;
   game.phase = 'night';
   game.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
@@ -843,6 +844,7 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
 
 // ---------- 白天发言 ----------
 async function speechPhase(game) {
+  if (typeof game.markAnchor === 'function') game.markAnchor('speech'); // 断点恢复锚点：白天可整体重放
   game.phase = 'speech';
   game.emit('phase', { data: { title: `第${game.day}天 · 白天发言` } });
   if (await consumeExplodeRequest(game)) return 'dayEnded';
@@ -955,9 +957,9 @@ async function exile(game, seat) {
 }
 
 // ---------- 主流程 ----------
-async function runGame(game) {
+async function runGame(game, opts = {}) {
   try {
-    await runGameInner(game);
+    await runGameInner(game, opts.resumeFrom || null);
   } catch (err) {
     if (err && err.code === 'FORCE_ENDED') {
       game.finish();
@@ -968,27 +970,34 @@ async function runGame(game) {
   }
 }
 
-async function runGameInner(game) {
-  game._shots = [];
-  game.lastProtectMap = {};
-  game.logger.info('engine', '========== 对局开始：配置快照 ==========');
-  const snap = game.configSnapshot();
-  game.logger.info('engine', `板子：${snap.board}（${snap.seatCount}人）`);
-  game.logger.info('engine', `座位：${snap.seats.join('，')}`);
-  game.logger.info('engine', `生效规则：\n${snap.rulesText}`);
-  game.deal();
-  // 首夜
-  await nightPhase(game);
-  const pw = checkWinWithPending(game);
-  if (pw) setWinner(game, pw);
-  // 警长竞选（首夜后、宣布死讯前）
-  if (!game.winner && game.rules.sheriff && !game.badgeSwallowed) {
-    const r = await electionPhase(game);
-    if (r === 'dayEnded') game._dayEnded = true;
+async function runGameInner(game, resumeFrom = null) {
+  game._shots = game._shots || [];
+  game.lastProtectMap = game.lastProtectMap || {};
+  let dayEnded = false;
+  if (resumeFrom) {
+    // 断点恢复：从锚点快照继续（跳过发牌与开局流程，锚点处已含完整状态与 AI 记忆）
+    game.logger.info('engine', `========== 对局恢复：从「${resumeFrom === 'night' ? '夜晚' : '白天'}」锚点继续 ==========`);
+    dayEnded = resumeFrom === 'night'; // 夜晚锚点：本轮先跳过白天，直接重放夜晚
+  } else {
+    game.logger.info('engine', '========== 对局开始：配置快照 ==========');
+    const snap = game.configSnapshot();
+    game.logger.info('engine', `板子：${snap.board}（${snap.seatCount}人）`);
+    game.logger.info('engine', `座位：${snap.seats.join('，')}`);
+    game.logger.info('engine', `生效规则：\n${snap.rulesText}`);
+    game.deal();
+    // 首夜
+    await nightPhase(game);
+    const pw = checkWinWithPending(game);
+    if (pw) setWinner(game, pw);
+    // 警长竞选（首夜后、宣布死讯前）
+    if (!game.winner && game.rules.sheriff && !game.badgeSwallowed) {
+      const r = await electionPhase(game);
+      if (r === 'dayEnded') game._dayEnded = true;
+    }
+    await dawnPhase(game);
+    dayEnded = !!game._dayEnded;
+    game._dayEnded = false;
   }
-  await dawnPhase(game);
-  let dayEnded = !!game._dayEnded;
-  game._dayEnded = false;
   // 主循环：每天 = 发言 → 投票 → 夜晚 → 天亮
   while (!game.winner) {
     if (game.day >= 40) {

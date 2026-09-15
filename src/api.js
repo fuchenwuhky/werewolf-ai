@@ -23,7 +23,9 @@ const { ROLES, BOARDS, validateBoard } = require('./engine/roles');
 const { DEFAULT_RULES, RULE_META, mergeRules } = require('./engine/rules');
 const { Game } = require('./engine/game');
 const { runGame } = require('./engine/flow');
+const { computeScores } = require('./engine/score');
 const { makeAgentFactory } = require('./ai/agent');
+const { ExperienceStore } = require('./ai/experience');
 const { applyPersonalities, PERSONALITIES } = require('./ai/personalities');
 const { STRATEGY_TEMPLATES } = require('./ai/strategies');
 const { makeMockAgentFactory } = require('../scripts/mock-agent');
@@ -60,6 +62,7 @@ class Api {
     this.config = config;      // {get(), save(partial)}
     this.logger = logger;
     this.games = new Map();    // gameId → {game, tokens:{player,god}, running, error, saveTimer}
+    this.experience = new ExperienceStore(SAVE_DIR); // 跨局经验池（按角色沉淀 AI 复盘教训）
     if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
     // 定时持久化进行中的对局
     this._saveTimer = setInterval(() => this.saveActive(), 4000);
@@ -95,8 +98,61 @@ class Api {
   saveGame(entry) {
     try {
       // 令牌一并存档：本地单机应用，浏览器丢失会话时可从存档恢复对局
-      fs.writeFileSync(path.join(SAVE_DIR, `${entry.game.id}.json`), JSON.stringify({ tokens: entry.tokens, game: entry.game.toJSON() }));
+      // anchor：断点恢复锚点（markAnchor 在白天/夜晚边界拍摄的全量快照），服务重启后可从锚点续跑
+      fs.writeFileSync(path.join(SAVE_DIR, `${entry.game.id}.json`), JSON.stringify({
+        tokens: entry.tokens,
+        mock: !!entry.mock,
+        game: entry.game.toJSON(),
+        anchor: entry.game._anchor || null,
+      }));
     } catch (e) { this.logger.warn('api', `存档失败 ${entry.game.id}: ${e.message}`); }
+  }
+
+  loadSaveDoc(id) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(SAVE_DIR, `${id}.json`), 'utf8'));
+    } catch (_) { return null; }
+  }
+
+  /** 断点恢复：从锚点快照重建对局（含 AI 记忆），重放锚点标记的阶段并继续驱动 */
+  resumeGame(res, entry, body) {
+    const id = entry.id;
+    if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
+      return this.json(res, 403, { error: 'token 无效' });
+    }
+    if (this.games.has(id)) return this.json(res, 409, { error: '对局仍在内存中，直接打开即可' });
+    const doc = this.loadSaveDoc(id);
+    if (!doc || !doc.anchor) return this.json(res, 404, { error: '没有可恢复的断点（对局可能从未到过白天/夜晚边界）' });
+    if (doc.game && doc.game.finished) return this.json(res, 409, { error: '对局已结束' });
+    const anchor = doc.anchor;
+
+    const logger = makeGameLogger(this.logger, id);
+    const useMock = !!doc.mock;
+    if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key，无法恢复真实 AI 对局' });
+    const agentFactory = useMock
+      ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
+      : makeAgentFactory({ ...this.config.get() }, logger, this.experience);
+    const game = Game.fromJSON(doc.anchor, { agentFactory, logger });
+    // 回填 AI 记忆（反思纪要/怀疑度/事件游标）：恢复后无缝续跑，不重新生成
+    for (const [seat, st] of Object.entries(doc.anchor.agentStates || {})) {
+      game.restoreAgentState(Number(seat), st);
+    }
+    game.logger.info('engine', `对局 ${id} 从锚点恢复（第 ${game.day} 天 · ${anchor.nextPhase}），记忆回填 ${Object.keys(doc.anchor.agentStates || {}).length} 个 AI`);
+    const newEntry = {
+      game, running: true, error: null, mock: useMock,
+      tokens: { player: tokenId(), god: tokenId() },
+    };
+    this.games.set(id, newEntry);
+    runGame(game, { resumeFrom: anchor.nextPhase }).then(() => {
+      this.saveGame(newEntry);
+      this.logger.closeGameLog(id);
+      this.generateLessons(newEntry).catch(() => {});
+    }).catch((err) => {
+      newEntry.error = String(err.stack || err.message || err);
+      this.logger.error('engine', `恢复对局 ${id} 异常终止`, { stack: err.stack });
+      this.saveGame(newEntry);
+    });
+    return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
   }
 
   saveActive() {
@@ -145,9 +201,17 @@ class Api {
       const gameMatch = pathname.match(/^\/api\/games\/([^/]+)(\/.*)?$/);
       if (pathname === '/api/games' && method === 'POST') return this.createGame(res, await this.readBody(req));
       if (pathname === '/api/games' && method === 'GET') return this.listSaves(res);
+      if (pathname === '/api/stats' && method === 'GET') return this.stats(res);
       if (gameMatch) {
         const id = gameMatch[1];
         const sub = gameMatch[2] || '';
+        // 断点恢复：对局不在内存（服务重启过）时从存档锚点续跑
+        if (sub === '/resume' && method === 'POST') {
+          if (this.games.has(id)) return this.json(res, 409, { error: '对局仍在内存中，直接打开即可' });
+          const doc = this.loadSaveDoc(id);
+          if (!doc || !doc.game) return this.json(res, 404, { error: '存档不存在' });
+          return this.resumeGame(res, { id, tokens: doc.tokens || {} }, await this.readBody(req));
+        }
         const entry = this.getGame(id);
         if (!entry) return this.json(res, 404, { error: '对局不存在' });
         if (sub === '/start' && method === 'POST') return this.startGame(res, entry, await this.readBody(req));
@@ -191,7 +255,7 @@ class Api {
     const logger = makeGameLogger(this.logger, gameId);
     const agentFactory = useMock
       ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-      : makeAgentFactory(llmCfg, logger);
+      : makeAgentFactory(llmCfg, logger, this.experience);
 
     // 性格：玩家自定义优先，未填写的 AI 随机分配（每局不重样）
     applyPersonalities(players, Math.random);
@@ -216,12 +280,32 @@ class Api {
     runGame(entry.game).then(() => {
       this.saveGame(entry);
       this.logger.closeGameLog(entry.game.id);
+      // 局终复盘：AI 拿"当时的判断"对照"终局真相"提炼经验，存入跨局经验池（mock 对局/失败静默跳过）
+      this.generateLessons(entry).catch((e) => {
+        this.logger.warn('api', `经验生成失败（不影响对局）: ${e.message}`, { gameId: entry.game.id });
+      });
     }).catch((err) => {
       entry.error = String(err.stack || err.message || err);
       this.logger.error('engine', `对局 ${entry.game.id} 异常终止`, { stack: err.stack });
       this.saveGame(entry);
     });
     return this.json(res, 200, { ok: true });
+  }
+
+  /** 局终经验生成：逐个 AI 复盘 2~3 条教训入经验池（串行，防限流） */
+  async generateLessons(entry) {
+    if (!this.experience || !entry.game.finished || !entry.game.started) return;
+    const { game } = entry;
+    const agents = [...game._agents.values()].filter((a) => typeof a.generateLessons === 'function');
+    for (const agent of agents) {
+      try {
+        const lessons = await agent.generateLessons();
+        const added = this.experience.add(lessons);
+        if (added) this.logger.info('api', `${agent.player.seat}号（${agent.player.role}）沉淀 ${added} 条跨局经验`, { gameId: game.id });
+      } catch (e) {
+        this.logger.warn('ai', `${agent.player.seat}号 局终复盘失败（跳过）：${e.message}`, { gameId: game.id });
+      }
+    }
   }
 
   /** 人类狼的随时自爆：校验后写入 game.explodeRequest，引擎在最近的发言间隙执行 */
@@ -344,6 +428,8 @@ class Api {
       started: game.started, live: this.games.has(game.id), finished: game.finished, winner: game.winner, winReason: game.winReason,
       error: entry.error,
       players, events, pending, queued, rules: game.rules, wolfTalk,
+      // 终局评分（MVP 体系）：对局结束后计算并缓存
+      score: game.finished ? (entry.score || (entry.score = computeScores(game))) : undefined,
       me: me ? { seat: me.seat, name: me.name, role: me.role, alive: me.alive, isSheriff: me.isSheriff, lostVote: me.lostVote, teammates: game.wolves().some((w) => w.seat === me.seat) ? game.wolves().filter((w) => w.alive && w.seat !== me.seat).map((w) => w.seat) : [] } : null,
       llmStats: isGod ? game.llmStats : undefined,
       board: game.board,
@@ -436,9 +522,37 @@ class Api {
     return this.json(res, 200, entry.tokens);
   }
 
+  /** 多局统计：聚合存档（胜负/天数/板子分布）+ 经验池规模 */
+  stats(res) {
+    try {
+      const agg = { games: 0, finished: 0, goodWins: 0, wolfWins: 0, avgDays: 0, boards: {}, experiences: this.experience.stats() };
+      let daysSum = 0;
+      const files = fs.readdirSync(SAVE_DIR).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
+      for (const f of files) {
+        try {
+          const j = JSON.parse(fs.readFileSync(path.join(SAVE_DIR, f), 'utf8'));
+          const g = j.game || j;
+          agg.games++;
+          if (g.finished) {
+            agg.finished++;
+            if (g.winner === 'good') agg.goodWins++;
+            else if (g.winner === 'wolf') agg.wolfWins++;
+            daysSum += g.day || 0;
+          }
+          if (g.started && g.board) {
+            const size = Object.values(g.board).reduce((a, b) => a + b, 0);
+            agg.boards[`${size}人`] = (agg.boards[`${size}人`] || 0) + 1;
+          }
+        } catch (_) { /* 跳过损坏存档 */ }
+      }
+      agg.avgDays = agg.finished ? Math.round((daysSum / agg.finished) * 10) / 10 : 0;
+      return this.json(res, 200, agg);
+    } catch (e) { return this.json(res, 200, { games: 0, experiences: {} }); }
+  }
+
   listSaves(res) {
     try {
-      const files = fs.readdirSync(SAVE_DIR).filter((f) => f.endsWith('.json'));
+      const files = fs.readdirSync(SAVE_DIR).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
       const rows = files.map((f) => {
         try {
           const j = JSON.parse(fs.readFileSync(path.join(SAVE_DIR, f), 'utf8'));
@@ -446,6 +560,7 @@ class Api {
           return {
             id: g.id, day: g.day, phase: g.phase, finished: g.finished, started: !!g.started, live: this.games.has(g.id),
             winner: g.winner, winReason: g.winReason,
+            resumable: !!(j.anchor && g.started && !g.finished && !this.games.has(g.id)), // 服务重启后有锚点可续跑
             seats: g.players.length, date: fs.statSync(path.join(SAVE_DIR, f)).mtime,
           };
         } catch (_) { return null; }
