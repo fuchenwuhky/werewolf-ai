@@ -6,7 +6,18 @@
 'use strict';
 const { ROLES } = require('../engine/roles');
 const { describeRules } = require('../engine/rules');
-const { strategyBlockFor } = require('./strategies');
+const { strategyBlockFor, badgeHoldFor, badgePassFor } = require('./strategies');
+
+/**
+ * 警长专属提示段（只在 player.isSheriff 时非空）：
+ * kind='speech' → 发言归票注入持徽打法全文；kind='vote' → 仅票权提醒。
+ */
+function sheriffNote(player, kind, voteWeight) {
+  if (!player.isSheriff) return '';
+  if (kind === 'vote') return `（注意：你是警长，这一票算 ${voteWeight} 票，你的归票方向会带动全场票型）`;
+  const hold = badgeHoldFor(player.role);
+  return hold ? `\n【警徽打法】${hold}` : '';
+}
 
 /** 每种任务的指令与 JSON 格式要求 */
 function taskInstruction(game, player, req) {
@@ -22,11 +33,11 @@ function taskInstruction(game, player, req) {
         return `轮到你白天发言了。直接发言输出 {"text":"你的发言"}。` +
           `作为狼阵营，你也可以选择自爆（公开狼人身份并立即天黑）：{"text":"...","explode":true}` +
           (player.role === 'whitewolfking' ? `，白狼王自爆会带走一人：{"text":"...","explode":true,"target":<座位号>}` : `：{"text":"...","explode":true}`) +
-          `。${explodeNote}请谨慎使用。${base}${retryNote}`;
+          `。${explodeNote}请谨慎使用。${sheriffNote(player, 'speech')}${base}${retryNote}`;
       }
-      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${base}${retryNote}`;
+      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${player.isSheriff ? '你是警长且大概率压轴发言，发言要有归票价值（明确"建议大家把票投给X号"）。' : ''}${sheriffNote(player, 'speech')}${base}${retryNote}`;
     case 'pk_speech':
-      return `你进入平票 PK，需要再次发言争取信任。请输出 {"text":"你的发言"}。${base}${retryNote}`;
+      return `你进入平票 PK，需要再次发言争取信任。${player.isSheriff ? '你是警长，用 1.5 票权与归票说服大家。' : ''}请输出 {"text":"你的发言"}。${base}${retryNote}`;
     case 'lastwords': {
       const team = ROLES[player.role].team;
       const darkNote = game.rules.revealOnDeath ? '' : '\n注意：本局为暗牌局，死者身份不翻牌。遗言中自报身份等于主动永久暴露（神职自报可能正是狼想要的），是否摊牌请权衡收益。';
@@ -78,14 +89,16 @@ function taskInstruction(game, player, req) {
       `。${base}${retryNote}`;
     case 'sheriff_vote':
       return `警长竞选投票：${cand(req.candidates)}0 表示弃票。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
-    case 'badge_pass':
-      return `你是警长且即将离场，请决定警徽去向：移交给任意存活玩家，或撕毁警徽。请输出 {"target":<座位号>}（0 表示撕毁）。${base}${retryNote}`;
+    case 'badge_pass': {
+      const pass = badgePassFor(player.role);
+      return `你作为警长即将离场，请决定警徽去向：移交给一名存活玩家（他获得 ${game.rules.sheriffVoteWeight} 票权、决定发言方向并压轴归票），或撕毁警徽（全场失去警长）。${pass ? `\n【警徽流转策略】${pass}` : ''}\n${cand(req.candidates)}0 表示撕毁。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+    }
     case 'direction':
-      return `你是警长，请决定今天白天的发言方向：cw（顺时针）或 ccw（逆时针），从昨晚死者下家开始。请输出 {"direction":"cw"/"ccw"}。${base}${retryNote}`;
+      return `你是警长，请决定今天白天的发言方向：cw（顺时针）或 ccw（逆时针），从昨晚死者下家开始。方向是你的节奏武器：让该说话的人先说（金水表水/被质疑者自证/狼位抢不到便宜）。${sheriffNote(player, 'speech')}请输出 {"direction":"cw"/"ccw"}。${base}${retryNote}`;
     case 'vote':
-      return `放逐投票：请选出你认为最可能是狼人的玩家。${cand(req.candidates)}0 表示弃票。投票互相保密。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+      return `放逐投票：请选出你认为最可能是狼人的玩家。${cand(req.candidates)}0 表示弃票。投票互相保密。${sheriffNote(player, 'vote', game.rules.sheriffVoteWeight)}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     case 'pk_vote':
-      return `平票 PK 投票：只能在 PK 玩家中选择。${cand(req.candidates)}0 表示弃票。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+      return `平票 PK 投票：只能在 PK 玩家中选择。${cand(req.candidates)}0 表示弃票。${player.isSheriff ? `（你是警长，这一票算 ${game.rules.sheriffVoteWeight} 票）` : ''}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     case 'shoot':
       return `你触发了开枪技能，可以带走一名玩家${req.allowNone !== false ? '，也可以选 0 放弃开枪' : ''}。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     default:

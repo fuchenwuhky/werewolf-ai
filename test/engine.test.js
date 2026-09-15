@@ -1302,3 +1302,46 @@ test('暗牌局：死因不公开（渲染与 AI 上下文均无死因）', asyn
   const common = buildCommonPrompt(g);
   assert.ok(common.includes('暗牌局'), '暗牌局应注入防幻觉铁律');
 });
+
+// ==================== 警徽策略（持徽打法 + 死后流转） ====================
+
+test('警徽策略库：覆盖全部角色，hold/pass 非空且简短', () => {
+  const { BADGE_STRATEGIES, badgeHoldFor, badgePassFor } = require('../src/ai/strategies');
+  for (const rid of Object.keys(ROLES)) {
+    const s = BADGE_STRATEGIES[rid];
+    assert.ok(s && s.hold && s.pass, `${rid} 应有持徽与流转策略`);
+    assert.ok(s.hold.length <= 120 && s.pass.length <= 120, `${rid} 警徽策略应简短（${s.hold.length}/${s.pass.length}）`);
+    assert.ok(badgeHoldFor(rid) === s.hold && badgePassFor(rid) === s.pass);
+  }
+});
+
+test('警徽策略注入：流转/方向/投票/归票各决策点', () => {
+  const g = makeGame({});
+  assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'villager', 4: 'witch' });
+  const seer = game_becomeSheriff(g, 2);
+  const wolf = game_becomeSheriff(g, g.player(1));
+  // 警徽移交：预言家→金水策略；狼→队友策略
+  const bpSeer = taskInstruction(g, seer, { task: 'badge_pass', candidates: [1, 3, 4] });
+  assert.ok(bpSeer.includes('警徽流转策略') && bpSeer.includes('金水'), '预言家流转应提金水');
+  const bpWolf = taskInstruction(g, wolf, { task: 'badge_pass', candidates: [2, 3, 4] });
+  assert.ok(bpWolf.includes('狼队友') && bpWolf.includes('撕徽'), '狼的流转应提队友与撕徽');
+  // 方向选择：持徽打法注入
+  const dir = taskInstruction(g, seer, { task: 'direction' });
+  assert.ok(dir.includes('警徽打法'), '方向任务应注入持徽打法');
+  assert.ok(!taskInstruction(g, g.player(3), { task: 'direction' }).includes('警徽打法'), '非警长不注入');
+  // 投票：警长 1.5 票提醒
+  assert.ok(taskInstruction(g, seer, { task: 'vote', candidates: [1, 3] }).includes('1.5 票'), '警长投票应提醒票权');
+  assert.ok(!taskInstruction(g, g.player(3), { task: 'vote', candidates: [1, 2] }).includes('1.5 票'), '非警长不提醒票权');
+  // 发言：归票价值 + 持徽打法
+  const sp = taskInstruction(g, seer, { task: 'speech' });
+  assert.ok(sp.includes('归票') && sp.includes('警徽打法'), '警长发言应含归票与持徽打法');
+  // 撕徽选项说明
+  assert.ok(bpSeer.includes('0 表示撕毁'), '流转指令应说明 0=撕毁');
+});
+
+/** 测试辅助：把某座位设为警长并返回 player */
+function game_becomeSheriff(g, player) {
+  if (typeof player === 'number') player = g.player(player);
+  player.isSheriff = true;
+  return player;
+}
