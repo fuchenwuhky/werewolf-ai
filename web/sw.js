@@ -28,6 +28,7 @@ const SHELL = [
   '/style.css',
   '/i18n.js',
   '/card-frame.js',
+  '/rulebook.js',
   '/app.js',
   '/pwa.js',
   '/offline.html',

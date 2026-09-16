@@ -220,7 +220,8 @@
 
   const api = { html, ensureDefs, DEFS, FRAME, DEFS_ID, VIEW, BAND, WINDOW_RX };
   root.CardFrame = api;
-  // 走 root.module 而不是裸 module：浏览器里没有 module，裸引用会被 eslint no-undef 拦下
-  // （与 i18n.js 的写法一致）；Node 侧的测试在沙箱里塞 module.exports。
-  if (root.module && root.module.exports) root.module.exports = api;
+  // 用 typeof 守卫而不是 root.module：被 require 的模块里 globalThis.module 是 undefined，
+  // root.module 那条路永远不会执行（require 只会拿到空对象）。浏览器里没有 module，
+  // typeof 判断让它整行不执行。
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

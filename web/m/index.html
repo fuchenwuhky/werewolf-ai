@@ -72,64 +72,42 @@
     </div>
   </section>
 
-  <!-- 屏3：对局（圆桌框架） -->
+  <!-- 屏3：对局（左右座位 + 中间流程 + 底部身份/技能/对话框） -->
   <section id="m-game" class="m-screen hidden">
-    <header class="m-head m-game-head">
+    <header class="m-bar">
+      <button class="m-gear" id="m-gear" title="设置" aria-label="设置" data-i18n-title="m.gearTitle">⚙</button>
       <div class="m-status">
         <b id="m-day"></b>
         <span id="m-phase" class="m-phase-chip"></span>
-        <span id="m-memory" class="m-phase-chip hidden"></span>
       </div>
-      <div class="m-top-actions">
-        <button class="btn small ghost" id="m-log-btn" title="事件记录" data-i18n-title="m.logTitle">📜</button>
-        <button class="btn small ghost" id="m-me-btn" title="我的身份" data-i18n-title="m.meTitle">🎴</button>
-        <button class="btn small ghost" id="m-rulebook-btn" title="规则书" data-i18n-title="game.rulebookTitle">📖</button>
-        <button class="btn small danger" id="m-terminate-btn" title="结束本局" data-i18n-title="game.terminate">⏹</button>
-      </div>
+      <span id="m-memory" class="m-phase-chip hidden"></span>
     </header>
 
     <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
     <div id="m-paused-banner" class="m-paused-banner hidden"></div>
 
-    <!-- 圆桌座位层 -->
-    <div id="m-table" class="m-table">
-      <div class="m-table-felt"></div>
-      <div class="m-table-center">
-        <div class="tc-icon" id="tc-icon">🌙</div>
-        <div class="tc-day" id="tc-day"></div>
-        <div class="tc-step" id="tc-step"></div>
+    <!-- 牌桌：左半桌座位 | 中间流程与发言 | 右半桌座位 -->
+    <main class="m-board">
+      <aside class="m-seatcol" id="m-seats-l" aria-label="左半桌座位"></aside>
+      <section class="m-flow-wrap">
+        <div id="m-flow" class="m-flow" role="log" aria-live="polite" aria-label="对局流程与发言" data-i18n-aria="game.streamAria"></div>
+        <button id="m-to-bottom" class="m-to-bottom hidden" title="回到最新">↓ 最新</button>
+      </section>
+      <aside class="m-seatcol" id="m-seats-r" aria-label="右半桌座位"></aside>
+    </main>
+
+    <!-- 底部：左=身份牌+技能键，右=对话框 -->
+    <footer class="m-dock">
+      <div class="m-dock-l">
+        <button id="m-mycard" class="m-mycard" title="我的身份牌（点击查看）" aria-label="我的身份牌"></button>
+        <div id="m-keys" class="m-keys"></div>
       </div>
-    </div>
-
-    <!-- 当前发言舞台 -->
-    <div id="m-stage" class="m-stage">
-      <div id="m-stage-head" class="stage-head"></div>
-      <div id="m-stage-body" class="stage-body"></div>
-    </div>
-
-    <!-- 底部操作栏 -->
-    <div id="m-actionbar">
-      <div id="m-pending-hint" class="pending-hint"></div>
-      <div id="m-controls"></div>
-    </div>
+      <div class="m-dialog-wrap">
+        <div id="m-pending-hint" class="pending-hint"></div>
+        <div id="m-dialog" class="m-dialog"></div>
+      </div>
+    </footer>
   </section>
-</div>
-
-<!-- 记录抽屉 -->
-<div id="m-drawer" class="m-drawer hidden">
-  <div class="drawer-mask" id="m-drawer-mask"></div>
-  <div class="drawer-panel">
-    <div class="drawer-tabs">
-      <button class="dtab sel" data-tab="log" data-i18n="m.tabLog">📜 记录</button>
-      <button class="dtab" data-tab="me" data-i18n="m.tabMe">🎴 我的身份</button>
-      <span style="flex:1"></span>
-      <button class="btn ghost small" id="m-drawer-close">✕</button>
-    </div>
-    <div class="drawer-body" role="log" aria-live="polite" data-i18n-aria="game.streamAria">
-      <div id="m-drawer-log" class="dtab-page stream"></div>
-      <div id="m-drawer-me" class="dtab-page hidden"></div>
-    </div>
-  </div>
 </div>
 
 <div id="m-modal"></div>
@@ -149,6 +127,7 @@
 </div>
 <script src="../i18n.js"></script>
 <script src="../card-frame.js"></script>
+<script src="../rulebook.js"></script>
 <script src="../pwa.js"></script>
 <script src="m.js"></script>
 </body>

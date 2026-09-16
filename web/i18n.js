@@ -97,10 +97,7 @@
       'm.rulesSection': '⚔ 对局规则',
       'm.aiNamesHint': 'AI 昵称开局自动从名字库随机（进入对局后无法修改）',
       'm.start': '⚔ 开始游戏',
-      'm.logTitle': '事件记录',
-      'm.meTitle': '我的身份',
-      'm.tabLog': '📜 记录',
-      'm.tabMe': '🎴 我的身份',
+      'm.gearTitle': '设置（规则书 / 结束本局 / 退出）',
       'm.flipHint': '身份牌<br>点击翻开',
       'm.inspect': '🔍 检视',
       'offline.title': '现在没有网络',
@@ -190,10 +187,7 @@
       'm.rulesSection': '⚔ Game rules',
       'm.aiNamesHint': 'AI nicknames are drawn randomly at the start (cannot be changed once the game begins)',
       'm.start': '⚔ Start game',
-      'm.logTitle': 'Event log',
-      'm.meTitle': 'My role',
-      'm.tabLog': '📜 Log',
-      'm.tabMe': '🎴 My role',
+      'm.gearTitle': 'Settings (rulebook / end game / quit)',
       'm.flipHint': 'Role card<br>tap to reveal',
       'm.inspect': '🔍 Inspect',
       'offline.title': 'You are offline',
@@ -304,5 +298,8 @@
     if (root.document.readyState === 'loading') root.document.addEventListener('DOMContentLoaded', mount);
     else mount();
   }
-  if (root.module && root.module.exports) root.module.exports = I18N; // 便于 Node 直接 require（浏览器里没有 module）
+  // 便于 Node 直接 require（浏览器里没有 module，用 typeof 守卫）。
+  // ⚠ 不能写成 root.module：被 require 的模块里 globalThis.module 是 undefined，
+  // 那样这行永远不会执行，require('./web/i18n.js') 只会拿到空对象（实测过）。
+  if (typeof module !== 'undefined' && module.exports) module.exports = I18N;
 })(typeof window !== 'undefined' ? window : globalThis);

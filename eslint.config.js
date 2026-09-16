@@ -55,6 +55,14 @@ const browserGlobals = {
   structuredClone: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly', AbortController: 'readonly',
   Blob: 'readonly', FileReader: 'readonly', Image: 'readonly', Audio: 'readonly', WebSocket: 'readonly',
   globalThis: 'readonly', location_origin: 'readonly', history: 'readonly', screen: 'readonly',
+  // 本仓库 web/ 下由别的脚本挂到全局上的对象（不是浏览器内建；写在这里才算"有据可查"，
+  // 否则每次用都得写成 window.xxx）：
+  I18N: 'readonly',      // web/i18n.js      → root.I18N
+  CardFrame: 'readonly', // web/card-frame.js → root.CardFrame
+  Rulebook: 'readonly',  // web/rulebook.js   → root.Rulebook
+  // web/*.js 是 UMD 风格（浏览器 <script> 与 Node require 双载）：Node 侧需要 module，
+  // 浏览器里它不存在，所以代码里一律 typeof 守卫之后才用。
+  module: 'readonly',
 };
 
 module.exports = [

@@ -552,14 +552,19 @@ details summary:hover { color: var(--gold-bright); }
   border: 1px solid var(--gold-dim); outline: 1px solid rgba(201,162,39,.15); outline-offset: 4px;
   border-radius: var(--r-md); width: min(760px, 96vw); max-height: 88vh; display: flex; flex-direction: column;
   box-shadow: var(--el-4);
+  /* 兜底：任何子元素都不许画出圆角边框之外 */
+  overflow: hidden;
 }
-.modal .mhead { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--gold-dim); }
+.modal .mhead { display: flex; align-items: center; justify-content: space-between; padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--gold-dim); flex: none; }
 .modal .mhead h2 { margin: 0; font-size: var(--fs-lg); color: var(--gold); font-family: var(--font-cn-title); letter-spacing: 2px; }
-.modal .tabs { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-4) 0; }
+.modal .tabs { display: flex; gap: var(--sp-1); padding: var(--sp-2) var(--sp-4) 0; flex: none; }
 .modal .tabs button { border: 1px solid var(--line-dim); border-bottom: none; background: transparent; color: var(--muted);
   padding: 6px var(--sp-4); border-radius: var(--r-xs) var(--r-xs) 0 0; cursor: pointer; }
 .modal .tabs button.on { color: var(--gold); background: var(--bg2); }
-.modal .mbody { padding: 14px var(--sp-4); overflow: auto; }
+/* ⚠ 必须写 min-height: 0：flex 子项默认 min-height:auto，正文会被内容撑到真实高度
+   （实测规则书 11192px），此时它自己的 overflow:auto 永远不触发 —— 表现就是
+   "弹窗内容超出屏幕且滚不动"。这一条同时修好设置弹窗与规则书。 */
+.modal .mbody { padding: 14px var(--sp-4); overflow-y: auto; overscroll-behavior: contain; flex: 1 1 auto; min-height: 0; }
 .rulebook h3 { color: var(--gold); margin: 14px 0 6px; font-family: var(--font-cn-title); letter-spacing: 1px; }
 .rulebook p, .rulebook li { color: var(--text); line-height: 1.8; font-size: var(--fs-md); }
 .codex { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--sp-4); }
@@ -818,6 +823,62 @@ details summary:hover { color: var(--gold-bright); }
   box-shadow: var(--el-2);
 }
 #sw-update button:hover { background: #241d33; }
+
+/* ============================================================
+   规则书（桌面与手机共用同一份内容与渲染器：web/rulebook.js）
+   ------------------------------------------------------------
+   旧规则书是一大段拼接 HTML：弹窗正文高 1251px 塞在 844px 视口里，
+   没有章节导航、表格没有横向滚动，手机上等于看不全。
+   现在：顶部章节 chip（sticky）+ 分节卡片 + **表格横向滚动壳**。
+   ============================================================ */
+.rb-nav {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0 10px;
+  background: linear-gradient(180deg, rgba(18,13,28,.98) 70%, rgba(18,13,28,.72));
+  border-bottom: 1px solid var(--line-dim);
+}
+.rb-chip {
+  padding: 6px 10px; border-radius: var(--r-pill); cursor: pointer;
+  font-size: var(--fs-sm); color: var(--gold); background: rgba(201,162,39,.08);
+  border: 1px solid rgba(201,162,39,.35);
+}
+.rb-chip:active { background: rgba(201,162,39,.2); }
+.rb-body { padding-top: 10px; }
+.rb-sec { margin-bottom: var(--sp-5); scroll-margin-top: 56px; }
+.rb-h {
+  font-family: var(--font-cn-title); color: var(--gold-bright);
+  font-size: var(--fs-lg); letter-spacing: 2px; margin: 0 0 8px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--line-dim);
+}
+.rb-p { margin: 0 0 8px; line-height: 1.85; }
+.rb-ul, .rb-steps { margin: 0 0 10px; padding-left: 22px; line-height: 1.85; }
+/* 步骤条目自带 ①②③ 序号（数据里就有），所以这里不再叠加 CSS 计数器 —— 叠了会变成"① ① …" */
+.rb-steps { list-style: none; padding-left: 2px; }
+.rb-steps > li { margin-bottom: 7px; }
+.rb-note {
+  margin: 0 0 10px; padding: 8px 10px; line-height: 1.8;
+  border-left: 3px solid var(--accent); background: rgba(179,46,62,.1);
+  color: #f0d7db; border-radius: 0 var(--r-sm) var(--r-sm) 0;
+}
+/* 表格：手机上 4 列必然超宽 —— 外壳横向滚动，绝不撑破弹窗 */
+.rb-tw { overflow-x: auto; margin: 0 0 12px; -webkit-overflow-scrolling: touch; }
+.rb-table { border-collapse: collapse; width: 100%; min-width: 320px; font-size: var(--fs-sm); }
+.rb-table th, .rb-table td {
+  border: 1px solid var(--line-dim); padding: 6px 8px; text-align: left;
+  vertical-align: top; line-height: 1.65;
+}
+.rb-table th { background: rgba(201,162,39,.12); color: var(--gold-bright); white-space: nowrap; }
+.rb-table tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+
+/* 齿轮菜单（手机对局页左上角） */
+.gear-list { display: flex; flex-direction: column; gap: 8px; margin: var(--sp-3) 0; }
+.gear-item {
+  text-align: left; padding: 12px var(--sp-3); cursor: pointer; font-size: var(--fs-md);
+  border-radius: var(--r-sm); border: 1px solid var(--line-dim);
+  background: linear-gradient(180deg, #241c36, #150f22); color: var(--text);
+}
+.gear-item:active { border-color: var(--gold); color: var(--gold-bright); }
+.gear-item.danger { border-color: rgba(179,46,62,.5); color: #f0b8bf; }
 
 /* 键盘可达性：焦点必须看得见（暗色主题下默认描边几乎不可见） */
 :focus-visible { outline: 2px solid #c9a227; outline-offset: 2px; }

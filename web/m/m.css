@@ -20,18 +20,27 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-head h1::before { content: '✠ '; color: var(--accent); }
 .m-head h2 { font-family: var(--font-cn-title); color: var(--gold-bright); margin: 0; font-size: 17px; letter-spacing: 2px; }
 .m-sub { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-sm); letter-spacing: 4px; }
-.m-game-head { justify-content: space-between; }
-.m-status { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+/* 对局顶栏：只留左上角齿轮 + 天数/阶段。其余入口全部收进齿轮菜单
+   （原来是 4 个无标签图标按钮 📜🎴📖⏹，玩家得猜哪个是记录、哪个是身份） */
+.m-bar {
+  display: flex; align-items: center; gap: var(--sp-3); flex: none;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-2)) var(--sp-3) var(--sp-2);
+  border-bottom: 1px solid var(--gold-dim);
+  background: linear-gradient(180deg, #17121f, #100d18);
+}
+.m-gear {
+  flex: none; width: 44px; height: 44px; border-radius: var(--r-md); cursor: pointer;
+  background: linear-gradient(180deg, #241c36, #140f20);
+  border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
+  font-size: 21px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.m-gear:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
+.m-status { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
 #m-day { font-family: var(--font-goth); color: var(--gold-bright); }
 .m-phase-chip {
   color: var(--gold-bright); border: 1px solid rgba(201,162,39,.45); padding: 2px 10px;
   border-radius: var(--r-pill); font-size: var(--fs-sm);
-}
-.m-top-actions { display: flex; gap: var(--sp-2); flex: none; }
-/* 触控目标：原来图标按钮只有 ~28px 高，拇指很难点中；统一到 44px */
-.m-top-actions .btn {
-  min-width: 44px; min-height: 44px; padding: 0 var(--sp-2); font-size: 19px;
-  border-radius: var(--r-md);
 }
 
 .m-scroll { flex: 1; overflow: auto; padding: var(--sp-4); }
@@ -81,115 +90,157 @@ html, body { height: 100%; overscroll-behavior: none; }
 }
 .m-custom-row button:active { border-color: var(--gold); color: var(--gold-bright); }
 
-/* 屏3 对局 —— 网易式圆桌框架 */
-/* 高度策略：圆桌吸收剩余空间（它是纯装饰区，屏幕越大圆桌越大越自然），舞台按内容收缩。
-   注意别给圆桌加 max-height：舞台不再 flex:1 之后，若圆桌也封顶，多出来的空间会掉到
-   底部操作条**下面**，操作条就不贴底了（踩过一次）。 */
-.m-table { position: relative; flex: 1 1 auto; height: auto; min-height: 240px; margin: var(--sp-2) 10px 0; }
-.m-table-felt {
-  position: absolute; left: 5%; right: 5%; top: 12%; bottom: 12%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at 50% 38%, #31244a 0%, #1c1430 52%, #120c1f 100%);
-  box-shadow:
-    inset 0 0 46px rgba(0,0,0,.85),
-    inset 0 0 0 1px rgba(201,162,39,.25),
-    0 0 0 1px #221a0b, 0 0 0 3px #6b5416, 0 0 0 4px #c9a227, 0 0 0 5px #221a0b,
-    0 10px 30px rgba(0,0,0,.65);
-  transition: background .9s ease;
+/* ============================================================
+   屏3 对局：左右半桌座位 | 中间流程与发言 | 底部（左）身份+技能（右）对话框
+   ------------------------------------------------------------
+   旧布局是「圆桌 + 舞台 + 底部操作条」：圆桌吃掉 64% 高度（大片空毡子），
+   座位按椭圆百分比摆放、名字只有 10px，而且**整页没有任何滚动容器** ——
+   舞台 overflow:hidden 会把长发言直接截断，想看历史只能点顶部按钮开抽屉。
+   现在：
+     .m-board = 左座位列 | 流程（全页唯一滚动区）| 右座位列
+     .m-dock  = 左：身份牌 + 技能键；右：对话框
+   座位按**座位号**稳定排布（左半 1..⌈n/2⌉、右半其余），不再跟着"我"旋转：
+   找号数不用在圆上数圈。
+   ============================================================ */
+.m-board {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; align-items: stretch; gap: 6px;
+  padding: var(--sp-2) var(--sp-2) 0;
 }
-.m-table.night .m-table-felt { background: radial-gradient(ellipse at 50% 38%, #131a34 0%, #0c0f22 52%, #06070f 100%); }
-.m-table-center { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); text-align: center; pointer-events: none; z-index: 1; }
-.tc-icon { font-size: 30px; filter: drop-shadow(0 0 12px rgba(201,162,39,.45)); transition: filter .9s ease; }
-.m-table.night .tc-icon { filter: drop-shadow(0 0 16px rgba(130,150,255,.55)); }
-.tc-day { font-family: var(--font-cn-title); color: var(--gold); font-size: 15px; letter-spacing: 2px; margin-top: 2px; }
-.tc-step { font-size: var(--fs-xs); color: var(--muted); margin-top: var(--sp-1); max-width: 150px; }
+.m-seatcol {
+  flex: 0 0 68px; min-width: 0;
+  display: flex; flex-direction: column; gap: 5px;
+  overflow: auto; overscroll-behavior: contain;
+}
+.m-flow-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
+.m-flow {
+  flex: 1 1 auto; min-width: 0; overflow: auto; overscroll-behavior: contain;
+  padding: var(--sp-2) var(--sp-2) var(--sp-4);
+  background: linear-gradient(180deg, rgba(30,23,46,.5), rgba(12,9,20,.72));
+  border: 1px solid var(--line-dim); border-radius: var(--r-md);
+  font-size: var(--fs-base); line-height: 1.7;
+}
+/* 「↓ 最新」：往上翻看历史时出现，避免"信息跑出视野后回不去" */
+.m-to-bottom {
+  position: absolute; right: 10px; bottom: 10px; z-index: 3;
+  min-height: 36px; padding: 0 var(--sp-3); cursor: pointer;
+  border-radius: var(--r-pill); border: 1px solid var(--gold-dim);
+  background: rgba(24,17,36,.94); color: var(--gold-bright); font-size: var(--fs-sm);
+  box-shadow: 0 4px 14px rgba(0,0,0,.6);
+}
 
-/* 圆桌座位：盒子略收窄 + 名字宽度跟着收，保证贴边座位（圆桌最左/最右）的文字不被屏幕裁掉 */
-.tseat { position: absolute; width: 62px; margin-left: -31px; margin-top: -25px; display: flex; flex-direction: column; align-items: center; gap: 3px; z-index: 2; }
-.tseat.taggable { cursor: pointer; }
-.tseat.taggable:active .ts-ring { box-shadow: 0 0 0 2px var(--accent2), inset 0 0 12px rgba(0,0,0,.85); }
-.ts-ring {
-  position: relative; width: 50px; height: 50px; border-radius: 50%;
+/* 座位卡：号 + 名（两行），状态用描边/角标表达，触控高度 ≥44px */
+.srow {
+  position: relative; flex: none; cursor: pointer; min-height: 44px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  padding: 4px 3px; border-radius: var(--r-sm);
+  background: linear-gradient(180deg, #241c36, #150f22);
+  border: 1px solid rgba(201,162,39,.26);
+  transition: border-color .15s ease, box-shadow .15s ease, transform .1s ease;
+}
+.srow:active { transform: scale(.97); }
+.srow .num {
+  width: 24px; height: 24px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-goth); font-size: var(--fs-xl); font-weight: 700; color: var(--gold-dim);
-  background: radial-gradient(circle at 35% 28%, #30254a 0%, #191226 72%);
-  box-shadow: 0 0 0 1px rgba(201,162,39,.45), inset 0 0 12px rgba(0,0,0,.85);
-  transition: box-shadow .25s ease, color .25s ease;
-}
-.tseat.mine .ts-ring { color: var(--gold); box-shadow: 0 0 0 1px var(--gold), 0 0 0 3px rgba(201,162,39,.22), inset 0 0 12px rgba(0,0,0,.85); }
-.tseat.speaking .ts-ring { color: var(--text); animation: speakPulse 1.6s ease-in-out infinite; }
-@keyframes speakPulse {
-  0%, 100% { box-shadow: 0 0 0 2px var(--gold), 0 0 10px rgba(201,162,39,.5), inset 0 0 10px rgba(0,0,0,.7); }
-  50% { box-shadow: 0 0 0 3px #f4e3a0, 0 0 22px rgba(201,162,39,.95), inset 0 0 10px rgba(0,0,0,.7); }
-}
-.tseat.dead { filter: grayscale(.85) brightness(.55); }
-.tseat.dead .ts-ring::after {
-  content: '✕'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  color: var(--accent); font-size: 30px; font-weight: 700; text-shadow: 0 0 8px rgba(179,46,62,.9);
-}
-.ts-name { font-size: 10px; color: var(--muted); max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
-.tseat.mine .ts-name { color: var(--text); }
-.ts-badge { position: absolute; top: -7px; right: -8px; font-size: var(--fs-md); z-index: 3; filter: drop-shadow(0 1px 3px rgba(0,0,0,.9)); }
-.ts-badge.b2 { right: auto; left: -8px; }
-/* 标签角色小徽：原来 right:-12px 会顶出圆桌边界 */
-.ts-role { position: absolute; bottom: -4px; right: -7px; font-size: 10px; padding: 0 var(--sp-1); border-radius: var(--r-pill); border: 1px solid currentColor; background: rgba(10,7,16,.92); z-index: 3; }
-
-/* 我的身份页 */
-.me-card { display: flex; gap: var(--sp-3); align-items: flex-start; }
-.me-art { width: 96px; flex: none; }
-.me-role { font-family: var(--font-cn-title); font-size: 17px; letter-spacing: 2px; }
-.me-info { flex: 1; min-width: 0; }
-
-/* 当前发言舞台：按内容收缩（长发言在内部滚动），不再撑出大片空框。
-   flex-shrink 必须是 1：底部操作区高度随状态变化（选择态 ~160px，"轮到你发言"时多了输入框会到 ~360px），
-   舞台若不可收缩，多出来的高度就会把操作条顶到屏幕外（实测超出视口 171px，按钮点不到）。
-   收缩下限由 .stage-body 的 min-height 兜住，圆桌另有 min-height: 240px 兜底。 */
-.m-stage {
-  flex: 0 1 auto; min-height: 0; max-height: 46%; margin: var(--sp-2) 10px;
-  display: flex; flex-direction: column; overflow: hidden;
-  background: linear-gradient(180deg, rgba(38,29,58,.85), rgba(13,10,20,.96));
-  border: 1px solid rgba(201,162,39,.32);
-  border-radius: var(--r-md); padding: var(--sp-3);
-  box-shadow: inset 0 0 24px rgba(0,0,0,.5), var(--el-2);
-  transition: border-color .3s ease, box-shadow .3s ease;
-}
-.m-stage.important { border-color: rgba(179,46,62,.6); box-shadow: inset 0 0 24px rgba(0,0,0,.55), 0 0 16px rgba(179,46,62,.25); }
-.stage-head { display: flex; align-items: center; gap: var(--sp-2); flex: none; }
-.stage-ava {
-  width: 34px; height: 34px; border-radius: 50%; flex: none;
-  display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-goth); font-size: var(--fs-base); color: var(--gold-bright);
+  font-family: var(--font-goth); font-size: var(--fs-sm); font-weight: 700;
+  color: var(--gold-dim);
   background: radial-gradient(circle at 35% 28%, #30254a, #191226 72%);
-  box-shadow: 0 0 0 1px rgba(201,162,39,.5);
+  box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px rgba(201,162,39,.3);
 }
-.stage-who { font-size: var(--fs-md); color: var(--gold-bright); font-weight: 600; }
-.stage-tag { font-size: var(--fs-xs); color: var(--muted); }
-.stage-body {
-  margin-top: var(--sp-2); flex: 0 1 auto; min-height: 46px; max-height: 30vh;
-  overflow: auto; font-size: var(--fs-base); line-height: 1.85; color: var(--text); white-space: pre-wrap;
-  overscroll-behavior: contain;
+.srow .nm {
+  width: 100%; text-align: center; font-size: 10px; line-height: 1.2;
+  color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.srow.mine { border-color: rgba(201,162,39,.7); }
+.srow.mine .num { color: var(--gold); box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px var(--gold); }
+.srow.mine .nm { color: var(--text); }
+.srow.speaking { border-color: var(--gold); animation: seatPulse 1.6s ease-in-out infinite; }
+@keyframes seatPulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(201,162,39,.45), 0 0 8px rgba(201,162,39,.25); }
+  50% { box-shadow: 0 0 0 2px #f4e3a0, 0 0 18px rgba(201,162,39,.75); }
+}
+.srow.dead { filter: grayscale(.8) brightness(.62); }
+.srow.dead .num::after { content: '✕'; position: absolute; font-size: 15px; color: var(--accent); text-shadow: 0 0 6px rgba(179,46,62,.9); }
+.srow .b {
+  position: absolute; top: -3px; right: -3px; font-size: 11px; line-height: 1;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,.9));
+}
+.srow .b.l { right: auto; left: -3px; }
+/* 可选目标 / 已选中：投票、查验、开枪这类任务直接点座位选人，不用再去底部找号 */
+.srow.pickable { border-style: dashed; border-color: rgba(201,162,39,.6); }
+.srow.picked { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(179,46,62,.5); background: linear-gradient(180deg, #3a1a22, #1c0d12); }
+.srow.picked .num { color: #ffd7dd; box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px var(--accent); }
+
+/* ---------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ---------- */
+.m-dock {
+  flex: none; display: flex; align-items: stretch; gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));
+  border-top: 1px solid var(--gold-dim);
+  background: linear-gradient(180deg, #17121f, #0e0b15);
+  box-shadow: 0 -8px 24px rgba(0,0,0,.5);
+}
+.m-dock-l { flex: 0 0 auto; display: flex; align-items: stretch; gap: var(--sp-2); min-width: 0; }
+/* 身份牌：常驻可见（旧版要点顶部 🎴 才看得到），点击开检视大卡 */
+.m-mycard {
+  flex: none; width: 54px; height: 81px; padding: 0; cursor: pointer; overflow: hidden;
+  border-radius: var(--r-sm); border: none; background: none;
+}
+.m-mycard .card-frame { width: 100%; }
+.m-mycard:active { transform: scale(.96); }
+.m-keys { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 0; }
+.m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pending-hint {
+  border-left: 3px solid var(--accent); padding-left: var(--sp-2);
+  font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim);
+}
+.pending-hint.mine { color: #ffd98a; border-left-color: var(--gold); }
+.pending-hint.waiting { border-left-color: var(--line); color: var(--muted); }
+.m-dialog { flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 0; }
+.m-dialog textarea {
+  width: 100%; min-height: 46px; max-height: 28vh; margin: 0; resize: none;
+  font-size: var(--fs-base);
+}
+.m-dialog .mrow { display: flex; gap: 5px; align-items: center; }
+.m-dialog .mrow .btn { flex: 1 1 0; min-height: 40px; }
+.m-dialog .idle {
+  font-size: var(--fs-sm); color: var(--muted); line-height: 1.5;
+  border: 1px dashed var(--line-dim); border-radius: var(--r-sm); padding: var(--sp-2);
+  text-align: center;
 }
 
-/* 记录抽屉（底部弹层） */
-.m-drawer { position: fixed; inset: 0; z-index: 70; }
-.drawer-mask { position: absolute; inset: 0; background: rgba(3,2,6,.55); }
-.drawer-panel {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 74%;
-  display: flex; flex-direction: column;
-  background: linear-gradient(180deg, #171126, #0c0914);
-  border-top: 2px solid var(--gold-dim); border-radius: var(--r-lg) var(--r-lg) 0 0;
-  box-shadow: 0 -18px 50px rgba(0,0,0,.7);
-  animation: drawerUp .22s ease;
+/* ---------- 技能键：可用=红，不可用=灰红（用户明确要求的语义） ---------- */
+.key {
+  min-height: 38px; padding: 0 var(--sp-3); cursor: pointer;
+  border-radius: var(--r-sm); font-size: var(--fs-md); font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 1px solid transparent; white-space: nowrap;
 }
-@keyframes drawerUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-.drawer-tabs { display: flex; align-items: center; gap: var(--sp-1); padding: var(--sp-3) var(--sp-3) var(--sp-2); border-bottom: 1px solid var(--line-dim); }
-.dtab {
-  background: none; border: 1px solid transparent; color: var(--muted);
-  font-size: var(--fs-md); min-height: 40px; padding: 0 var(--sp-3); border-radius: var(--r-sm); cursor: pointer;
+/* 可用：血红实心 + 外发光 */
+.key.on {
+  color: #fff; border-color: #d8434f;
+  background: linear-gradient(180deg, #c8353f, #8e1a26);
+  box-shadow: 0 0 0 1px rgba(255,120,130,.28), 0 3px 12px rgba(179,46,62,.45);
 }
-.dtab.sel { color: var(--gold-bright); border-color: rgba(201,162,39,.5); background: rgba(201,162,39,.1); }
-.drawer-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.dtab-page { flex: 1; min-height: 0; overflow: auto; padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3)); }
+.key.on:active { transform: scale(.97); background: linear-gradient(180deg, #d8434f, #a01f2c); }
+/* 不可用：灰红（去饱和 + 压暗），并且 disabled 真的点不动 */
+.key.off {
+  color: #8d6c72; border-color: #4a3238;
+  background: linear-gradient(180deg, #2e2429, #241b20);
+  cursor: not-allowed; box-shadow: none;
+}
+/* 次要但可用（不上警 / 空过 / 弃票 / 撕毁）：暗红描边，明确区别于"不可用" */
+.key.alt {
+  color: #e8b7be; border-color: rgba(179,46,62,.55);
+  background: linear-gradient(180deg, #2b1a22, #1d1218);
+}
+.key.alt:active { transform: scale(.97); border-color: var(--accent); }
+.key .k-sub { font-size: var(--fs-xs); color: inherit; opacity: .8; }
+/* 目标选择用的座位小键（底部备选入口；主入口是左右座位列） */
+.key.seat { min-height: 36px; padding: 0 var(--sp-2); min-width: 46px; }
+.key.seat.off { color: #8d6c72; }
+
+/* 身份页/记录抽屉已移除：身份牌常驻底部坞，流程常驻中间 —— 见 .m-mycard / .m-flow */
 
 /* 全屏阶段横幅 */
 .m-flash {
@@ -212,22 +263,12 @@ html, body { height: 100%; overscroll-behavior: none; }
 @keyframes flashIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes flashOut { from { opacity: 1; } to { opacity: 0; } }
 
-/* 底部操作区：手机上拇指优先 —— 按钮拉满整行、高度拉到 46px */
-#m-actionbar {
-  border-top: 1px solid var(--gold-dim); background: linear-gradient(180deg, #17121f, #0e0b15);
-  padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3));
-  box-shadow: 0 -8px 24px rgba(0,0,0,.5);
-}
-#m-actionbar .pending-hint {
-  border-left: 3px solid var(--accent); padding-left: var(--sp-3); margin-bottom: var(--sp-2);
-  font-size: var(--fs-md);
-}
-#m-actionbar.mine .pending-hint { color: #ffd98a; border-left-color: var(--gold); }
-#m-controls { display: flex; gap: var(--sp-2); flex-wrap: wrap; align-items: center; }
-#m-controls textarea { flex: 1 1 100%; min-height: 56px; margin: 0; }
-#m-controls .chip, #m-controls > .btn { flex: 1 1 auto; min-height: var(--h-ctl-lg); justify-content: center; }
-#m-controls .btnrow { display: flex; gap: var(--sp-2); width: 100%; margin-top: 0; }
-#m-controls .btnrow .btn { flex: 1 1 0; min-height: var(--h-ctl-lg); }
+/* 对话框内的按钮组：拇指优先，按钮拉满整行 */
+.m-dialog .btnrow { display: flex; gap: var(--sp-2); width: 100%; }
+.m-dialog .btnrow .btn { flex: 1 1 0; min-height: 42px; justify-content: center; }
+.m-keys .btn { min-height: 38px; }
+.m-keys .btnrow { display: flex; gap: 5px; }
+.m-keys .btnrow .btn { flex: 1 1 0; }
 .m-modal .modal { width: min(560px, 96vw); }
 /* 移动端弹窗遮罩（桌面样式作用域为 #modal-root，移动端容器是 #m-modal） */
 #m-modal .modal-mask {

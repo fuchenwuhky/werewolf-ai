@@ -16,7 +16,7 @@ const state = {
   // SSE 推送（P2-2）：连接 + 看门狗时间戳（断流即回退轮询）
   stream: null, streamWatchdog: null, lastStreamAt: 0,
   roleShown: false, seatNames: {}, tags: {}, lastNightStep: null,
-  speakingSeat: 0, stage: null,
+  speakingSeat: 0,
 };
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
 
@@ -41,8 +41,10 @@ async function init() {
   $('#m-next').addEventListener('click', gotoRules);
   $('#m-back').addEventListener('click', () => showScreen('m-boards'));
   $('#m-start').addEventListener('click', startGame);
-  $('#m-rulebook-btn').addEventListener('click', openRulebook);
-  $('#m-terminate-btn').addEventListener('click', terminateGame);
+  $('#m-gear').addEventListener('click', openGear);
+  $('#m-mycard').addEventListener('click', showMyCard);
+  $('#m-to-bottom').addEventListener('click', () => { scrollFlow(true); });
+  $('#m-flow').addEventListener('scroll', onFlowScroll);
   $('#m-my-seat').addEventListener('change', () => {
     try { localStorage.setItem('ww_seat', $('#m-my-seat').value); } catch (_) { /* 隐私模式忽略 */ }
     renderSeatSelect();
@@ -50,61 +52,102 @@ async function init() {
   $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
   $('#m-flip-card').addEventListener('click', () => $('#m-flip-card').classList.add('flipped'));
   $('#m-flip-done').addEventListener('click', () => $('#m-flip').classList.add('hidden'));
-  $('#m-log-btn').addEventListener('click', () => openDrawer('log'));
-  $('#m-me-btn').addEventListener('click', showMyCard);
-  $('#m-drawer-close').addEventListener('click', closeDrawer);
-  $('#m-drawer-mask').addEventListener('click', closeDrawer);
-  // 点标签只切显示、不渲染内容 —— renderMeTab() 原先只在 openDrawer('me') 里调用，
-  // 而 openDrawer('me') 没有任何调用方（头部 🎴 按钮走的是 showMyCard 翻牌浮层），
-  // 于是"我的身份"标签永远是一张空白页。这里补上内容渲染。
-  document.querySelectorAll('.dtab[data-tab]').forEach((b) =>
-    b.addEventListener('click', () => {
-      selectDrawerTab(b.dataset.tab);
-      if (b.dataset.tab === 'me') renderMeTab();
-    })
-  );
   tryResume();
   window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
 }
 
-// ---------------- 记录抽屉 ----------------
-function openDrawer(tab) {
-  $('#m-drawer').classList.remove('hidden');
-  selectDrawerTab(tab);
-  if (tab === 'me') renderMeTab();
-  else autoScroll();
-}
-function closeDrawer() { $('#m-drawer').classList.add('hidden'); }
-function selectDrawerTab(tab) {
-  document.querySelectorAll('.dtab[data-tab]').forEach((b) => b.classList.toggle('sel', b.dataset.tab === tab));
-  $('#m-drawer-log').classList.toggle('hidden', tab !== 'log');
-  $('#m-drawer-me').classList.toggle('hidden', tab !== 'me');
-}
-function renderMeTab() {
+// ---------------- 齿轮菜单（设置 / 规则书 / 结束本局 / 退出） ----------------
+/** 菜单项：对局中才有的项（结束本局）按状态显示 */
+function openGear() {
   const v = state.view;
-  const box = $('#m-drawer-me');
-  if (!v || !v.me || !v.me.role) { box.innerHTML = '<p class="hint">尚未获得身份。</p>'; return; }
-  const r = roleInfo(v.me.role);
-  const mates = v.me.teammates && v.me.teammates.length ? `<p style="color:#e89ba4">🐺 你的狼队队友：${v.me.teammates.join('、')} 号</p>` : '';
-  box.innerHTML = `
-    <div class="me-card">
-      <div class="me-art">${roleArtHtml(v.me.role)}</div>
-      <div class="me-info">
-        <div class="me-role" style="color:${r.color}">${r.emoji} ${r.name}</div>
-        <div class="hint">${v.me.seat}号 · ${v.me.alive ? '存活' : '出局'}${v.me.isSheriff ? ' · 👑警长' : ''}</div>
-        <p style="margin:8px 0 0;font-size:13px;line-height:1.8">${escapeHtml(r.description)}</p>
-        ${mates}
-        <div class="btnrow" style="margin-top:10px">
-          <button class="btn" id="me-inspect">🔍 检视卡牌</button>
-        </div>
-      </div>
-    </div>`;
-  $('#me-inspect').addEventListener('click', () => openInspect(v.me.role));
+  const inGame = !!(v && v.game);
+  const rows = [];
+  if (inGame) {
+    rows.push(['🎴 查看我的身份牌', () => { if (v.me && v.me.role) openInspect(v.me.role); }]);
+  }
+  rows.push(['📖 规则书', () => openRulebook()]);
+  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);
+  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
+  if (inGame && !v.finished) {
+    rows.push(['⏹ 结束本局', () => askTerminate()]);
+  }
+  if (!inGame) rows.push(['🏠 返回首页', () => { localStorage.removeItem('mww_current'); location.reload(); }]);
+  const wrap = el('div', 'modal');
+  wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
+  const box = el('div', 'gear-list');
+  rows.forEach(([label, fn], i) => {
+    const b = el('button', 'gear-item' + (i === rows.length - 1 && inGame ? ' danger' : ''), label);
+    b.addEventListener('click', () => { $('#m-modal').innerHTML = ''; fn(); });
+    box.appendChild(b);
+  });
+  wrap.appendChild(box);
+  wrap.appendChild(el('p', 'hint', inGame ? `对局 ${v.game.gameId}${v.day ? ` · 第 ${v.day} 天` : ''}` : ''));
+  const close = el('button', 'btn ghost', '关闭');
+  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  wrap.appendChild(close);
+  openModal(wrap);
 }
+
+function askTerminate() {
+  const wrap = el('div', 'modal');
+  wrap.appendChild(el('h3', 'mtitle', '⏹ 结束本局'));
+  wrap.appendChild(el('p', null, '结束后本局不可恢复，将直接结算并公开所有身份。确定要结束吗？'));
+  const row = el('div', 'btnrow');
+  const yes = el('button', 'btn danger', '确定结束');
+  yes.addEventListener('click', () => { $('#m-modal').innerHTML = ''; terminateGame(); });
+  const no = el('button', 'btn', '取消');
+  no.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  row.append(yes, no);
+  wrap.appendChild(row);
+  openModal(wrap);
+}
+
+/** 设置弹窗（.mbody 自带滚动；正文再高也不会被切掉） */
+function openSettingsModal() {
+  const wrap = el('div', 'modal');
+  wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
+  const body = el('div', 'mbody');
+  body.appendChild(el('p', 'hint', '接口 / 模型 / 节奏等配置在首页的「⚙ 设置」里修改；这里可以快速切换语言与查看本局信息。'));
+  if (state.view && state.view.game) {
+    body.appendChild(el('p', null, `当前对局：${state.view.game.gameId}（第 ${state.view.day || 0} 天）`));
+  }
+  wrap.appendChild(body);
+  const row = el('div', 'btnrow');
+  const lang = el('button', 'btn', `🌐 切换到${I18N.getLang() === 'en' ? '中文' : 'English'}`);
+  lang.addEventListener('click', () => { $('#m-modal').innerHTML = ''; toggleLang(); });
+  const home = el('button', 'btn danger', '🏠 退出到首页');
+  home.addEventListener('click', () => { localStorage.removeItem('mww_current'); location.reload(); });
+  row.append(lang, home);
+  wrap.appendChild(row);
+  openModal(wrap);
+}
+
+/** 切换界面语言：不刷新页面（局中刷新会打断对局），I18N.setLang 会立刻重刷所有 data-i18n 节点 */
+function toggleLang() {
+  const next = I18N.getLang() === 'en' ? 'zh-CN' : 'en';
+  I18N.setLang(next);
+  flash(next === 'en' ? 'Language: English' : '界面语言：中文');
+}
+
+/** 点身份牌：已经发过牌就直接亮正面，否则走翻牌浮层 */
 function showMyCard() {
   if (!state.view || !state.view.me || !state.view.me.role) return;
   $('#m-flip').classList.remove('hidden');
   $('#m-flip-card').classList.add('flipped'); // 直接亮正面
+}
+
+/** 底部坞左侧的身份牌（常驻；旧版要点顶部 🎴 才看得到） */
+function renderMyCard(v) {
+  const box = $('#m-mycard');
+  const me = v && v.me;
+  if (!me || !me.role) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const sig = `${me.role}|${me.seat}|${me.alive}|${me.isSheriff}`;
+  if (box.dataset.sig === sig) return;
+  box.dataset.sig = sig;
+  const r = roleInfo(me.role);
+  box.innerHTML = roleArtHtml(me.role);
+  box.title = `我的身份牌：${me.seat}号 ${r.name}（点击查看）`;
 }
 
 function applyBoard(id) {
@@ -369,9 +412,9 @@ function enterGame() {
   localStorage.setItem('mww_current', JSON.stringify(state.game));
   showScreen('m-game');
   state.playerAfter = 0; state.roleShown = false; state.lastNightStep = null;
-  state.speakingSeat = 0; state.stage = null;
+  state.speakingSeat = 0;
   try { state.tags = JSON.parse(localStorage.getItem(`mww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
-  $('#m-drawer-log').innerHTML = '';
+  $('#m-flow').innerHTML = '';
   startPolling();
 }
 
@@ -451,22 +494,23 @@ function applyView(v) {
   state.view = v;
   const freshFrom = state.playerAfter; // 只有新事件才触发横幅/闪光
   if (state.playerAfter === 0) {
-    $('#m-drawer-log').innerHTML = '';
+    $('#m-flow').innerHTML = '';
     state.seatNames = {}; for (const p of v.players) state.seatNames[p.seat] = p.name;
-    state.speakingSeat = 0; state.stage = null;
+    state.speakingSeat = 0;
   }
   for (const e of v.events) {
     if (e.seq <= (freshFrom || 0)) continue; // 幂等：已渲染过的 seq 直接跳过
     if (e.type === 'night_step') state.lastNightStep = e.data;
     const node = renderEventNode(e);
-    if (node) $('#m-drawer-log').appendChild(node);
+    if (node) $('#m-flow').appendChild(node);
     feedStage(e, e.seq > freshFrom);
   }
   if (v.events.length) state.playerAfter = Math.max(state.playerAfter, ...v.events.map((e) => e.seq));
-  autoScroll();
+  updateLive(v);
+  scrollFlow(false);
   updateHeader(v);
   updateSeats(v);
-  updateStage(v);
+  renderMyCard(v);
   updateActionbar(v);
   updatePausedBanner(v);
   updateMemoryChip(v);
@@ -523,7 +567,7 @@ async function resumePausedGame() {
     state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
     localStorage.setItem('ww_current', JSON.stringify(state.game));
     state.playerAfter = 0;
-    $('#m-drawer-log').innerHTML = '';
+    $('#m-flow').innerHTML = '';
     const box = $('#m-paused-banner');
     if (box) { box.classList.add('hidden'); box.innerHTML = ''; box.dataset.sig = ''; }
     await poll();
@@ -534,8 +578,40 @@ async function resumePausedGame() {
   }
 }
 
-function autoScroll() { const s = $('#m-drawer-log'); if (s.scrollHeight - s.scrollTop - s.clientHeight < 160) s.scrollTop = s.scrollHeight; }
-function appendSys(text) { $('#m-drawer-log').appendChild(el('div', 'sysline', text)); autoScroll(); }
+/**
+ * 流程区滚动：force=true 强制贴底。
+ * ⚠ 不能用"离底部距离"判断是否跟随：轮询一次可能新增几百像素（一段长发言），
+ * 距离法会当场判定"用户已经上翻"从而永久停止跟随（实测过：内容停在上面，
+ * 底部浮出「↓ 最新」而其实没人滚动过）。所以显式记一个跟随状态，
+ * 只有**用户自己**滚动时才可能取消跟随。
+ */
+let flowPinned = true;
+let flowSelfScroll = false;
+function scrollFlow(force) {
+  const s = $('#m-flow');
+  if (!s) return;
+  if (force) flowPinned = true;
+  if (flowPinned) {
+    flowSelfScroll = true;
+    s.scrollTop = s.scrollHeight;
+    flowSelfScroll = false;
+  }
+  updateToBottomBtn();
+}
+function onFlowScroll() {
+  if (flowSelfScroll) return; // 程序自己滚的不算用户操作
+  const s = $('#m-flow');
+  if (!s) return;
+  flowPinned = s.scrollHeight - s.scrollTop - s.clientHeight < 60;
+  updateToBottomBtn();
+}
+/** 往上翻历史时浮出「↓ 最新」：信息滚出视野后必须有一条随时回到底部的路 */
+function updateToBottomBtn() {
+  const b = $('#m-to-bottom');
+  if (!b) return;
+  b.classList.toggle('hidden', flowPinned);
+}
+function appendSys(text) { $('#m-flow').appendChild(el('div', 'sysline', text)); scrollFlow(false); }
 
 function renderEventNode(e) {
   const d = e.data || {};
@@ -605,197 +681,166 @@ function roleChipHtml(rid) { const r = roleInfo(rid); return `<span class="role-
 
 function updateHeader(v) {
   $('#m-day').textContent = `第${v.day}天`;
-  $('#m-phase').textContent = PHASE_LABEL[v.phase] || v.phase;
-  $('#m-terminate-btn').style.display = v.finished ? 'none' : '';
-  const night = v.phase === 'night';
-  $('#m-table').classList.toggle('night', night);
-  $('#tc-icon').textContent = v.finished ? '✠' : night ? '🌙' : (v.phase === 'vote' || v.phase === 'pk' ? '🗳' : '☀️');
-  $('#tc-day').textContent = v.finished ? '终 局' : `第 ${v.day} 天`;
-  const step = state.lastNightStep;
-  $('#tc-step').textContent = night && step && !v.finished ? `${step.label} ${step.index}/${step.total}` : '';
-  $('#m-actionbar').classList.toggle('mine', !!v.pending);
+  $('#m-phase').textContent = v.finished ? '已结算' : (PHASE_LABEL[v.phase] || v.phase);
+  if (v.phase === 'night' && state.lastNightStep && !v.finished) {
+    $('#m-phase').textContent = `${PHASE_LABEL.night} · ${state.lastNightStep.label} ${state.lastNightStep.index}/${state.lastNightStep.total}`;
+  }
+  document.body.classList.toggle('m-night', v.phase === 'night');
 }
 
-// ---------------- 圆桌座位层 ----------------
-/** 最近一次用于渲染座位的视图：表格尺寸变化时要按同一份数据重排 */
-let lastSeatsView = null;
-let seatsReobserving = false;
-
+// ---------------- 左右两列座位 ----------------
+/**
+ * 座位按**座位号**稳定排布：左列 1..⌈n/2⌉，右列其余。
+ * 旧版是圆桌椭圆 + 以"我"为 6 点位旋转，找号数要在圆上数圈；现在号数顺序与列表一致。
+ * 有目标类任务待办时（投票/查验/开枪…），座位直接变成可点选的目标：
+ * 点一下即选中（灰红技能键随即变红），不用再去底部找号。
+ */
 function updateSeats(v) {
-  lastSeatsView = v || lastSeatsView;
-  if (!lastSeatsView) return;
-  v = lastSeatsView;
-  const table = $('#m-table');
-  table.querySelectorAll('.tseat').forEach((n) => n.remove());
-  const ps = v.players;
-  const n = ps.length;
-  if (!n) return;
+  if (!v) return;
+  const ps = v.players || [];
+  const left = $('#m-seats-l'), right = $('#m-seats-r');
+  if (!left || !right) return;
+  left.innerHTML = ''; right.innerHTML = '';
+  if (!ps.length) return;
   const mySeat = v.me ? v.me.seat : 0;
-  const myIdx = Math.max(0, ps.findIndex((p) => p.seat === mySeat));
-  const rect = table.getBoundingClientRect();
-  if (rect.width < 80 || rect.height < 80) return; // 还没布局完（或屏幕被隐藏），等尺寸正常再画
-  const rx = Math.max(88, rect.width / 2 - 38);
-  const ry = Math.max(78, rect.height / 2 - 46);
-  // 用百分比定位：这样表格高度被内容撑大/缩小时（舞台变高变矮、旋转屏幕），
-  // 座位仍落在同一椭圆的相对位置上，不会停在旧坐标上压住舞台（踩过一次）。
-  const rxPct = (rx / rect.width) * 100;
-  const ryPct = (ry / rect.height) * 100;
-  for (let i = 0; i < n; i++) {
-    const p = ps[(myIdx + i) % n]; // 我的座位固定在 6 点位，顺时针排布
-    const ang = Math.PI / 2 + (i / n) * Math.PI * 2;
-    const xPct = 50 + rxPct * Math.cos(ang);
-    const yPct = 50 + ryPct * Math.sin(ang);
-    const showRole = p.role && p.revealed;
-    const tag = !p.role ? state.tags[p.seat] : null;
-    const tagR = tag && roleInfo(tag);
-    const s = el('div', 'tseat'
+  const half = Math.ceil(ps.length / 2);
+  const pick = actionState.needTarget ? new Set(actionState.candidates) : null;
+  ps.forEach((p, i) => {
+    const s = el('div', 'srow'
       + (p.seat === mySeat ? ' mine' : '')
       + (p.alive ? '' : ' dead')
-      + (p.alive && p.seat === state.speakingSeat ? ' speaking' : ''));
-    s.style.left = `${xPct.toFixed(2)}%`;
-    s.style.top = `${yPct.toFixed(2)}%`;
-    const ring = el('div', 'ts-ring', showRole ? roleInfo(p.role).emoji : String(p.seat));
-    if (p.isSheriff) ring.appendChild(el('span', 'ts-badge', '👑'));
-    if (tagR) {
-      const b = el('span', 'ts-badge b2', '🏷');
-      b.style.color = tagR.color;
-      ring.appendChild(b);
-      const rc = el('span', 'ts-role', tagR.emoji);
-      rc.style.color = tagR.color;
-      ring.appendChild(rc);
-    }
-    if (showRole) {
-      const rr = roleInfo(p.role);
-      const rc = el('span', 'ts-role', rr.emoji);
-      rc.style.color = rr.color;
-      ring.appendChild(rc);
-    }
+      + (p.alive && p.seat === state.speakingSeat ? ' speaking' : '')
+      + (pick && p.alive && pick.has(p.seat) ? ' pickable' : '')
+      + (actionState.target === p.seat ? ' picked' : ''));
+    s.dataset.seat = String(p.seat);
+    const ring = el('span', 'num', String(p.seat));
     s.appendChild(ring);
-    s.appendChild(el('div', 'ts-name', escapeHtml(p.name)));
-    if (v.me && p.alive && !p.revealed && p.seat !== mySeat) {
-      s.classList.add('taggable');
-      s.addEventListener('click', () => openTagModal(p.seat));
-    } else if (showRole) {
-      s.addEventListener('click', () => openInspect(p.role));
+    if (p.isSheriff) s.appendChild(el('span', 'b', '👑'));
+    if (p.role && p.revealed) {
+      const rr = roleInfo(p.role);
+      const rc = el('span', 'b l', rr.emoji);
+      rc.style.color = rr.color;
+      s.appendChild(rc);
+    } else {
+      const tag = state.tags[p.seat];
+      const tagR = tag && roleInfo(tag);
+      if (tagR) {
+        const b = el('span', 'b l', '🏷');
+        b.style.color = tagR.color;
+        s.appendChild(b);
+      }
     }
-    table.appendChild(s);
-  }
-  // 表格尺寸一变（舞台内容变高变矮、手机旋转、软键盘弹出）就按同一份视图重排座位。
-  // 百分比定位已经能跟着缩放，但 rx/ry 有最小值（88/78px）时仍需要重算。
-  if (!seatsReobserving && typeof ResizeObserver === 'function') {
-    seatsReobserving = true;
-    let raf = 0;
-    new ResizeObserver(() => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => { raf = 0; updateSeats(lastSeatsView); });
-    }).observe(table);
-  }
+    s.appendChild(el('div', 'nm', escapeHtml(p.name)));
+    s.addEventListener('click', () => onSeatTap(p));
+    (i < half ? left : right).appendChild(s);
+  });
 }
 
-// ---------------- 当前发言舞台 & 全屏横幅 ----------------
+/** 点座位：有待选目标就当选择器用，否则开笔记（记可能的身份） */
+function onSeatTap(p) {
+  const v = state.view;
+  if (actionState.needTarget) {
+    if (actionState.candidates.includes(p.seat)) {
+      setTarget(p.seat);
+      updateSeats(v);
+    } else {
+      flash(`${p.seat}号不在可选范围内`);
+    }
+    return;
+  }
+  if (v && v.me && p.alive && !p.revealed && p.seat !== v.me.seat) openTagModal(p.seat);
+  else if (p.role && p.revealed) openInspect(p.role);
+}
+
+/** 选中目标：同步座位高亮 + 底部技能键由灰红转红 */
+function setTarget(seat) {
+  actionState.target = seat;
+  const box = $('#m-keys');
+  if (box) {
+    box.querySelectorAll('.key.seat').forEach((k) => {
+      const on = Number(k.dataset.seat) === seat;
+      k.classList.toggle('on', on);
+      k.classList.toggle('alt', !on);
+    });
+    const conf = box.querySelector('[data-confirm]');
+    if (conf) setKeyEnabled(conf, seat > 0 || !!conf.dataset.allowZero);
+  }
+  $('#m-dialog-seat').textContent = seat ? `已选 ${seat} 号` : '未选择';
+}
+
+// ---------------- 事件副作用（全屏横幅 / 发言高亮）与"正在发言"节点 ----------------
+/**
+ * 旧版把最新事件单独渲染进一个"舞台"，长发言被 overflow:hidden 截断。
+ * 现在发言与事件正文一律进入中间流程区（唯一的滚动区），这里只做两件事：
+ * 全屏横幅（阶段切换等）与"谁在发言"的高亮。
+ */
 function feedStage(e, fresh) {
   const d = e.data || {};
   const priv = Array.isArray(e.visibleTo);
   switch (e.type) {
     case 'phase': {
-      state.speakingSeat = 0; state.stage = null;
+      state.speakingSeat = 0;
       const night = (d.title || '').includes('夜');
       if (fresh) flash(d.title || (night ? '天黑请闭眼' : '天亮了'), night ? 'night' : '');
       break;
     }
     case 'speech': {
-      if (priv || d.context === 'wolf') break;
-      state.stage = { kind: 'speech', seat: e.actor, text: d.text || '', ctx: d.context || '' };
+      if (priv || d.context === 'wolf') break; // 私密/狼聊不进公开流程
       state.speakingSeat = e.actor;
       break;
     }
+    case 'vote_reveal':
+      state.speakingSeat = 0; // 投票阶段没有发言者
+      break;
     case 'deaths': {
       const ds = d.deaths || [];
-      const rules = state.view && state.view.rules;
-      const showCause = !rules || rules.revealOnDeath !== false; // 暗牌局只报死亡不报死因
-      state.stage = { kind: 'event', important: ds.length > 0, html: ds.length
-        ? `🌅 天亮了。昨夜死亡：${ds.map((x) => `${x.seat}号${showCause ? `（${causeLabel(x.cause)}）` : ''}`).join('、')}。`
-        : '🌅 天亮了。昨夜是平安夜，无人死亡。' };
       if (fresh) flash(ds.length ? '昨夜有人死去' : '平安夜', ds.length ? 'red' : 'night');
       break;
     }
-    case 'vote_reveal': {
-      const detail = (d.votes || []).map((x) => `${x.seat}→${x.target || '弃'}${x.weight !== 1 ? `×${x.weight}` : ''}`).join('，');
-      const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
-      const curse = d.curseBonus && Object.keys(d.curseBonus).length
-        ? `（🐦 ${Object.keys(d.curseBonus).map((s) => s + '号').join('、')} 受诅咒+0.5）` : '';
-      state.stage = { kind: 'event', html: `🗳 亮票：${detail}<br><span class="hint">${tally}${curse}</span>` };
-      break;
-    }
     case 'role_reveal':
-      state.stage = { kind: 'event', important: true, html: `${seatLabel(d.seat)} 翻牌：${roleChipHtml(d.role)}` };
       if (fresh) flash(`${d.seat}号 翻牌`, '');
       break;
     case 'duel':
-      state.stage = { kind: 'event', important: true, html: `⚔️ ${seatLabel(e.actor)}（骑士）翻牌发起决斗，指定 ${seatLabel(d.target)}！` };
       if (fresh) flash('骑士决斗！', 'red');
       break;
     case 'explode':
-      state.stage = { kind: 'event', important: true, html: `💥 ${seatLabel(e.actor)} 自爆${d.target ? `，带走 ${seatLabel(d.target)}` : ''}！` };
       if (fresh) flash('自 爆', 'red');
       break;
     case 'shoot':
-      if (d.target) {
-        state.stage = { kind: 'event', important: true, html: `🔫 ${seatLabel(e.actor)} 开枪带走了 ${seatLabel(d.target)}！` };
-        if (fresh) flash('枪响人亡', 'red');
-      }
-      break;
-    case 'idiot_save':
-      state.stage = { kind: 'event', important: true, html: `🃏 ${seatLabel(d.seat)} 是白痴，免疫放逐（不可投票）` };
+      if (fresh && d.target) flash('枪响人亡', 'red');
       break;
     case 'sheriff_elected':
-      state.stage = { kind: 'event', html: `🎩 ${seatLabel(d.seat)} 当选警长！` };
       if (fresh) flash('警长诞生', '');
       break;
     case 'game_over': {
       const won = d.winner === 'good' ? '好人阵营获胜' : d.winner === 'wolf' ? '狼人阵营获胜' : '对局结束';
-      state.stage = { kind: 'event', important: true, html: d.winner === 'none'
-        ? `⏹ ${d.reason || '对局已终止'}`
-        : d.winner === 'good' ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！' };
       if (fresh) flash(won, d.winner === 'wolf' ? 'night' : 'red');
       break;
     }
+    default:
+      break;
   }
 }
 
-function updateStage(v) {
-  const head = $('#m-stage-head'), body = $('#m-stage-body'), st = $('#m-stage');
-  // 流式"打字中"优先占用舞台：把漫长的空白等待变成即时反馈
-  const live = v && v.live;
-  if (live) {
-    st.classList.add('important');
-    const lp = v.players.find((x) => x.seat === live.seat);
-    head.innerHTML = `<span class="stage-ava">${live.seat}</span>`
-      + `<span class="stage-who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
-      + `<span class="stage-tag">${live.public ? '✍ 正在发言' : '… 正在思考'}</span>`;
-    if (live.public && live.text) {
-      body.innerHTML = `<span class="typing-live">${escapeHtml(live.text)}</span><span class="caret"></span>`;
-    } else {
-      body.innerHTML = '<span class="hint">正在思考…</span>';
-    }
-    return;
-  }
-  const s = state.stage;
-  st.classList.toggle('important', !!(s && s.important));
-  if (s && s.kind === 'speech') {
-    const p = v.players.find((x) => x.seat === s.seat);
-    const ctxTag = { lastwords: '🕯 遗言', sheriff: '🎩 警上', pk: '⚔ PK' }[s.ctx] || '💬 发言';
-    head.innerHTML = `<span class="stage-ava">${s.seat}</span>`
-      + `<span class="stage-who">${escapeHtml(p ? p.name : '')} · ${s.seat}号</span>`
-      + `<span class="stage-tag">${ctxTag}${p && !p.alive ? ' · 💀' : ''}</span>`;
-    body.textContent = s.text;
-  } else if (s && s.kind === 'event') {
-    head.innerHTML = '<span class="stage-ava">✠</span><span class="stage-who">钟楼播报</span>';
-    body.innerHTML = s.html;
-  } else {
-    head.innerHTML = '<span class="stage-ava">✠</span><span class="stage-who">暗夜钟声</span>';
-    body.innerHTML = `<span class="hint">${escapeHtml(waitingText(v))}</span>`;
-  }
+/** 流程区底部的"正在发言/正在思考"节点（流式打字）：把漫长的空白等待变成即时反馈 */
+function updateLive(v) {
+  const flow = $('#m-flow');
+  if (!flow) return;
+  const live = v && v.live && !v.finished ? v.live : null;
+  const node = $('#m-live');
+  if (!live) { if (node) node.remove(); return; }
+  const n = node || (() => { const x = el('div', 'msg live'); x.id = 'm-live'; return x; })();
+  if (n.parentNode !== flow) flow.appendChild(n);
+  else if (n !== flow.lastElementChild) flow.appendChild(n); // 始终贴底
+  const lp = (v.players || []).find((x) => x.seat === live.seat);
+  const sig = `${live.seat}|${live.public ? 1 : 0}|${live.text || ''}`;
+  if (n.dataset.sig === sig) return; // 1.2s 轮询：内容没变不重建 DOM
+  n.dataset.sig = sig;
+  n.innerHTML = `<div class="meta"><span class="who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
+    + ` <span class="hint">${live.public ? '✍ 正在发言' : '… 正在思考'}</span></div>`
+    + (live.public && live.text
+      ? `<div>${escapeHtml(live.text)}<span class="caret"></span></div>`
+      : '<div class="hint">正在思考…</div>');
 }
 
 let flashTimer = null;
@@ -857,60 +902,111 @@ function openModal(inner) {
   root.innerHTML = '';
   const mask = el('div', 'modal-mask m-modal');
   const modal = el('div', 'modal');
-  modal.appendChild(inner);
+  // ⚠ 不能把调用方给的容器整包塞进去：那样 .mhead/.mbody 会变成"孙子"，
+  // flex 约束（.modal 的 max-height + .mbody 的 min-height:0）传不到正文，
+  // 正文就被内容撑到真实高度（规则书实测 11192px）且滚不动。
+  // 因此只要是"无类名的普通容器"，就把它的孩子直接挂到 .modal 下。
+  if (inner && !inner.className && inner.children.length) {
+    while (inner.firstChild) modal.appendChild(inner.firstChild);
+  } else {
+    modal.appendChild(inner);
+  }
   mask.appendChild(modal);
   mask.addEventListener('click', (e) => { if (e.target === mask) root.innerHTML = ''; });
   root.appendChild(mask);
 }
 
-// ---------------- 操作区 ----------------
-let actionState = { target: 0, explode: false, withdraw: false };
+// ---------------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ----------------
+let actionState = { target: 0, explode: false, withdraw: false, needTarget: false, candidates: [] };
 
+const TASK_LABEL = {
+  speech: '轮到你发言', pk_speech: '平票 PK 发言', lastwords: '请留遗言',
+  sheriff_speech: '警长竞选演讲', night_guard: '守卫行动', wolf_kill: '狼队投票定刀口',
+  seer_check: '预言家查验', sheriff_vote: '警长竞选投票', vote: '放逐投票（互相保密）',
+  pk_vote: 'PK 投票', wolf_say: '狼队讨论·轮到你（可跳过）', shoot: '开枪技能',
+  badge_pass: '警徽去向', direction: '决定发言方向', sheriff_run: '是否上警', witch: '女巫用药',
+  night_dream: '摄梦人·选摄梦对象（连摄两晚同一人则其死亡）',
+  wolfbeauty_charm: '狼美人·选魅惑对象（你出局时他殉情）',
+  crow_curse: '乌鸦·选诅咒对象（明日他放逐投票+0.5票）',
+  admirer_crush: '暗恋者·暗选心动对象（胜负阵营终身绑定）',
+};
+
+/** 需要"点座位选人"的任务 → 确认键文案 / 允许的免选键 */
+const TARGET_TASKS = {
+  night_guard: ['确认守护', '空守'],
+  night_dream: ['确认摄梦', null],
+  wolfbeauty_charm: ['确认魅惑', null],
+  crow_curse: ['确认诅咒', null],
+  admirer_crush: ['确认心动', null],
+  wolf_kill: ['投刀', '空刀'],
+  seer_check: ['查验', null],
+  vote: ['投票', '弃票'],
+  pk_vote: ['投票', '弃票'],
+  sheriff_vote: ['投票', '弃票'],
+  shoot: ['开枪', '不开枪'],
+  badge_pass: ['移交', '撕毁警徽'],
+};
+
+/**
+ * 底部坞每 1.2s 会被轮询重刷：只有"任务签名"变化才重建 DOM，
+ * 否则正在输入的发言会被清空（踩过一次）。
+ */
 function updateActionbar(v) {
-  const hint = $('#m-pending-hint');
-  const box = $('#m-controls');
+  const hintBox = $('#m-pending-hint');
+  const keys = $('#m-keys');
+  const dlg = $('#m-dialog');
+  if (!keys || !dlg) return;
   const p = v.pending;
+
+  // ① 狼队讨论：可以插话 / 加轮 / 提前结束
   if (!p && v.wolfTalk && v.wolfTalk.active) {
     const sig = `wt:${v.wolfTalk.round}/${v.wolfTalk.rounds}`;
-    if (box.dataset.task !== sig) {
-      box.dataset.task = sig; box.innerHTML = '';
-      hint.className = 'pending-hint';
-      hint.textContent = `🌙 狼队讨论（第 ${v.wolfTalk.round}/${v.wolfTalk.rounds} 轮）：可插话 / 加一轮 / 提前结束`;
-      const ta = el('textarea'); ta.placeholder = '插话给狼队队友…';
-      const row = el('div', 'btnrow');
-      const say = el('button', 'btn primary', '插话');
-      say.addEventListener('click', () => wolfTalkAction('say', ta.value.trim(), ta));
-      const extra = el('button', 'btn', '+1 轮');
-      extra.addEventListener('click', () => wolfTalkAction('extra'));
-      const end = el('button', 'btn danger', '结束讨论');
-      end.addEventListener('click', () => wolfTalkAction('end'));
-      row.append(say, extra, end);
-      box.append(ta, row);
-    }
+    if (keys.dataset.task === sig) return;
+    keys.dataset.task = sig; dlg.dataset.task = sig;
+    keys.innerHTML = ''; dlg.innerHTML = '';
+    hintBox.className = 'pending-hint mine';
+    hintBox.textContent = `🌙 狼队讨论（第 ${v.wolfTalk.round}/${v.wolfTalk.rounds} 轮）：可插话 / 加一轮 / 提前结束`;
+    const ta = el('textarea'); ta.placeholder = '插话给狼队队友…（可留空）';
+    const send = keyEl('插话', 'off', () => wolfTalkAction('say', ta.value.trim(), ta));
+    send.dataset.confirm = '1';
+    ta.addEventListener('input', () => setKeyEnabled(send, ta.value.trim().length > 0));
+    dlg.append(ta, (() => { const r = el('div', 'mrow'); r.appendChild(send); return r; })());
+    keys.append(
+      keyEl('+1 轮', 'alt', () => wolfTalkAction('extra')),
+      keyEl('结束讨论', 'alt', () => wolfTalkAction('end'))
+    );
     return;
   }
+
+  // ② 空档：显示等待文案 + 随时可用的打断技能（自爆 / 决斗）
   if (!p) {
-    hint.className = 'pending-hint waiting';
-    hint.textContent = v.finished ? '对局已结束。' : waitingText(v);
-    mountExplodeBtn(v, box);
-    mountDuelBtn(v, box);
-    if (v.finished && !box.dataset.done) {
-      box.dataset.done = '1'; box.innerHTML = '';
-      const b = el('button', 'btn primary', '回到首页');
-      b.addEventListener('click', () => { localStorage.removeItem('mww_current'); location.reload(); });
-      box.appendChild(b);
+    const sig = `idle:${v.finished ? 1 : 0}:${v.phase}:${canExplodeNow(v) ? 1 : 0}${canDuelNow(v) ? 1 : 0}`;
+    hintBox.className = 'pending-hint waiting';
+    hintBox.textContent = v.finished ? '对局已结束。' : waitingText(v);
+    if (keys.dataset.task === sig) return;
+    keys.dataset.task = sig; dlg.dataset.task = sig;
+    keys.innerHTML = ''; dlg.innerHTML = '';
+    dlg.appendChild(el('div', 'idle', v.finished
+      ? '本局已结算 —— 左上角 ⚙ 里可以查看规则书或退出。'
+      : '现在轮不到你操作。轮到你会在这里出现输入框或技能键。'));
+    if (v.finished) {
+      keys.appendChild(keyEl('🏠 回到首页', 'on', () => { localStorage.removeItem('mww_current'); location.reload(); }));
+      return;
     }
+    mountExplodeBtn(v, keys);
+    mountDuelBtn(v, keys);
     return;
   }
-  box.dataset.done = '';
-  hint.className = 'pending-hint';
-  if (box.dataset.task === p.task + JSON.stringify(p.candidates || '')) return;
-  actionState = { target: 0, explode: false, withdraw: false };
-  box.dataset.task = p.task + JSON.stringify(p.candidates || '');
-  box.innerHTML = '';
-  buildActionUI(v, p, box);
-  if (p.task !== 'speech') mountExplodeBtn(v, box);
-  mountDuelBtn(v, box);
+
+  const sig = `task:${p.task}:${JSON.stringify(p.candidates || [])}:${p.canExplode ? 1 : 0}${p.canWithdraw ? 1 : 0}`;
+  if (keys.dataset.task === sig) return;
+  keys.dataset.task = sig; dlg.dataset.task = sig;
+  keys.innerHTML = ''; dlg.innerHTML = '';
+  actionState = { target: 0, explode: false, withdraw: false, needTarget: false, candidates: (p.candidates || []).slice() };
+  buildActionUI(v, p, keys, dlg);
+  if (p.task !== 'speech') mountExplodeBtn(v, keys);
+  mountDuelBtn(v, keys);
+  updateSeats(v); // 目标任务：让左右座位立刻变成可点选状态
 }
 
 // ---------------- 骑士随时决斗（白天任意时刻） ----------------
@@ -983,42 +1079,30 @@ function waitingText(v) {
   return { night: '🌙 夜晚进行中…', sheriff: '🎩 警长竞选进行中…', speech: '💬 白天发言进行中…', vote: '🗳 投票进行中…', pk: '⚔ PK 进行中…', dawn: '🌅 天亮结算中…' }[v.phase] || '等待游戏推进…';
 }
 
-function chipSeat(seat) {
-  const nm = state.seatNames[seat] || '';
-  const label = nm && nm !== `${seat}号` ? `${seat}<small>${escapeHtml(nm)}</small>` : `${seat}号`;
-  const c = el('button', 'chip', label);
-  c.addEventListener('click', () => {
-    actionState.target = seat;
-    [...c.parentElement.children].forEach((x) => x.classList.remove('sel'));
-    c.classList.add('sel');
-  });
-  return c;
-}
-function targetPicker(candidates, noneLabel) {
-  const wrap = el('div'); wrap.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;';
-  (candidates || []).forEach((s) => wrap.appendChild(chipSeat(s)));
-  if (noneLabel) {
-    const none = el('button', 'chip', noneLabel);
-    none.addEventListener('click', () => { actionState.target = 0; [...wrap.children].forEach((x) => x.classList.remove('sel')); none.classList.add('sel'); });
-    wrap.appendChild(none);
-  }
-  return wrap;
-}
-function confirmBtn(text, build) {
-  const b = el('button', 'btn primary', text);
-  b.addEventListener('click', async () => {
-    try {
-      await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: build() });
-      $('#m-controls').innerHTML = ''; $('#m-controls').dataset.task = '';
-      $('#m-pending-hint').textContent = '已提交 ✓';
-    } catch (e) { $('#m-pending-hint').textContent = `✗ ${e.message}`; }
-  });
+/** 技能键：kind = on(可用·红) / off(不可用·灰红) / alt(次要但可用·暗红描边) */
+function keyEl(label, kind, onClick, opts) {
+  const o = opts || {};
+  const b = el('button', `key ${kind}`, label);
+  if (o.sub) b.appendChild(el('span', 'k-sub', o.sub));
+  if (o.seat != null) b.dataset.seat = String(o.seat);
+  if (o.confirm) b.dataset.confirm = '1';
+  if (kind === 'off') b.disabled = true;
+  if (onClick) b.addEventListener('click', onClick);
   return b;
 }
+/** 技能键可用性切换：灰红 ↔ 红。disabled 与视觉状态一起改，避免"看着能点其实点了没用" */
+function setKeyEnabled(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle('on', on);
+  btn.classList.toggle('off', !on);
+  btn.disabled = !on;
+}
+
 async function submitSimple(payload) {
   try {
     await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
-    $('#m-controls').innerHTML = ''; $('#m-controls').dataset.task = '';
+    $('#m-keys').innerHTML = ''; $('#m-keys').dataset.task = '';
+    $('#m-dialog').innerHTML = ''; $('#m-dialog').dataset.task = '';
   } catch (e) { $('#m-pending-hint').textContent = `✗ ${e.message}`; }
 }
 async function wolfTalkAction(kind, text, ta) {
@@ -1030,108 +1114,136 @@ async function wolfTalkAction(kind, text, ta) {
 }
 function hint(t) { $('#m-pending-hint').textContent = t; }
 
-function buildActionUI(v, p, box) {
+/**
+ * 底部坞组装：
+ *   对话框（右侧）= 发言输入 / 任务说明 / 已选目标
+ *   技能键（左侧）= 确认与技能开关，**可用为红、不可用为灰红**
+ * 目标类任务不再在底部堆一排座位号 —— 直接点左右两列的座位选人（见 onSeatTap）。
+ */
+function buildActionUI(v, p, keys, dlg) {
   const me = v.me || {};
-  const tasks = {
-    speech: '轮到你发言', pk_speech: '平票 PK 发言', lastwords: '请留遗言',
-    sheriff_speech: '警长竞选演讲', night_guard: '守卫行动', wolf_kill: '狼队投票定刀口',
-    seer_check: '预言家查验', sheriff_vote: '警长竞选投票', vote: '放逐投票（互相保密）',
-    pk_vote: 'PK 投票', wolf_say: '狼队讨论·轮到你（可跳过）', shoot: '开枪技能',
-    badge_pass: '警徽去向', direction: '决定发言方向', sheriff_run: '是否上警', witch: '女巫用药',
-    night_dream: '摄梦人·选摄梦对象（连摄两晚同一人则其死亡）',
-    wolfbeauty_charm: '狼美人·选魅惑对象（你出局时他殉情）',
-    crow_curse: '乌鸦·选诅咒对象（明日他放逐投票+0.5票）',
-    admirer_crush: '暗恋者·暗选心动对象（胜负阵营终身绑定）',
-  };
-  hint(`⏳ ${tasks[p.task] || p.task}（无时间限制）`);
-  const ta = () => { const t = el('textarea'); t.placeholder = '输入…'; return t; };
+  hint(`⏳ ${TASK_LABEL[p.task] || p.task}（无时间限制）`);
+
+  // ---------- 发言类：输入框进对话框 ----------
   if (['speech', 'pk_speech', 'lastwords', 'sheriff_speech', 'wolf_say'].includes(p.task)) {
-    const t = ta(); box.appendChild(t);
+    const ta = el('textarea');
+    ta.placeholder = p.task === 'lastwords' ? '留下你的遗言…' : '输入你的发言…';
+    dlg.appendChild(ta);
+    const canSend = () => ta.value.trim().length > 0
+      || (p.task === 'sheriff_speech' && actionState.withdraw)
+      || (p.task === 'wolf_say' && true); // 狼聊可空过（另有"跳过本轮"键）
+    const send = keyEl(
+      { lastwords: '留下遗言', wolf_say: '发言' }[p.task] || '发送发言',
+      'off',
+      async () => {
+        const payload = { text: ta.value.trim() };
+        if (p.canExplode && actionState.explode) {
+          payload.explode = true;
+          if (me.role === 'whitewolfking') payload.target = actionState.target;
+        }
+        if (p.task === 'sheriff_speech') payload.withdraw = actionState.withdraw;
+        await submitSimple(payload);
+      }
+    );
+    send.dataset.confirm = '1';
+    ta.addEventListener('input', () => setKeyEnabled(send, canSend()));
+    const row = el('div', 'mrow');
+    row.appendChild(send);
+    dlg.appendChild(row);
+    setKeyEnabled(send, canSend());
+    if (p.canExplode && me.role === 'whitewolfking') markNeedTarget(v, v.players.filter((x) => x.alive && x.seat !== me.seat).map((x) => x.seat), '选择自爆要带走的玩家');
     if (p.canExplode) {
-      const ex = el('label', 'checkline', '<input type="checkbox"> 自爆（公开狼身份，立即天黑）');
-      ex.querySelector('input').addEventListener('change', (e2) => { actionState.explode = e2.target.checked; });
-      box.appendChild(ex);
+      keys.appendChild(keyEl('🔮 自爆', 'alt', () => {
+        actionState.explode = !actionState.explode;
+        hint(actionState.explode ? '已勾选自爆：发送后立即公开狼人身份并进入黑夜' : '已取消自爆');
+        refreshCanvas(v);
+      }));
     }
     if (p.canWithdraw) {
-      const wd = el('label', 'checkline', '<input type="checkbox"> 退水');
-      wd.querySelector('input').addEventListener('change', (e2) => { actionState.withdraw = e2.target.checked; });
-      box.appendChild(wd);
+      keys.appendChild(keyEl('🚰 退水', 'alt', () => {
+        actionState.withdraw = !actionState.withdraw;
+        setKeyEnabled(send, canSend());
+        hint(actionState.withdraw ? '已选择退水：发送后退出竞选' : '已取消退水');
+      }));
     }
-    const row = el('div', 'btnrow');
-    const label = { lastwords: '留下遗言', wolf_say: '发言' }[p.task] || '发送发言';
-    row.appendChild(confirmBtn(label, () => {
-      const payload = { text: t.value.trim() };
-      if (p.canExplode && actionState.explode) { payload.explode = true; if (me.role === 'whitewolfking') payload.target = actionState.target; }
-      if (p.task === 'sheriff_speech') payload.withdraw = actionState.withdraw;
-      return payload;
-    }));
     if (p.task === 'wolf_say') {
-      const skip = el('button', 'btn', '跳过本轮');
-      skip.addEventListener('click', () => submitSimple({ text: '' }));
-      row.appendChild(skip);
+      keys.appendChild(keyEl('跳过本轮', 'alt', () => submitSimple({ text: '' })));
     }
-    box.appendChild(row);
     return;
   }
-  const targetTasks = {
-    night_guard: ['确认守护', p.allowNone ? '空守' : null],
-    night_dream: ['确认摄梦', null],
-    wolfbeauty_charm: ['确认魅惑', null],
-    crow_curse: ['确认诅咒', null],
-    admirer_crush: ['确认心动', null],
-    wolf_kill: ['投刀', p.allowNone ? '空刀' : null],
-    seer_check: ['查验', null],
-    vote: ['投票', p.allowNone ? '弃票' : null],
-    pk_vote: ['投票', p.allowNone ? '弃票' : null],
-    sheriff_vote: ['投票', '弃票'],
-    shoot: ['开枪', '不开枪'],
-    badge_pass: ['移交', '撕毁警徽'],
-  };
-  if (targetTasks[p.task]) {
-    const [label, none] = targetTasks[p.task];
-    box.appendChild(targetPicker(p.candidates, none));
-    const row = el('div', 'btnrow');
-    row.appendChild(confirmBtn(label, () => ({ target: actionState.target })));
-    box.appendChild(row);
+
+  // ---------- 目标类：点座位选人，确认键灰红→红 ----------
+  if (TARGET_TASKS[p.task]) {
+    const [label, none] = TARGET_TASKS[p.task];
+    actionState.needTarget = true;
+    markNeedTarget(v, p.candidates, '点击左右两侧的座位选择目标');
+    const conf = keyEl(label, 'off', () => submitSimple({ target: actionState.target }), { confirm: true });
+    keys.appendChild(conf);
+    if (p.allowNone && none) keys.appendChild(keyEl(none, 'alt', () => submitSimple({ target: 0 })));
+    // 单个候选时直接预选，省一次点击
+    if (p.candidates && p.candidates.length === 1) setTarget(p.candidates[0]);
     return;
   }
-  switch (p.task) {
-    case 'witch': {
-      const ex = p.extra || {};
-      if (ex.canAntidote) {
-        const save = el('button', 'btn', `💊 用解药救 ${ex.killTarget} 号`);
-        save.addEventListener('click', () => submitSimple({ antidote: true, poison: 0 }));
-        box.appendChild(save);
-      }
-      if (ex.canPoison) {
-        box.appendChild(el('span', 'hint', '或毒杀：'));
-        box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
-        box.appendChild(confirmBtn('☠ 用毒', () => ({ antidote: false, poison: actionState.target })));
-      }
-      const skip = el('button', 'btn ghost', '空过');
-      skip.addEventListener('click', () => submitSimple({ antidote: false, poison: 0 }));
-      box.appendChild(skip);
-      break;
+
+  // ---------- 女巫：解药 / 毒药 / 空过 ----------
+  if (p.task === 'witch') {
+    const ex = p.extra || {};
+    if (ex.canAntidote) {
+      keys.appendChild(keyEl(`💊 解药救 ${ex.killTarget} 号`, 'on', () => submitSimple({ antidote: true, poison: 0 })));
+    } else {
+      keys.appendChild(keyEl('💊 解药不可用', 'off', null, { sub: ex.antidoteUsed ? '已用过' : '今夜无人被刀' }));
     }
-    case 'sheriff_run': {
-      const run = el('button', 'btn primary', '🎩 上警');
-      const norun = el('button', 'btn', '不上警');
-      run.addEventListener('click', () => submitSimple({ run: true }));
-      norun.addEventListener('click', () => submitSimple({ run: false }));
-      box.append(run, norun);
-      break;
+    const poisonKey = keyEl('☠ 用毒', 'off', () => submitSimple({ antidote: false, poison: actionState.target }), { confirm: true });
+    if (ex.canPoison) {
+      actionState.needTarget = true;
+      markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '点座位选择要毒的人（可毒自己）');
+      keys.appendChild(poisonKey);
+    } else {
+      keys.appendChild(keyEl('☠ 毒药不可用', 'off', null, { sub: ex.poisonUsed ? '已用过' : ' ' }));
     }
-    case 'direction': {
-      const cw = el('button', 'btn primary', '顺时针');
-      const ccw = el('button', 'btn', '逆时针');
-      cw.addEventListener('click', () => submitSimple({ direction: 'cw' }));
-      ccw.addEventListener('click', () => submitSimple({ direction: 'ccw' }));
-      box.append(cw, ccw);
-      break;
-    }
-    default:
-      box.appendChild(el('span', 'hint', `未知任务：${p.task}`));
+    keys.appendChild(keyEl('空过', 'alt', () => submitSimple({ antidote: false, poison: 0 })));
+    return;
   }
+
+  // ---------- 二选一：上警 / 方向 ----------
+  if (p.task === 'sheriff_run') {
+    keys.append(
+      keyEl('🎩 上警', 'on', () => submitSimple({ run: true })),
+      keyEl('不上警', 'alt', () => submitSimple({ run: false }))
+    );
+    return;
+  }
+  if (p.task === 'direction') {
+    keys.append(
+      keyEl('顺时针 →', 'on', () => submitSimple({ direction: 'cw' })),
+      keyEl('逆时针 ←', 'alt', () => submitSimple({ direction: 'ccw' }))
+    );
+    return;
+  }
+
+  keys.appendChild(el('span', 'hint', `未知任务：${p.task}`));
+}
+
+/** 标记"本次需要点座位选目标"：让左右两列座位进入可选状态，并在对话框里给出说明 */
+function markNeedTarget(v, candidates, tip) {
+  actionState.needTarget = true;
+  actionState.candidates = (candidates || []).slice();
+  const dlg = $('#m-dialog');
+  if (dlg && !dlg.querySelector('.pick-tip')) {
+    const t = el('div', 'idle pick-tip', `🎯 ${escapeHtml(tip)}<br><b id="m-dialog-seat">未选择</b>`);
+    dlg.insertBefore(t, dlg.firstChild);
+  }
+}
+/** 重绘技能键的勾选外观（自爆等开关型技能键） */
+function refreshCanvas(v) {
+  const keys = $('#m-keys');
+  if (!keys) return;
+  const b = [...keys.querySelectorAll('.key')].find((x) => x.textContent.includes('自爆'));
+  if (b) {
+    b.classList.toggle('on', actionState.explode);
+    b.classList.toggle('alt', !actionState.explode);
+  }
+  updateSeats(v);
 }
 
 // ---------------- 翻牌 / 检视 / 规则书 ----------------
@@ -1182,6 +1294,10 @@ function maybeShowRole(v) {
   $('#m-flip').classList.remove('hidden');
   $('#m-flip-card').classList.remove('flipped');
 }
+/**
+ * 规则书：内容与渲染器都在 web/rulebook.js（桌面端同一份）。
+ * 这里只加"本局实际开关"一节 —— 玩家最关心的"我这局和默认有什么不同"。
+ */
 function openRulebook() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
@@ -1189,14 +1305,11 @@ function openRulebook() {
   close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
   head.appendChild(close);
   const body = el('div', 'mbody rulebook');
-  body.innerHTML = `
-    <h3>流程</h3><p>发牌 → 夜晚（守卫→狼人→预言家→女巫）→ ${state.meta.defaultRules.sheriff ? '警长竞选 → ' : ''}死讯/遗言 → 依次发言 → 秘密投票 → 平票PK → 结算 → 下一夜。</p>
-    <h3>胜负</h3><p>好人杀光狼人获胜；狼人杀光所有神职或所有平民（屠边）获胜。</p>
-    <h3>本局规则</h3><p>${formatRules()}</p>
-    <h3>角色</h3>`;
-  for (const r of Object.values(state.meta.roles)) {
-    body.appendChild(el('p', null, `${r.emoji} <b>${r.name}</b>：${r.short}`));
-  }
+  const thisGame = el('div', 'rb-sec');
+  thisGame.innerHTML = `<h3 class="rb-h">本局实际规则</h3><p class="rb-p">${escapeHtml(formatRules())}</p>`;
+  body.appendChild(thisGame);
+  if (window.Rulebook && window.Rulebook.render) window.Rulebook.render(body);
+  else body.appendChild(el('p', 'hint', '规则书资源未加载（rulebook.js 缺失）。'));
   wrap.append(head, body);
   openModal(wrap);
 }

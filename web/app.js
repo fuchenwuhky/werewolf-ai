@@ -513,11 +513,46 @@ function enterGameScreen() {
   state.roleShown = false;
   try { state.tags = JSON.parse(localStorage.getItem(`ww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#stream').innerHTML = '';
-  $('#btn-god').addEventListener('click', toggleGod);
-  $('#btn-rulebook').addEventListener('click', openRulebook);
-  $('#btn-home').addEventListener('click', backHome);
-  $('#btn-terminate').addEventListener('click', terminateGame);
+  $('#btn-gear').addEventListener('click', openGearMenu);
   startPolling();
+}
+
+/**
+ * 齿轮菜单：把顶栏原来那排按钮（规则书 / 上帝 / 结束本局 / APP端 / 首页）收进一处。
+ * 与手机端同一套信息架构：设置类入口只有一个齿轮，退出类操作也放在里面。
+ */
+function openGearMenu() {
+  const wrap = el('div');
+  const head = el('div', 'mhead', '<h2>⚙ 设置</h2>');
+  const close = el('button', 'btn ghost small', '✕');
+  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; });
+  head.appendChild(close);
+  const body = el('div', 'mbody');
+  const list = el('div', 'gear-list');
+  const v = state.view;
+  const items = [
+    ['📖 规则书', () => openRulebook()],
+    ['🎴 我的身份牌', () => { if (v && v.me && v.me.role) openInspect(v.me.role); }],
+    [`👁 上帝视角（当前${state.godMode ? '开' : '关'}）`, () => toggleGod()],
+    [`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => switchLangDesktop()],
+    ['📱 手机 APP 端', () => { window.location.href = '/m/'; }],
+  ];
+  if (v && !v.finished) items.push(['⏹ 结束本局', () => terminateGame()]);
+  items.push(['🏠 返回首页', () => backHome()]);
+  items.forEach(([label, fn], i) => {
+    const b = el('button', 'gear-item' + (i === items.length - 1 ? '' : ''), label);
+    if (/结束本局/.test(label)) b.classList.add('danger');
+    b.addEventListener('click', () => { $('#modal-root').innerHTML = ''; fn(); });
+    list.appendChild(b);
+  });
+  body.appendChild(list);
+  body.appendChild(el('p', 'hint', '对局中随时可以打开此菜单；上帝视角会给所有 AI 提示注入裁判信息，仅供调试。'));
+  wrap.append(head, body);
+  openModal(wrap);
+}
+
+function switchLangDesktop() {
+  I18N.setLang(I18N.getLang() === 'en' ? 'zh-CN' : 'en');
 }
 
 function saveTags() {
@@ -1071,7 +1106,6 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&a
 function updateHeader(v) {
   $('#g-day').textContent = `第${v.day}天`;
   $('#g-phase').textContent = PHASE_LABEL[v.phase] || v.phase;
-  $('#btn-terminate').style.display = v.finished ? 'none' : '';
   const me = v.me;
   $('#g-me').innerHTML = me && me.role
     ? `你是 ${me.seat}号 ${escapeHtml(me.name)} · ${roleChipHtml(me.role)}${me.isSheriff ? ' 👑警长' : ''}${me.alive ? '' : ' 💀'}`
@@ -1610,13 +1644,24 @@ function openModal(inner) {
   root.innerHTML = '';
   const mask = el('div', 'modal-mask');
   const modal = el('div', 'modal');
-  modal.appendChild(inner);
+  // ⚠ 与手机端同样的坑：把调用方的容器整包塞进来，会让 .mhead/.mbody 变成"孙子"，
+  // flex 高度约束传不到正文，正文撑到真实高度后滚不动（规则书实测上万像素）。
+  // 无类名的普通容器一律拆开挂到 .modal 下。
+  if (inner && !inner.className && inner.children.length) {
+    while (inner.firstChild) modal.appendChild(inner.firstChild);
+  } else {
+    modal.appendChild(inner);
+  }
   mask.appendChild(modal);
   mask.addEventListener('click', (e) => { if (e.target === mask) root.innerHTML = ''; });
   root.appendChild(mask);
   return modal;
 }
 
+/**
+ * 规则书：正文来自 web/rulebook.js（与手机端同一份内容与渲染器）。
+ * 桌面端额外保留两个标签：角色图鉴（可视化卡牌）与本局生效的规则开关。
+ */
 function openRulebook() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
@@ -1626,7 +1671,7 @@ function openRulebook() {
   const tabs = el('div', 'tabs');
   const body = el('div', 'mbody');
   const tabDefs = [
-    ['游戏流程', renderFlowTab],
+    ['规则书', renderBookTab],
     ['角色图鉴', renderCodexTab],
     ['本局规则', renderRulesTab],
   ];
@@ -1643,27 +1688,17 @@ function openRulebook() {
   wrap.append(head, tabs, body);
   openModal(wrap);
   body.innerHTML = '';
-  renderFlowTab(body);
+  renderBookTab(body);
 }
 
-function renderFlowTab(box) {
+/** 完整规则书（8 章，与手机端同源） */
+function renderBookTab(box) {
   box.parentElement.classList.add('rulebook');
-  box.innerHTML = `
-  <h3>一局游戏的完整流程</h3>
-  <p>① 随机发牌，查看身份 → ② 首夜行动 → ③（若有）警长竞选 → ④ 天亮公布死讯/遗言 → ⑤ 白天轮流发言（轮到你时打字发送，无时间限制）→ ⑥ 放逐投票（互相保密，亮票结算）→ ⑦ 平票 PK → ⑧ 遗言/开枪结算 → ⑨ 判定胜负，进入下一夜。</p>
-  <h3>夜晚顺序（本局可调）</h3>
-  <p>守卫 → 狼人（狼队频道讨论后投票定刀口）→ 预言家 → 女巫。</p>
-  <h3>胜负</h3>
-  <p>好人：杀光所有狼人。狼人：屠边——杀光所有神职，或杀光所有平民。</p>
-  <h3>关键细则（默认按网易官方 12 人守卫局）</h3>
-  <li>同守同救（守卫+解药同夜作用于同一人）＝ 奶穿，仍死亡，视同被刀。</li>
-  <li>守卫不能连续两晚守同一人；盾不防毒。</li>
-  <li>女巫每晚限一瓶药，夜间始终知晓刀口；12 人局不可自救。</li>
-  <li>猎人被刀/被放逐可开枪，被毒不可。</li>
-  <li>警长竞选：警上报名 → 演讲（可退水）→ 警下投票 → 平票 PK；竞选阶段狼自爆按吞警徽模式处理。</li>
-  <li>警长：1.5 票、每天定发言方向、压轴发言、死亡移交/撕毁警徽。</li>
-  <li>遗言：首夜死者与被放逐者有遗言；被枪带走者默认无。</li>
-  <li>狼人白天轮到自己发言时可自爆立即天黑；白狼王自爆可带走一人（无遗言）。</li>`;
+  if (window.Rulebook && window.Rulebook.render) {
+    window.Rulebook.render(box);
+  } else {
+    box.appendChild(el('p', 'hint', '规则书资源未加载（rulebook.js 缺失）。'));
+  }
 }
 
 function renderCodexTab(box) {
