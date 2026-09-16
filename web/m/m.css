@@ -23,29 +23,31 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 对局顶栏：只留左上角齿轮 + 天数/阶段。其余入口全部收进齿轮菜单
    （原来是 4 个无标签图标按钮 📜🎴📖⏹，玩家得猜哪个是记录、哪个是身份） */
 .m-bar {
-  display: flex; align-items: center; gap: var(--sp-3); flex: none;
-  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-2)) var(--sp-3) var(--sp-2);
+  display: flex; align-items: center; gap: var(--sp-2); flex: none;
+  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-2)) var(--sp-2) var(--sp-2);
   border-bottom: 1px solid var(--gold-dim);
   background: linear-gradient(180deg, #17121f, #100d18);
 }
+/* 顶栏只有两个按钮（设置 / 规则书），都很小：整条 44px 高，别抢牌桌的竖向空间 */
 .m-gear {
-  flex: none; width: 44px; height: 44px; border-radius: var(--r-md); cursor: pointer;
+  flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
   background: linear-gradient(180deg, #241c36, #140f20);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
-  font-size: 21px; line-height: 1;
+  font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
+/* 日期/阶段居中：齿轮与规则书在两端（flex:1 占满中间，规则书才会被顶到最右） */
+.m-status { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: var(--sp-2); flex-wrap: wrap; }
 .m-gear:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
 /* 顶栏右上角：规则书（用户指定放这边，正好利用空位） */
 .m-bar-btn {
-  flex: none; margin-left: auto; width: 44px; height: 44px; border-radius: var(--r-md); cursor: pointer;
+  flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
   background: linear-gradient(180deg, #241c36, #140f20);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
-  font-size: 20px; line-height: 1;
+  font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
 .m-bar-btn:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
-.m-status { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
 #m-day { font-family: var(--font-goth); color: var(--gold-bright); }
 .m-phase-chip {
   color: var(--gold-bright); border: 1px solid rgba(201,162,39,.45); padding: 2px 10px;
@@ -208,63 +210,65 @@ html, body { height: 100%; overscroll-behavior: none; }
 }
 .srow.picked .nm { color: #ffd7dd; }
 
-/* ---------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ----------
-   高度由最高的那一列决定：对话框列（提示 + 输入框 + 发送键）刻意做得比
-   旧版高一截，避免整条底部显得扁；身份牌跟着占满同样高度。 */
+/* ---------- 底部坞：左（身份牌）| 右（提示 + 输入框 + 动作行） ----------
+   技能键**不再和身份牌挤在同一侧**：那样会固定占掉 ~90px 宽，把右侧输入框压变形。
+   现在整个右侧都归对话框，所有技能键（含发送/确认）统一排在输入框下方的动作行里。 */
 .m-dock {
   flex: none; display: flex; align-items: stretch; gap: var(--sp-2);
-  margin-top: var(--sp-2); min-height: 164px;
-  padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3));
+  margin-top: var(--sp-2); min-height: 142px;
+  padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));
   border-top: 1px solid var(--gold-dim);
   background: linear-gradient(180deg, #17121f, #0e0b15);
   box-shadow: 0 -8px 24px rgba(0,0,0,.5);
 }
-.m-dock-l { flex: 0 0 auto; display: flex; align-items: stretch; gap: var(--sp-2); min-width: 0; }
 /* 身份牌：常驻可见（旧版要点顶部 🎴 才看得到），点击开检视大卡。
-   卡片保持 2:3 比例并**垂直居中**：底部坞的高度由对话框列决定，
-   让卡片去 stretch 会把 66px 宽的牌拉成 160 高（内容只有 99，纯浪费）。 */
+   52×78 保持 2:3 且垂直居中：底部高度由对话框列决定，让牌去 stretch 会被拉长变形。 */
 .m-mycard {
-  flex: none; width: 66px; align-self: center; padding: 0; cursor: pointer; overflow: hidden;
+  flex: none; width: 52px; align-self: center; padding: 0; cursor: pointer; overflow: hidden;
   border-radius: var(--r-sm); border: none; background: none;
 }
 .m-mycard .card-frame { width: 100%; }
 .m-mycard:active { transform: scale(.97); }
-.m-keys {
-  flex: 0 0 auto; min-width: 84px;
-  display: flex; flex-direction: column; gap: 6px; justify-content: center;
-}
-.m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .pending-hint {
-  border-left: 3px solid var(--accent); padding-left: var(--sp-2);
-  font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim);
+  border-left: 3px solid var(--accent); padding-left: 6px;
+  font-size: var(--fs-xs); line-height: 1.4; color: var(--text-dim);
 }
 .pending-hint.mine { color: #ffd98a; border-left-color: var(--gold); }
 .pending-hint.waiting { border-left-color: var(--line); color: var(--muted); }
-.m-dialog { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; justify-content: flex-end; min-width: 0; }
+.m-dialog { flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; justify-content: flex-end; min-width: 0; }
 .m-dialog textarea {
-  width: 100%; min-height: 68px; max-height: 30vh; margin: 0; resize: none;
-  font-size: var(--fs-base); line-height: 1.6;
+  flex: 1 1 auto; width: 100%; min-height: 50px; max-height: 26vh; margin: 0; resize: none;
+  font-size: var(--fs-base); line-height: 1.55;
 }
-.m-dialog .mrow { display: flex; gap: 6px; align-items: stretch; }
-.m-dialog .mrow .key { flex: 1 1 0; }
-/* 无操作时对话框是空的：让说明卡片撑满这块高度，底部才不会显得扁 */
+/* 动作行：所有技能键居右紧凑排列。row-reverse + justify-content:flex-start
+   ⇒ 主键（发送/确认）永远落在最右边（拇指位，也符合聊天软件的发送键习惯），
+   次要键依次往左排；键多到一行放不下时自动换行，不会把谁挤变形。 */
+.m-keys {
+  flex: none; display: flex; flex-direction: row-reverse; flex-wrap: wrap;
+  align-items: center; justify-content: flex-start; gap: 6px;
+}
+/* 主键（发送 / 确认）永远在最右：各任务分支往 keys 里 append 的顺序不一样
+   （女巫同时有解药/毒药两条路，备选键可能会排在确认键前面），
+   用 order 把它固定到 row-reverse 的首位，不依赖代码顺序。 */
+.m-keys [data-confirm] { order: -1; }
 .m-dialog .idle {
   flex: 1 1 auto;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
-  font-size: var(--fs-sm); color: var(--muted); line-height: 1.6;
-  border: 1px dashed var(--line-dim); border-radius: var(--r-sm); padding: var(--sp-3);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  font-size: var(--fs-sm); color: var(--muted); line-height: 1.5;
+  border: 1px dashed var(--line-dim); border-radius: var(--r-sm); padding: var(--sp-2);
   text-align: center;
 }
 .m-dialog .pick-hint { color: var(--muted); }
 /* 已选目标：单独一行、金色加粗，一眼能确认选的是谁 */
 .m-dialog .pick-sel { font-size: var(--fs-sm); color: var(--text-dim); }
-.m-dialog .pick-sel b { font-family: var(--font-goth); font-size: 19px; color: var(--gold-bright); }
+.m-dialog .pick-sel b { font-family: var(--font-goth); font-size: 18px; color: var(--gold-bright); }
 
 /* ---------- 技能键：可用=红，不可用=灰红（用户明确要求的语义） ---------- */
 .key {
-  min-height: 46px; padding: 0 var(--sp-3); cursor: pointer;
-  border-radius: var(--r-sm); font-size: var(--fs-md); font-weight: 600;
-  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  min-height: 38px; padding: 0 var(--sp-3); cursor: pointer;
+  border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px;
   border: 1px solid transparent; white-space: nowrap;
 }
 /* 可用：血红实心 + 外发光 */

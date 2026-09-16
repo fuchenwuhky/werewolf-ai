@@ -79,8 +79,8 @@
       <div class="m-status">
         <b id="m-day"></b>
         <span id="m-phase" class="m-phase-chip"></span>
+        <span id="m-memory" class="m-phase-chip hidden"></span>
       </div>
-      <span id="m-memory" class="m-phase-chip hidden"></span>
       <button class="m-bar-btn" id="m-rulebook-btn" title="规则书" aria-label="规则书" data-i18n-title="game.rulebookTitle">📖</button>
     </header>
 
@@ -97,15 +97,13 @@
       <aside class="m-seatcol" id="m-seats-r" aria-label="右半桌座位"></aside>
     </main>
 
-    <!-- 底部：左=身份牌+技能键，右=对话框 -->
+    <!-- 底部：左=身份牌，右=对话框（提示 + 输入框 + 技能键统一在动作行） -->
     <footer class="m-dock">
-      <div class="m-dock-l">
-        <button id="m-mycard" class="m-mycard" title="我的身份牌（点击查看）" aria-label="我的身份牌"></button>
-        <div id="m-keys" class="m-keys"></div>
-      </div>
+      <button id="m-mycard" class="m-mycard" title="我的身份牌（点击查看）" aria-label="我的身份牌"></button>
       <div class="m-dialog-wrap">
         <div id="m-pending-hint" class="pending-hint"></div>
         <div id="m-dialog" class="m-dialog"></div>
+        <div id="m-keys" class="m-keys"></div>
       </div>
     </footer>
   </section>

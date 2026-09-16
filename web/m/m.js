@@ -977,7 +977,8 @@ function updateActionbar(v) {
     const send = keyEl('插话', 'off', () => wolfTalkAction('say', ta.value.trim(), ta));
     send.dataset.confirm = '1';
     ta.addEventListener('input', () => setKeyEnabled(send, ta.value.trim().length > 0));
-    dlg.append(ta, (() => { const r = el('div', 'mrow'); r.appendChild(send); return r; })());
+    dlg.appendChild(ta);
+    keys.appendChild(send);
     keys.append(
       keyEl('+1 轮', 'alt', () => wolfTalkAction('extra')),
       keyEl('结束讨论', 'alt', () => wolfTalkAction('end'))
@@ -1154,10 +1155,10 @@ function buildActionUI(v, p, keys, dlg) {
     );
     send.dataset.confirm = '1';
     ta.addEventListener('input', () => setKeyEnabled(send, canSend()));
-    const row = el('div', 'mrow');
-    row.appendChild(send);
-    dlg.appendChild(row);
     setKeyEnabled(send, canSend());
+    // 发送键和其它技能键放在同一条动作行里（以前单独占一行、还把行拉满宽，
+    // 结果输入框被上下夹击显得变形）
+    keys.appendChild(send);
     if (p.canExplode && me.role === 'whitewolfking') markNeedTarget(v, v.players.filter((x) => x.alive && x.seat !== me.seat).map((x) => x.seat), '选择自爆要带走的玩家');
     if (p.canExplode) {
       keys.appendChild(keyEl('🔮 自爆', 'alt', () => {

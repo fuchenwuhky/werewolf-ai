@@ -71,13 +71,43 @@ test('对局页：旧布局元素与旧代码必须彻底移除（防半途而�
   assert.ok(!/\.tseat|\.ts-ring/.test(MCSS), 'm.css 仍有圆桌座位样式');
 });
 
-test('对局页：左侧是身份牌+技能键、右侧是对话框（用户明确要求的方位）', () => {
+test('对局页：身份牌在左，输入框+技能键同在一个右列（技能键不许再占宽度）', () => {
   const iCard = MHTML.indexOf('id="m-mycard"');
-  const iKeys = MHTML.indexOf('id="m-keys"');
   const iDlg = MHTML.indexOf('id="m-dialog"');
-  assert.ok(iCard < iKeys && iKeys < iDlg, '底部坞顺序应为 身份牌 → 技能键 → 对话框');
-  assert.ok(/class="m-dock-l"[\s\S]*m-mycard[\s\S]*m-keys[\s\S]*<\/div>[\s\S]*m-dialog/.test(MHTML),
-    '身份牌与技能键必须在同一个左侧容器里，对话框在右侧容器里');
+  const iKeys = MHTML.indexOf('id="m-keys"');
+  assert.ok(iCard < iDlg, '身份牌应在对话框左边');
+  assert.ok(iDlg < iKeys, '技能键应排在输入框下方（动作行）');
+  // 关键结构：技能键与输入框必须同属 .m-dialog-wrap —— 一旦分列，技能键就会
+  // 固定吃掉 ~90px 宽，把右侧输入框压变形（用户实际反馈"输入框被挤压变形"）。
+  const wrap = MHTML.slice(MHTML.indexOf('class="m-dialog-wrap"'), MHTML.indexOf('</footer>'));
+  assert.ok(/id="m-dialog"/.test(wrap) && /id="m-keys"/.test(wrap), '输入框与技能键必须在同一个右列容器里');
+  assert.ok(!/m-dock-l/.test(MHTML + MCSS + MJS), '旧的 .m-dock-l（身份牌+技能键挤左列）必须彻底移除');
+  assert.ok(!/['"]mrow['"]|\.m-dialog \.mrow/.test(MJS + MCSS), '发送键不许再单独占一行（旧 .mrow 写法）');
+  // 动作行：主键靠最右（row-reverse + flex-start）
+  const keysCss = block(MCSS, '.m-keys {');
+  assert.match(keysCss, /flex-direction:\s*row-reverse/, '.m-keys 用 row-reverse 让主键落在最右');
+  assert.match(keysCss, /flex-wrap:\s*wrap/, '键多时要能换行，不能把谁挤扁');
+  // 各任务分支 append 顺序不同（女巫两条路），主键位置必须由 CSS 兜住
+  assert.match(MCSS, /\.m-keys \[data-confirm\] \{ order: -1; \}/, '确认键要用 order:-1 固定到最右');
+});
+
+test('尺寸：按钮整体收小（用户反馈"按钮太大"）', () => {
+  const px = (css, re) => Number((css.match(re) || [])[1]);
+  const gear = block(MCSS, '.m-gear {');
+  assert.ok(px(gear, /width:\s*(\d+)px/) <= 38, '齿轮按钮宽 ≤38px');
+  assert.ok(px(gear, /height:\s*(\d+)px/) <= 38, '齿轮按钮高 ≤38px');
+  assert.ok(px(block(MCSS, '.m-bar-btn {'), /width:\s*(\d+)px/) <= 38, '规则书按钮 ≤38px');
+  const key = block(MCSS, '.key {');
+  assert.ok(px(key, /min-height:\s*(\d+)px/) <= 40, '技能键高度 ≤40px');
+  assert.match(key, /font-size:\s*var\(--fs-sm\)/, '技能键字号用 --fs-sm(12px)，不要 --fs-md');
+  const ta = block(MCSS, '.m-dialog textarea {');
+  assert.ok(px(ta, /min-height:\s*(\d+)px/) <= 52, '输入框最小高度 ≤52px');
+  assert.match(ta, /flex:\s*1 1 auto/, '输入框应吃掉右列剩余高度');
+  // 顶栏：日期/阶段居中，两端各一个按钮
+  assert.match(block(MCSS, '.m-status {'), /justify-content:\s*center/, '顶栏日期应居中');
+  const barFrom = MHTML.indexOf('class="m-status"');
+  assert.ok(/id="m-memory"/.test(MHTML.slice(barFrom, MHTML.indexOf('</header>', barFrom))),
+    '记忆 chip 应并进居中的状态组，否则会把居中挤偏');
 });
 
 // ---------------------------------------------------------------- ② 布局与滚动契约
@@ -211,12 +241,13 @@ test('消息：一律左对齐，靠颜色区分（不再 AI 左我右）', () =
 test('底部坞：给足高度（不能扁），身份牌保持 2:3 且垂直居中', () => {
   const dock = block(MCSS, '.m-dock {');
   const mh = Number((dock.match(/min-height:\s*(\d+)px/) || [])[1]);
-  assert.ok(mh >= 150, `底部坞需要 min-height ≥150px 才有分量（当前 ${mh || '无'}）`);
+  assert.ok(mh >= 138, `底部坞需要 min-height ≥138px 才有分量（当前 ${mh || '无'}）`);
   const card = block(MCSS, '.m-mycard {');
   assert.match(card, /width:\s*\d+px/, '身份牌要有明确宽度');
   assert.match(card, /align-self:\s*center/, '身份牌必须垂直居中：stretch 会把 2:3 的牌拉变形/留大片空白');
+  assert.ok(Number((card.match(/width:\s*(\d+)px/) || [])[1]) <= 56, '身份牌宽度 ≤56px（别和输入框抢宽度）');
   const ta = block(MCSS, '.m-dialog textarea {');
-  assert.ok(Number((ta.match(/min-height:\s*(\d+)px/) || [])[1]) >= 60, '输入框给足高度（旧版 46px 太扁）');
+  assert.ok(Number((ta.match(/min-height:\s*(\d+)px/) || [])[1]) >= 46, '输入框仍要给足高度');
   // 无操作时说明卡要撑满，否则空档状态底部塌陷
   assert.match(block(MCSS, '.m-dialog .idle {'), /flex:\s*1 1 auto/, '空档说明卡必须撑满对话框高度');
 });
@@ -224,7 +255,8 @@ test('底部坞：给足高度（不能扁），身份牌保持 2:3 且垂直居
 test('规则书入口在顶栏右上角（专用按钮），齿轮里不再重复', () => {
   assert.ok(/id="m-rulebook-btn"/.test(MHTML), '顶栏右上角缺少规则书按钮');
   assert.ok(/class="m-bar-btn"\s+id="m-rulebook-btn"/.test(MHTML.replace(/\s+/g, ' ')), '规则书按钮应使用顶栏右侧样式 m-bar-btn');
-  assert.match(MCSS, /\.m-bar-btn \{[^}]*margin-left:\s*auto/, 'm-bar-btn 必须靠右（margin-left:auto）');
+  assert.match(MCSS, /\.m-bar-btn \{/, '缺少顶栏右侧按钮样式 m-bar-btn');
+  assert.match(MCSS, /\.m-status \{[^}]*flex:\s*1 1 auto/, '状态组要占满中间，规则书才会被顶到最右');
   assert.match(MJS, /\$\('#m-rulebook-btn'\)\.addEventListener\('click', openRulebook\)/, '规则书按钮必须接线到 openRulebook');
   const gear = MJS.slice(MJS.indexOf('function openGear'), MJS.indexOf('function askTerminate'));
   assert.ok(!/openRulebook/.test(gear), '齿轮菜单里不应再重复列规则书（已在右上角）');
