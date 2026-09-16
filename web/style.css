@@ -619,43 +619,41 @@ details summary:hover { color: var(--gold-bright); }
   --fr-tint-a: 0;
   --fr-tint-h: 0;
 }
-/* 阵营染色用**色相混合**：只换色相，完整保留金属的明暗与质感。
-   为什么必须这么做：把蓝色平涂到暖青铜上得到的是"蓝泥 / 橄榄绿"—— 色相一混就脏；
-   用 hue 混合之后，蓝阵营是"蓝钢"、绿阵营是"青铜绿"、红阵营是"血铜"，
-   线脚的高光与暗槽全在，才像不同材质的卡框，而不是同一张卡蒙了张色片。
-   不支持 mix-blend-mode 的老 WebView 落到 --fr-tint-a 那层低浓度平涂：
-   颜色淡一些，但金属质感与金色都还在，不会难看。
-
-   ⚠ 选择器必须宿主无关（.fr-svg 后代），不能写成 `.card-frame .fr-tint`：
-   牌背 .flip-back 不是 .card-frame，规则不命中时染色层会拿到默认 opacity:1 ——
-   整条框带被实心染成一色（实测横剖 16 个像素全是 #a8781a，金属质感全丢）。 */
-.fr-svg .fr-tint { mix-blend-mode: hue; opacity: var(--fr-tint-h, 0); }
+/* 阵营染色用**色相+饱和度混合**（mix-blend-mode: color）：色的饱和度取自阵营色，
+   明暗取自金属 —— 这正是"血一样红"和"玫瑰灰"的区别。
+   为什么不用 hue：hue 只换色相、**保留金属本身的低饱和度**，实测框带中调饱和度只有
+   36~42%（`#823538`），大图上一眼就是"砖红/玫瑰灰"，根本不血腥；
+   换成 color 之后同样位置是 58~71%（`#7d1318` / `#832420`），明暗线脚一根不少。
+   （也试过更浅的 hue + 更重的平涂，饱和度上不去 —— 平涂在暗金属上会被压暗。）
+   两层降级：没有 color 就退回 hue，连 hue 都没有才退回低浓度平涂，
+   保证任何 WebView 上都是"金属色的卡框"，不会变成一块死色。 */
+.fr-svg .fr-tint { mix-blend-mode: color; opacity: var(--fr-tint-h, 0); }
+@supports not (mix-blend-mode: color) {
+  .fr-svg .fr-tint { mix-blend-mode: hue; }
+}
 @supports not (mix-blend-mode: hue) {
   .fr-svg .fr-tint { opacity: var(--fr-tint-a, 0); }
 }
 /* 金属面（导轨之下）再按阵营色洗一遍，导轨本身保持金色 —— 金镶彩钢，层次更足 */
 .fr-svg .fr-tint-under { opacity: var(--fr-tint-a, 0); }
-/* 卡框配色表：**每个角色一张卡**。data-role 由 CardFrame.roleAttr() 写到外层 div 上，
-   颜色只在这里定义一处 —— 调用方不需要知道阵营。
-     阵营约定（按需求定死，别随手改）：**狼 = 红、神 = 金、民 = 绿**。
+/* 卡框配色表：**按阵营一条**（data-faction 由 CardFrame.roleAttrs() 写到外层 div 上），
+   颜色只在这里定义一处 —— 调用方不需要知道阵营，加角色也只需改 card-frame.js 的 FACTION 表。
+     阵营约定（按需求定死，别随手改）：
+       **狼 = 血腥红、神 = 神圣金、民 = 绿、第三方 = 紫**。
      染色只改色相（mix-blend-mode: hue），金属的明暗线脚全部保留；
-     其余行：个别角色再给一个专属强调色（徽记狼爪 / 托角宝石），做出"藏品"的差异感 ——
-     阵营色负责"一眼分阵营"，强调色负责"认出这是哪张卡"。 */
-.card-frame[data-role='wolf'],
-.card-frame[data-role='wolfking'],
-.card-frame[data-role='whitewolfking'],
-.card-frame[data-role='wolfbeauty'],
-.card-frame[data-role='hiddenwolf'] { --fr-tint: #8e1220; --fr-tint-a: .26; --fr-tint-h: .82; --fr-accent: #f0c05a; }
-.card-frame[data-role='seer'],
-.card-frame[data-role='witch'],
-.card-frame[data-role='hunter'],
-.card-frame[data-role='guard'],
-.card-frame[data-role='idiot'],
-.card-frame[data-role='knight'],
-.card-frame[data-role='dreamer'],
-.card-frame[data-role='crow'] { --fr-tint: #c8901c; --fr-tint-a: .22; --fr-tint-h: .55; --fr-accent: #f2d072; }
-.card-frame[data-role='villager'],
-.card-frame[data-role='admirer'] { --fr-tint: #3f5320; --fr-tint-a: .21; --fr-tint-h: .78; --fr-accent: #cfe0a0; }
+     下面再按角色给专属强调色（徽记 / 托角宝石），做出"藏品"的差异感 ——
+     阵营色负责"一眼分阵营"，强调色负责"认出这是哪张卡"。
+   ⚠ 强调色的规则必须写在阵营规则**之后**：两者特异度相同（都是 0,1,1），
+     靠顺序决定谁生效；顺序颠倒会被阵营默认强调色盖掉。 */
+/* 狼阵营：血腥红 —— 比"正红"更深、更暗，像干涸不久的血。饱和度靠 color 混合带出来，
+   下层再实染 .25 压出"血面"，导轨在实染之上仍保持金色。 */
+.card-frame[data-faction='wolf'] { --fr-tint: #7d0710; --fr-tint-a: .25; --fr-tint-h: .72; --fr-accent: #f0c05a; }
+/* 神职：神圣金 —— 明亮、干净、偏白，像圣像上的鎏金，而不是黄铜 */
+.card-frame[data-faction='god'] { --fr-tint: #d9a520; --fr-tint-a: .22; --fr-tint-h: .6; --fr-accent: #ffe9a8; }
+/* 平民：绿 */
+.card-frame[data-faction='villager'] { --fr-tint: #3f5320; --fr-tint-a: .2; --fr-tint-h: .7; --fr-accent: #cfe0a0; }
+/* 第三方：紫 —— 胜负不绑定任何固定阵营的角色（目前是暗恋者） */
+.card-frame[data-faction='third'] { --fr-tint: #63239c; --fr-tint-a: .24; --fr-tint-h: .78; --fr-accent: #e9c8ff; }
 /* 角色专属强调色 */
 .card-frame[data-role='wolfking'] { --fr-accent: #ffd97a; }
 .card-frame[data-role='whitewolfking'] { --fr-accent: #eaf2ff; }
@@ -668,16 +666,18 @@ details summary:hover { color: var(--gold-bright); }
 .card-frame[data-role='knight'] { --fr-accent: #e8d0a0; }
 .card-frame[data-role='dreamer'] { --fr-accent: #c8a8f2; }
 .card-frame[data-role='crow'] { --fr-accent: #c4c4d0; }
-.card-frame[data-role='admirer'] { --fr-accent: #d9b0f0; }
+.card-frame[data-role='admirer'] { --fr-accent: #e9c8ff; }
 
-/* 徽记按阵营换图形：狼爪 / 神星（四芒星）/ 民麦（麦穗）。
+/* 徽记按阵营换图形：狼爪 / 神星（四芒星）/ 民麦（麦苗）/ 第三方心（命运红线）。
    默认（没有 data-faction，例如牌背）露狼爪 —— 那是这个游戏的品牌记号。
    十五个角色只在 card-frame.js 的 FACTION 表里归一次类，测试逐条比对 roles.js。 */
-.fr-svg .fr-crest-god, .fr-svg .fr-crest-vil { display: none; }
+.fr-svg .fr-crest-god, .fr-svg .fr-crest-vil, .fr-svg .fr-crest-third { display: none; }
 .card-frame[data-faction='god'] .fr-crest-wolf,
-.card-frame[data-faction='villager'] .fr-crest-wolf { display: none; }
+.card-frame[data-faction='villager'] .fr-crest-wolf,
+.card-frame[data-faction='third'] .fr-crest-wolf { display: none; }
 .card-frame[data-faction='god'] .fr-crest-god,
-.card-frame[data-faction='villager'] .fr-crest-vil { display: block; }
+.card-frame[data-faction='villager'] .fr-crest-vil,
+.card-frame[data-faction='third'] .fr-crest-third { display: block; }
 /* 框层铺满整卡并压在插画之上（画窗处透明，插画透出来）。
    pointer-events:none 保证不挡检视卡的点击与指针倾斜。 */
 .card-frame > .fr-svg {

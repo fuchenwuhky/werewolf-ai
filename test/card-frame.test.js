@@ -218,25 +218,34 @@ test('roleAttr：把角色 id 与阵营带到外层 div 上，且只放行安全
   }
 });
 
-test('徽记按阵营换：狼爪 / 神星 / 民麦，且阵营表与 roles.js 一致', () => {
+test('徽记按阵营换：狼爪 / 神星 / 民麦 / 第三方心，且阵营表与 roles.js 一致', () => {
   const roles = require('../src/engine/roles.js');
-  const list = Object.values(roles.ROLES || roles);
+  const table = roles.ROLES || roles;
+  const list = Object.values(table);
   const ids = list.map((r) => r.id).filter(Boolean);
   assert.ok(ids.length >= 15, `roles.js 里应能读到全部角色（读到 ${ids.length} 个）`);
-  // 阵营表必须与引擎逐条一致：漂移的后果是"预言家卡上印狼爪"这种默默错下去的事
+  // 阵营表必须与引擎逐条一致：漂移的后果是"预言家卡上印狼爪"这种默默错下去的事。
+  // 唯一的例外是 THIRD_PARTY（外观上的第三方，引擎 category 不变）—— 也逐条钉住。
   for (const r of list) {
     if (!r.id) continue;
-    assert.strictEqual(CF.FACTION[r.id], r.category, `${r.id} 的阵营与 roles.js 不一致（${CF.FACTION[r.id]} ≠ ${r.category}）`);
+    const want = CF.THIRD_PARTY.includes(r.id) ? 'third' : r.category;
+    assert.strictEqual(CF.FACTION[r.id], want, `${r.id} 的阵营与 roles.js 不一致（${CF.FACTION[r.id]} ≠ ${want}）`);
   }
   assert.strictEqual(Object.keys(CF.FACTION).length, ids.length, '阵营表条目数与角色数不等（多了或少了角色）');
-  // 三个徽记图形与三个占位组都要在
-  for (const [g, id] of [['fr-crest-wolf', 'frCrest'], ['fr-crest-god', 'frCrestGod'], ['fr-crest-vil', 'frCrestVil']]) {
+  // 第三方名单只能放"胜负不绑定固定阵营"的角色，而且必须是引擎里真实存在的角色
+  for (const id of CF.THIRD_PARTY) {
+    assert.ok(table[id], `第三方名单里的 ${id} 在 roles.js 里不存在`);
+    assert.strictEqual(CF.FACTION[id], 'third', `第三方名单里的 ${id} 没有映射到 third`);
+  }
+  // 四个徽记图形与四个占位组都要在
+  const CRESTS = [['fr-crest-wolf', 'frCrest'], ['fr-crest-god', 'frCrestGod'], ['fr-crest-vil', 'frCrestVil'], ['fr-crest-third', 'frCrestThird']];
+  for (const [g, id] of CRESTS) {
     assert.ok(CF.FRAME.includes(`class="${g}"`), `FRAME 里缺少 ${g} 占位组`);
     assert.ok(CF.DEFS.includes(`id="${id}"`), `DEFS 里缺少 ${id} 图形`);
     assert.ok(CF.FRAME.includes(`href="#${id}"`), `FRAME 里没有引用 ${id}`);
   }
-  // 图形必须用阵营色填充（否则三个徽记都是死色）
-  for (const id of ['frCrestGod', 'frCrestVil']) {
+  // 图形必须用阵营色填充（否则徽记都是死色），且共用同一块底盘
+  for (const id of ['frCrestGod', 'frCrestVil', 'frCrestThird']) {
     const at = CF.DEFS.indexOf(`id="${id}"`);
     const block = CF.DEFS.slice(at, at + 3000); // 取足够长的一段（内部还有子组，别用 </g> 切）
     assert.ok(block.includes('var(--fr-accent'), `${id} 没用阵营强调色填充`);
@@ -244,44 +253,47 @@ test('徽记按阵营换：狼爪 / 神星 / 民麦，且阵营表与 roles.js �
   }
   // CSS 必须按 data-faction 切换显示，且默认（牌背，无阵营）露狼爪
   const css = read('style.css').replace(/\/\*[\s\S]*?\*\//g, '');
-  assert.match(css, /\.fr-svg\s+\.fr-crest-god,\s*\.fr-svg\s+\.fr-crest-vil\s*\{\s*display:\s*none/, '神/民徽记默认必须藏起来');
-  assert.match(css, /\[data-faction='god'\]\s+\.fr-crest-wolf[\s\S]{0,80}display:\s*none/, '神阵营没有藏起狼爪');
-  assert.match(css, /\[data-faction='god'\]\s+\.fr-crest-god,\s*\.card-frame\[data-faction='villager'\]\s+\.fr-crest-vil\s*\{\s*display:\s*block/, '神/民阵营没有露出对应徽记');
+  assert.match(css, /\.fr-svg\s+\.fr-crest-god,\s*\.fr-svg\s+\.fr-crest-vil,\s*\.fr-svg\s+\.fr-crest-third\s*\{\s*display:\s*none/, '非狼徽记默认必须藏起来');
+  assert.match(css, /\[data-faction='third'\]\s+\.fr-crest-wolf/, '第三方阵营没有藏起狼爪');
+  assert.match(css, /\[data-faction='third'\]\s+\.fr-crest-third\s*\{\s*display:\s*block/, '第三方阵营没有露出心形徽记');
+  assert.match(css, /\[data-faction='god'\]\s+\.fr-crest-wolf[\s\S]{0,120}display:\s*none/, '神阵营没有藏起狼爪');
   assert.match(css, /\[data-faction='villager'\]\s+\.fr-crest-wolf/, '民阵营没有藏起狼爪');
 });
 
-test('每个角色都有配色规则：阵营 = 狼红 / 神金 / 民绿，且染色层只改色相', () => {
+test('阵营配色表：狼=血腥红 / 神=神圣金 / 民=绿 / 第三方=紫，且染色层用 color 混合', () => {
   const css = read('style.css');
   // 引擎里的角色清单：从源码里读，避免测试自己维护一份会漂移的名单
   const roles = require(path.join(__dirname, '..', 'src', 'engine', 'roles.js')).ROLES;
   const ids = Object.keys(roles);
   assert.ok(ids.length >= 15, `角色数异常（${ids.length}）`);
-  for (const id of ids) {
-    assert.ok(css.includes(`.card-frame[data-role='${id}']`), `style.css 缺少 ${id} 的配色规则（会掉回默认金）`);
+  // 配色按**阵营**给（一条规则管一个阵营），角色只负责自己的强调色
+  const factionTint = {};
+  for (const m of css.matchAll(/\.card-frame\[data-faction='([^']+)'\]\s*\{([^}]*)\}/g)) {
+    const t = m[2].match(/--fr-tint:\s*(#[0-9a-f]{6})/);
+    if (t) factionTint[m[1]] = t[1];
   }
-  // 阵营色按需求定死：狼=红、神=金、民=绿
-  const groupOf = (cat) => {
-    const re = new RegExp(`\\.card-frame\\[data-role='([^']+)'\\][^{]*\\{[^}]*--fr-tint:\\s*(#[0-9a-f]{6})`, 'g');
-    const map = {};
-    let m;
-    while ((m = re.exec(css))) map[m[1]] = m[2];
-    return Object.entries(map).filter(([id]) => roles[id] && roles[id].category === cat).map(([, c]) => c);
-  };
-  const hues = (hex) => {
-    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
-    return { r, g, b };
-  };
-  const wolf = groupOf('wolf'), god = groupOf('god'), villager = groupOf('villager');
-  assert.ok(wolf.length && wolf.every((c) => c === wolf[0]), `狼阵营染色不统一: ${wolf}`);
-  assert.ok(god.length && god.every((c) => c === god[0]), `神阵营染色不统一: ${god}`);
-  assert.ok(villager.length && villager.every((c) => c === villager[0]), `民阵营染色不统一: ${villager}`);
-  const w = hues(wolf[0]), g = hues(god[0]), v = hues(villager[0]);
-  assert.ok(w.r > w.g + 60 && w.r > w.b + 60, `狼阵营必须是红（偏暖红）: ${wolf[0]}`);
-  assert.ok(g.r > 120 && g.g > 80 && g.b < g.g, `神阵营必须是金（红绿高、蓝低）: ${god[0]}`);
-  assert.ok(v.g > v.r && v.g > v.b, `民阵营必须是绿: ${villager[0]}`);
-  // 染色只改色相，且必须有降级
-  assert.match(css, /\.fr-svg\s+\.fr-tint\s*\{[^}]*mix-blend-mode:\s*hue/, '染色层必须用色相混合（平涂会把金属染成泥）');
-  assert.match(css, /@supports\s+not\s+\(mix-blend-mode:\s*hue\)\s*\{[^}]*\.fr-svg\s+\.fr-tint[^}]*opacity/, '缺少不支持混合模式时的降级');
+  for (const cat of ['wolf', 'god', 'villager', 'third']) {
+    assert.ok(factionTint[cat], `style.css 缺少 data-faction='${cat}' 的染色规则`);
+  }
+  const hues = (hex) => ({ r: parseInt(hex.slice(1, 3), 16), g: parseInt(hex.slice(3, 5), 16), b: parseInt(hex.slice(5, 7), 16) });
+  const w = hues(factionTint.wolf), g = hues(factionTint.god), v = hues(factionTint.villager), t = hues(factionTint.third);
+  assert.ok(w.r > w.g + 60 && w.r > w.b + 60, `狼阵营必须是红: ${factionTint.wolf}`);
+  assert.ok(w.r < 200, `狼阵营必须是"血腥红"（暗红），不能是亮红: ${factionTint.wolf}`);
+  assert.ok(g.r > 150 && g.g > 100 && g.b < g.g, `神阵营必须是"神圣金"（红绿高、蓝低且够亮）: ${factionTint.god}`);
+  assert.ok(v.g > v.r && v.g > v.b, `民阵营必须是绿: ${factionTint.villager}`);
+  assert.ok(t.b > t.r + 30 && t.b > t.g + 40, `第三方必须是紫（蓝最高、绿最低）: ${factionTint.third}`);
+  // 每个角色都必须靠 data-faction 拿到阵营色（只写 data-role 会掉回默认金）
+  for (const id of ids) {
+    const cat = CF.FACTION[id];
+    assert.ok(cat, `${id} 不在 FACTION 表里`);
+    assert.ok(factionTint[cat], `${id} 映射到的阵营 ${cat} 没有染色规则`);
+  }
+  // 染色用 color 混合：饱和度取自阵营色、明暗取自金属。
+  // 为什么不是 hue：hue 只换色相、**保留金属本身的低饱和度**，实测框带中调只有 36~42%
+  // 饱和度（#823538 那种"砖红/玫瑰灰"），怎么加浓度都不"血腥"；换 color 后是 58~71%。
+  assert.match(css, /\.fr-svg\s+\.fr-tint\s*\{[^}]*mix-blend-mode:\s*color/, '染色层必须用 color 混合（hue 带不出饱和度）');
+  assert.match(css, /@supports\s+not\s+\(mix-blend-mode:\s*color\)\s*\{[^}]*mix-blend-mode:\s*hue/, '缺少"没有 color 就退回 hue"的降级');
+  assert.match(css, /@supports\s+not\s+\(mix-blend-mode:\s*hue\)\s*\{[^}]*\.fr-svg\s+\.fr-tint[^}]*opacity/, '缺少"连 hue 都没有"时的平涂降级');
   // ⚠ 染色层的 opacity 规则必须**宿主无关**（.fr-svg 后代）：写成 .card-frame 后代时，
   //   牌背 .flip-back（不是 .card-frame）不命中，染色层会拿到默认 opacity:1 ——
   //   整条框带被实心染成一色。这条断言就是那次事故的守卫。

@@ -126,15 +126,35 @@
         <path d="M-.2 -1.2 C-1.15 -2.05 -1.6 -3.15 -1.45 -4.35 C-.4 -3.7 .35 -2.55 .2 -1.2 Z"/>
         <path d="M.2 -1.2 C1.15 -2.05 1.6 -3.15 1.45 -4.35 C.4 -3.7 -.35 -2.55 -.2 -1.2 Z"/>`;
 
-  /** 角色 → 阵营。徽记按阵营换（狼爪 / 神星 / 民麦），所以框层必须知道阵营。
-   *  这份表与 src/engine/roles.js 的一致性由 test/card-frame.test.js 逐条钉住，
-   *  两边漂移会直接测试失败（否则就是"预言家卡上印狼爪"这种默默错下去的事）。 */
+  /** 第三方阵营徽记的图形：心（命运红线 / 爱慕）。心是最不会认错的符号，
+   *  16 单位的徽记里缩到 14px 也能一眼读出来；红线不画，免得糊成一团。 */
+  const HEART = `
+        <path d="M0 4.15 C-2.6 1.95 -4.05 .45 -4.05 -1.25 C-4.05 -2.75 -2.95 -3.75 -1.65 -3.75 C-.9 -3.75 -.32 -3.3 0 -2.55 C.32 -3.3 .9 -3.75 1.65 -3.75 C2.95 -3.75 4.05 -2.75 4.05 -1.25 C4.05 .45 2.6 1.95 0 4.15 Z"/>`;
+
+  /** 角色 → 阵营（外观用）。徽记与配色按阵营换（狼爪 / 神星 / 民麦 / 心），
+   *  所以框层必须知道阵营。这份表与 src/engine/roles.js 的一致性由
+   *  test/card-frame.test.js 逐条钉住：默认必须等于引擎的 category，
+   *  只有 THIRD_PARTY 里的角色例外（否则就是"预言家卡上印狼爪"这种默默错下去的事）。 */
   const FACTION = {
     wolf: 'wolf', wolfking: 'wolf', whitewolfking: 'wolf', wolfbeauty: 'wolf', hiddenwolf: 'wolf',
     seer: 'god', witch: 'god', hunter: 'god', guard: 'god',
     idiot: 'god', knight: 'god', dreamer: 'god', crow: 'god',
-    villager: 'villager', admirer: 'villager',
+    villager: 'villager',
+    admirer: 'third',
   };
+
+  /**
+   * 第三方（独立于狼/神/民的第四种外观阵营，紫色 + 心形徽记）。
+   *
+   * ⚠ 这是**纯外观**概念，不动引擎：roles.js 里 category 仍然只有 wolf/god/villager
+   *   （category 决定屠边判定），这里只决定牌框染成什么颜色、徽记画什么。
+   *
+   * 目前唯一进这个名单的是暗恋者：引擎里她 category='villager'，但胜负跟着暗恋对象走
+   * （规则书原话"绑定到狼人随狼人获胜，绑到神职就算神职"），不属于任何固定阵营 ——
+   * 正是"第三方"的那种角色。将来加丘比特 / 情侣这类真正独立胜利条件的角色，
+   * 也只需把 id 加进这个数组，配色与徽记会自动跟上。
+   */
+  const THIRD_PARTY = ['admirer'];
 
   /** 页面级 defs：四个方向的剖面渐变 + 角块渐变 + 抛光 + 徽记/宝石/卷草（页面只注入一份） */
   const DEFS = `
@@ -259,7 +279,7 @@
       <path d="M-3.94 -2.95 L-3.62 -3.5 L-3.3 -2.95 L-3.62 -2.4 Z" fill="var(--fr-accent, #e8c45c)" opacity=".75"/>
     </g>
 
-    <!-- ============ 民阵营徽记：麦穗（平民 / 收成） ============ -->
+    <!-- ============ 民阵营徽记：麦苗（平民 / 收成） ============ -->
     <g id="frCrestVil">
       ${PLATE}
       <g fill="#140d03" stroke="#140d03" stroke-width=".62">${WHEAT}
@@ -268,6 +288,17 @@
       </g>
       <path d="M-.5 3.3 C-.7 2 -.7 .5 -.45 -1 C-.3 .5 -.26 2 -.16 3.3 Z" fill="#fff8dc" opacity=".24"/>
       <ellipse cx="0" cy="-3.0" rx=".28" ry=".6" fill="#fff8dc" opacity=".3"/>
+    </g>
+
+    <!-- ============ 第三方阵营徽记：心（命运红线 / 爱慕） ============ -->
+    <g id="frCrestThird">
+      ${PLATE}
+      <g fill="#140d03" stroke="#140d03" stroke-width=".7">${HEART}
+      </g>
+      <g fill="var(--fr-accent, #e0b0ff)">${HEART}
+      </g>
+      <path d="M-2.15 -1.9 C-2.7 -1.55 -2.95 -1.0 -2.9 -.45 C-2.55 -1.25 -1.9 -1.7 -1.15 -1.85 Z" fill="#fff8dc" opacity=".4"/>
+      <ellipse cx="-1.5" cy="-1.75" rx=".5" ry=".72" transform="rotate(-35 -1.5 -1.75)" fill="#fff8dc" opacity=".3"/>
     </g>
 
     <!-- ============ 底部铭牌：浅弧托板 + 中央菱形 ============ -->
@@ -395,6 +426,7 @@
     <g class="fr-crest-wolf"><use href="#frCrest" xlink:href="#frCrest" transform="translate(50 5.5)"/></g>
     <g class="fr-crest-god"><use href="#frCrestGod" xlink:href="#frCrestGod" transform="translate(50 5.5)"/></g>
     <g class="fr-crest-vil"><use href="#frCrestVil" xlink:href="#frCrestVil" transform="translate(50 5.5)"/></g>
+    <g class="fr-crest-third"><use href="#frCrestThird" xlink:href="#frCrestThird" transform="translate(50 5.5)"/></g>
     <use class="fr-plate" href="#frPlateOrn" xlink:href="#frPlateOrn" transform="translate(50 ${VIEW.h - 5})"/>
     <use class="fr-corner" href="#frCorner" xlink:href="#frCorner" transform="translate(${BX} ${BYT})"/>
     <use class="fr-corner" href="#frCorner" xlink:href="#frCorner" transform="translate(${VIEW.w - BX} ${BYT}) scale(-1 1)"/>
@@ -456,7 +488,7 @@
     return out;
   }
 
-  const api = { html, ensureDefs, roleAttr, roleAttrs, DEFS, FRAME, DEFS_ID, FACTION, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R };
+  const api = { html, ensureDefs, roleAttr, roleAttrs, DEFS, FRAME, DEFS_ID, FACTION, THIRD_PARTY, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R };
   root.CardFrame = api;
   // 用 typeof 守卫而不是 root.module：被 require 的模块里 globalThis.module 是 undefined，
   // root.module 那条路永远不会执行（require 只会拿到空对象）。浏览器里没有 module，
