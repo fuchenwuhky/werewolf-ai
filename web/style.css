@@ -586,10 +586,14 @@ details summary:hover { color: var(--gold-bright); }
    四条斜接梯形 + 横截面金属渐变（外暗边→亮倒角→刻槽→反光轨→内凹边）+ 抛光斜高光
    + 四角金托角饰 + 顶部切面宝石 + 底部对称卷草。CSS 不再用 background 拼金属。
 
-   ⚠ 两个变量必须与 SVG 的 viewBox(100×150、框带 7 单位) 严格对应：
+   ⚠ 五个变量必须与 SVG 的 viewBox(100×150、BX/BYT/BYB) 严格对应：
      --band   = 7%      —— 百分比 padding / left / right 按**宽度**解析 ✓
-     --band-y = 4.667%  —— 百分比 top / bottom 按**高度**解析，7/150 = 4.667%，纵向必须用这个
-     给 bottom 直接写 var(--band) 会算成 10.5 单位（不是 7），角色名底板会压住框带（踩过）
+     --band-t = 11%     \
+     --band-b = 10%      > padding 也按宽度解析，所以这三个能共用一套换算
+     --band-t-y = 7.333%  —— 给绝对定位的 top 用：top/bottom 按**高度**解析，11/150
+     --band-y   = 6.667%  —— 给绝对定位的 bottom / 角色名用：10/150
+     给 top/bottom 直接写 var(--band-t)/var(--band) 会按高度算成 16.5 / 10.5 单位（不是 11 / 7），
+     插画会被框带压掉一条、角色名会压到底部铭牌上（都踩过）
    ============================================================ */
 /* 卡框：几何全部来自 web/card-frame.js（单一来源），这里只负责"把框带宽度告诉 CSS"。
    padding 四个方向都按**宽度**百分比解析，所以左右/上/下可以各不相同；
@@ -597,9 +601,12 @@ details summary:hover { color: var(--gold-bright); }
 .card-frame {
   position: relative; width: 100%; aspect-ratio: 2/3;
   --band: 7%;        /* BX  = 7  */
-  --band-t: 11%;     /* BYT = 11 */
+  --band-t: 11%;     /* BYT = 11（百分比 padding 按**宽度**解析，所以三个方向能共用一套换算） */
   --band-b: 10%;     /* BYB = 10 */
-  --band-y: 6.667%;  /* 纵向用：BYB / 150（给绝对定位的角色名当 bottom） */
+  /* 绝对定位用：top/bottom 的百分比按**高度**解析，必须换成 y 方向的百分比。
+     写成 var(--band-t) 会算成 11% 的高度（=16.5 单位，不是 11）—— 又是那个静默错位的坑。 */
+  --band-t-y: 7.333%;  /* BYT / 150 */
+  --band-y: 6.667%;    /* BYB / 150，给绝对定位的角色名当 bottom */
   padding: var(--band-t) var(--band) var(--band-b);
   background: none;
   box-shadow: 0 12px 32px rgba(0,0,0,.72);   /* 只保留投影：框体本身由 SVG 画 */
@@ -725,8 +732,10 @@ details summary:hover { color: var(--gold-bright); }
   padding: 0;
   /* 角色名是 .card-frame 的**兄弟**节点：自定义属性不跨兄弟继承，
      所以 --band/--band-y 必须也定义在 .flip-front 上（否则下面 left/bottom 的 var() 整条失效，
-     角色名会掉到卡外面去 —— 踩过一次）。position:relative 让它成为定位参照。 */
-  position: relative; --band: 7%; --band-y: 4.667%;
+     角色名会掉到卡外面去 —— 踩过一次）。position:relative 让它成为定位参照。
+     ⚠ 这里的数字必须跟 .card-frame 的框带同步：底部框带从 7 单位加到 10 单位后，
+     名字的 bottom 若还用 4.667%，最后一行字会压到底部铭牌上（框带加厚时踩过）。 */
+  position: relative; --band: 7%; --band-y: 6.667%;
 }
 /* 卡框必须严格等于卡片尺寸：不能让它按插画的自然比例长高（实测会高出 2~4px 顶出卡外） */
 .flip-front .card-frame { flex: none; width: 100%; height: 100%; aspect-ratio: auto; }
@@ -794,7 +803,9 @@ details summary:hover { color: var(--gold-bright); }
   box-shadow: 0 32px 90px rgba(0,0,0,.85);
   cursor: pointer;
 }
-.inspect-card .inner { position: absolute; inset: var(--band-y) var(--band); overflow: hidden; }
+/* 绝对定位的插画容器必须与 SVG 画窗**完全重合**：top/bottom 用 y 方向百分比，
+   否则插画会整体上移几像素（被框带压掉一条）—— 这也是"两边各写一半"的坑之一。 */
+.inspect-card .inner { position: absolute; inset: var(--band-t-y) var(--band) var(--band-y); overflow: hidden; }
 .inspect-card .in-overlay {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 40px var(--sp-4) var(--sp-3); text-align: center;
   background: linear-gradient(180deg, transparent 0%, rgba(6,4,10,.72) 40%, rgba(6,4,10,.96) 100%);
@@ -803,7 +814,7 @@ details summary:hover { color: var(--gold-bright); }
 .inspect-card .in-overlay .in-desc { font-size: var(--fs-md); color: var(--text-dim); margin-top: var(--sp-2); line-height: 1.65; }
 .inspect-card img.role-art { width: 100%; height: 100%; margin: 0; border: none; display: block; }
 .inspect-card .in-body {
-  position: absolute; inset: var(--band-y) var(--band);
+  position: absolute; inset: var(--band-t-y) var(--band) var(--band-y);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); padding: var(--sp-5);
   background: radial-gradient(ellipse at 50% 34%, #322647 0%, #120d1c 76%);
 }

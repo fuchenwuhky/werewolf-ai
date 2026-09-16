@@ -88,7 +88,22 @@ test('CSS 的框带百分比与 SVG 单位能互相换算（错位是静默的�
     Math.abs(num('band-y') - (CF.BYB / CF.VIEW.h) * 100) < 0.01,
     `--band-y 应等于 BYB/150（这就是那个坑：写 var(--band) 会算成别的值）`
   );
+  // 顶部同理：绝对定位的 top 也要一个 y 方向百分比，否则插画被框带压掉一条
+  assert.ok(
+    Math.abs(num('band-t-y') - (CF.BYT / CF.VIEW.h) * 100) < 0.01,
+    `--band-t-y 应等于 BYT/150（写 var(--band-t) 会按高度算成 16.5 单位）`
+  );
   assert.match(body, /padding:\s*var\(--band-t\)\s+var\(--band\)\s+var\(--band-b\)/, 'padding 必须按"上下不对称"的三值写法留出框带');
+  // 绝对定位的插画/信息容器必须与画窗重合：三个 y 方向的值都要用 y 百分比
+  for (const sel of ['.inspect-card .inner', '.inspect-card .in-body']) {
+    const re = new RegExp(`${sel.replace('.', '\\.')}\\s*\\{[^}]*inset:\\s*var\\(--band-t-y\\)\\s+var\\(--band\\)\\s+var\\(--band-y\\)`);
+    assert.match(css, re, `${sel} 的 inset 必须用带 -y 的百分比（var(--band-y) 那两个是横竖不同的量纲）`);
+  }
+  // 角色名是 .card-frame 的兄弟节点，自定义属性不跨兄弟继承：必须自己再定义一份，且值与框体同步
+  const flipVars = css.match(/\.flip-front\s*\{[^}]*--band:\s*([\d.]+)%;\s*--band-y:\s*([\d.]+)%/);
+  assert.ok(flipVars, '.flip-front 必须自己定义 --band 与 --band-y（兄弟节点不继承）');
+  assert.ok(Math.abs(parseFloat(flipVars[2]) - (CF.BYB / CF.VIEW.h) * 100) < 0.01, `.flip-front 的 --band-y=${flipVars[2]}% 没跟上框带厚度（底部框带 = ${CF.BYB} 单位）`);
+  assert.ok(Math.abs(parseFloat(flipVars[1]) - (CF.BX / CF.VIEW.w) * 100) < 0.01, '.flip-front 的 --band 与 BX 不符');
   // 画窗圆角：CSS 是 x/y 两个百分比，对应 SVG 里的 rx 单位
   const radius = css.match(/\.card-frame\s+\.role-art\s*\{[^}]*border-radius:\s*([\d.]+)%\s*\/\s*([\d.]+)%/);
   assert.ok(radius, '插画圆角必须是 x/y 两个百分比（单个百分比会按高度解析，比画窗更圆）');
