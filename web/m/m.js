@@ -42,6 +42,7 @@ async function init() {
   $('#m-back').addEventListener('click', () => showScreen('m-boards'));
   $('#m-start').addEventListener('click', startGame);
   $('#m-gear').addEventListener('click', openGear);
+  $('#m-rulebook-btn').addEventListener('click', openRulebook);
   $('#m-mycard').addEventListener('click', showMyCard);
   $('#m-to-bottom').addEventListener('click', () => { scrollFlow(true); });
   $('#m-flow').addEventListener('scroll', onFlowScroll);
@@ -68,9 +69,8 @@ function openGear() {
   if (inGame && v && v.me && v.me.role) {
     rows.push(['🎴 查看我的身份牌', () => openInspect(v.me.role)]);
   }
-  rows.push(['📖 规则书', () => openRulebook()]);
-  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);
-  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
+  // 规则书已挪到顶栏右上角的专用按钮，齿轮里不再重复列一项
+  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
   if (inGame && !over) {
     rows.push(['⏹ 结束本局', () => askTerminate()]);
   } else {
@@ -637,7 +637,8 @@ function renderEventNode(e) {
     case 'speech': {
       const tag = { wolf: '🔒 狼聊', lastwords: '🕯 遗言', sheriff: '🎩 警上', pk: '⚔ PK' }[d.context] || '';
       const mine = isMine(e);
-      const m = el('div', `msg ${d.context === 'wolf' ? 'wolf' : ''} ${priv ? 'private' : ''} ${mine ? 'right' : ''}`);
+      // 统一左对齐、靠颜色区分'我说的'（旧版是 AI 左/我右，窄列上白扔一半宽度）
+      const m = el('div', `msg ${d.context === 'wolf' ? 'wolf' : ''} ${priv ? 'private' : ''} ${mine ? 'mine' : ''}`);
       m.appendChild(el('div', 'meta', `<span class="who">${seatLabel(e.actor)}</span> ${tag}`));
       m.appendChild(el('div', null, escapeHtml(d.text || '')));
       return m;
@@ -771,7 +772,7 @@ function setTarget(seat) {
     const conf = box.querySelector('[data-confirm]');
     if (conf) setKeyEnabled(conf, seat > 0 || !!conf.dataset.allowZero);
   }
-  $('#m-dialog-seat').textContent = seat ? `已选 ${seat} 号` : '未选择';
+  $('#m-dialog-seat').textContent = seat ? `${seat} 号` : '未选择';
 }
 
 // ---------------- 事件副作用（全屏横幅 / 发言高亮）与"正在发言"节点 ----------------
@@ -1236,7 +1237,12 @@ function markNeedTarget(v, candidates, tip) {
   actionState.candidates = (candidates || []).slice();
   const dlg = $('#m-dialog');
   if (dlg && !dlg.querySelector('.pick-tip')) {
-    const t = el('div', 'idle pick-tip', `🎯 ${escapeHtml(tip)}<br><b id="m-dialog-seat">未选择</b>`);
+    // "已选 N 号"必须自成一行：跟说明文字连排会被折成"已选 1 / 号"（实测）
+    const t = el('div', 'idle pick-tip');
+    t.appendChild(el('div', 'pick-hint', `🎯 ${escapeHtml(tip)}`));
+    const sel = el('div', 'pick-sel');
+    sel.innerHTML = '已选 <b id="m-dialog-seat">未选择</b>';
+    t.appendChild(sel);
     dlg.insertBefore(t, dlg.firstChild);
   }
 }

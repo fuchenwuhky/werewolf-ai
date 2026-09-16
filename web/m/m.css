@@ -36,6 +36,15 @@ html, body { height: 100%; overscroll-behavior: none; }
   display: flex; align-items: center; justify-content: center;
 }
 .m-gear:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
+/* 顶栏右上角：规则书（用户指定放这边，正好利用空位） */
+.m-bar-btn {
+  flex: none; margin-left: auto; width: 44px; height: 44px; border-radius: var(--r-md); cursor: pointer;
+  background: linear-gradient(180deg, #241c36, #140f20);
+  border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
+  font-size: 20px; line-height: 1;
+  display: flex; align-items: center; justify-content: center;
+}
+.m-bar-btn:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
 .m-status { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; min-width: 0; }
 #m-day { font-family: var(--font-goth); color: var(--gold-bright); }
 .m-phase-chip {
@@ -104,114 +113,156 @@ html, body { height: 100%; overscroll-behavior: none; }
    ============================================================ */
 .m-board {
   flex: 1 1 auto; min-height: 0;
-  display: flex; align-items: stretch; gap: 6px;
+  display: flex; align-items: stretch; gap: 5px;
   padding: var(--sp-2) var(--sp-2) 0;
 }
+/* 座位列刻意做窄：它每多 1px 都是从中间的发言正文里抠走的。
+   列高通常远大于 6 个座位，用 space-evenly 把头像均匀铺开（用户要求"头像之间离远一点"）；
+   16 人局超出一屏时它会退化成从顶部排列 + 自己滚动。 */
 .m-seatcol {
-  flex: 0 0 68px; min-width: 0;
-  display: flex; flex-direction: column; gap: 5px;
-  overflow: auto; overscroll-behavior: contain;
+  flex: 0 0 52px; min-width: 0;
+  display: flex; flex-direction: column; justify-content: space-evenly; gap: 6px;
+  padding: 2px 0; overflow: auto; overscroll-behavior: contain;
 }
 .m-flow-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
 .m-flow {
   flex: 1 1 auto; min-width: 0; overflow: auto; overscroll-behavior: contain;
-  padding: var(--sp-2) var(--sp-2) var(--sp-4);
+  padding: 6px 5px 18px;
   background: linear-gradient(180deg, rgba(30,23,46,.5), rgba(12,9,20,.72));
   border: 1px solid var(--line-dim); border-radius: var(--r-md);
   font-size: var(--fs-base); line-height: 1.7;
 }
+/* 消息一律左对齐、占满整列宽：窄列上"AI 左 / 我右"等于白扔一半宽度。
+   身份改用颜色区分（我=金边、狼聊=红边、私密=紫边），见下面的 .mine */
+.m-flow .msg {
+  align-self: stretch; max-width: 100%;
+  padding: 6px 8px; border-radius: var(--r-sm);
+  font-size: var(--fs-md); line-height: 1.7;
+}
+.m-flow .msg .meta { font-size: 10px; margin-bottom: 2px; gap: 5px; }
+.m-flow .msg .meta .who { font-weight: 600; }
+.m-flow .msg.mine {
+  background: linear-gradient(180deg, #2b2237, #1f1929);
+  border-left: 3px solid var(--gold);
+}
+.m-flow .msg.mine .meta .who { color: var(--gold-bright); }
+.m-flow .msg.mine .meta .who::after { content: '（我）'; color: var(--muted); font-weight: 400; }
+.m-flow .msg.event { max-width: 100%; text-align: left; }
+.m-flow .banner { font-size: var(--fs-md); padding: 5px var(--sp-2); }
+.m-flow .sysline { max-width: 100%; font-size: var(--fs-sm); }
 /* 「↓ 最新」：往上翻看历史时出现，避免"信息跑出视野后回不去" */
 .m-to-bottom {
-  position: absolute; right: 10px; bottom: 10px; z-index: 3;
-  min-height: 36px; padding: 0 var(--sp-3); cursor: pointer;
+  position: absolute; right: 8px; bottom: 8px; z-index: 3;
+  min-height: 34px; padding: 0 var(--sp-3); cursor: pointer;
   border-radius: var(--r-pill); border: 1px solid var(--gold-dim);
   background: rgba(24,17,36,.94); color: var(--gold-bright); font-size: var(--fs-sm);
   box-shadow: 0 4px 14px rgba(0,0,0,.6);
 }
 
-/* 座位卡：号 + 名（两行），状态用描边/角标表达，触控高度 ≥44px */
+/* 座位：**去掉外框**，只留头像圆 + 名字（旧版每格一个方框，视觉噪音大又占宽）。
+   可点区域仍有 48px 高，满足拇指触控；状态用圆环颜色表达，不再用方框描边。 */
 .srow {
-  position: relative; flex: none; cursor: pointer; min-height: 44px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
-  padding: 4px 3px; border-radius: var(--r-sm);
-  background: linear-gradient(180deg, #241c36, #150f22);
-  border: 1px solid rgba(201,162,39,.26);
-  transition: border-color .15s ease, box-shadow .15s ease, transform .1s ease;
+  position: relative; flex: none; cursor: pointer; min-height: 48px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  padding: 0; border: none; background: none;
 }
-.srow:active { transform: scale(.97); }
 .srow .num {
-  width: 24px; height: 24px; border-radius: 50%;
+  width: 32px; height: 32px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
-  font-family: var(--font-goth); font-size: var(--fs-sm); font-weight: 700;
+  font-family: var(--font-goth); font-size: var(--fs-md); font-weight: 700;
   color: var(--gold-dim);
   background: radial-gradient(circle at 35% 28%, #30254a, #191226 72%);
-  box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px rgba(201,162,39,.3);
+  border: 1px solid rgba(201,162,39,.3);
+  box-shadow: inset 0 0 9px rgba(0,0,0,.8);
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease, transform .1s ease;
 }
 .srow .nm {
-  width: 100%; text-align: center; font-size: 10px; line-height: 1.2;
+  width: 100%; text-align: center; font-size: 10px; line-height: 1.15;
   color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.srow.mine { border-color: rgba(201,162,39,.7); }
-.srow.mine .num { color: var(--gold); box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px var(--gold); }
+/* 去掉方框后，按压反馈落在头像上（整格仍是 48px 可点区域） */
+.srow:active .num { transform: scale(.92); }
+.srow.mine .num { color: var(--gold); border-color: var(--gold); box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 10px rgba(201,162,39,.35); }
 .srow.mine .nm { color: var(--text); }
-.srow.speaking { border-color: var(--gold); animation: seatPulse 1.6s ease-in-out infinite; }
+.srow.speaking .num { color: #fff5d6; border-color: #f4e3a0; animation: seatPulse 1.6s ease-in-out infinite; }
 @keyframes seatPulse {
-  0%, 100% { box-shadow: 0 0 0 1px rgba(201,162,39,.45), 0 0 8px rgba(201,162,39,.25); }
-  50% { box-shadow: 0 0 0 2px #f4e3a0, 0 0 18px rgba(201,162,39,.75); }
+  0%, 100% { box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 0 1px rgba(201,162,39,.4), 0 0 7px rgba(201,162,39,.3); }
+  50% { box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 0 2px #f4e3a0, 0 0 16px rgba(201,162,39,.8); }
 }
-.srow.dead { filter: grayscale(.8) brightness(.62); }
-.srow.dead .num::after { content: '✕'; position: absolute; font-size: 15px; color: var(--accent); text-shadow: 0 0 6px rgba(179,46,62,.9); }
+.srow.dead { filter: grayscale(.85) brightness(.58); }
+.srow.dead .num::after {
+  content: '✕'; position: absolute; font-size: 19px; color: var(--accent);
+  text-shadow: 0 0 7px rgba(179,46,62,.95);
+}
 .srow .b {
-  position: absolute; top: -3px; right: -3px; font-size: 11px; line-height: 1;
+  position: absolute; top: -4px; right: -2px; font-size: 11px; line-height: 1;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,.9));
 }
-.srow .b.l { right: auto; left: -3px; }
-/* 可选目标 / 已选中：投票、查验、开枪这类任务直接点座位选人，不用再去底部找号 */
-.srow.pickable { border-style: dashed; border-color: rgba(201,162,39,.6); }
-.srow.picked { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 14px rgba(179,46,62,.5); background: linear-gradient(180deg, #3a1a22, #1c0d12); }
-.srow.picked .num { color: #ffd7dd; box-shadow: inset 0 0 8px rgba(0,0,0,.8), 0 0 0 1px var(--accent); }
+.srow .b.l { right: auto; left: -2px; }
+/* 可选目标 / 已选中：点座位即选人，不用去底部找号 */
+.srow.pickable .num { border-style: dashed; border-color: rgba(201,162,39,.7); }
+.srow.picked .num {
+  color: #fff; border: 2px solid var(--accent);
+  background: radial-gradient(circle at 35% 28%, #6d1f2b, #34101a 75%);
+  box-shadow: inset 0 0 9px rgba(0,0,0,.7), 0 0 14px rgba(179,46,62,.6);
+}
+.srow.picked .nm { color: #ffd7dd; }
 
-/* ---------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ---------- */
+/* ---------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ----------
+   高度由最高的那一列决定：对话框列（提示 + 输入框 + 发送键）刻意做得比
+   旧版高一截，避免整条底部显得扁；身份牌跟着占满同样高度。 */
 .m-dock {
   flex: none; display: flex; align-items: stretch; gap: var(--sp-2);
-  margin-top: var(--sp-2);
-  padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));
+  margin-top: var(--sp-2); min-height: 164px;
+  padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3));
   border-top: 1px solid var(--gold-dim);
   background: linear-gradient(180deg, #17121f, #0e0b15);
   box-shadow: 0 -8px 24px rgba(0,0,0,.5);
 }
 .m-dock-l { flex: 0 0 auto; display: flex; align-items: stretch; gap: var(--sp-2); min-width: 0; }
-/* 身份牌：常驻可见（旧版要点顶部 🎴 才看得到），点击开检视大卡 */
+/* 身份牌：常驻可见（旧版要点顶部 🎴 才看得到），点击开检视大卡。
+   卡片保持 2:3 比例并**垂直居中**：底部坞的高度由对话框列决定，
+   让卡片去 stretch 会把 66px 宽的牌拉成 160 高（内容只有 99，纯浪费）。 */
 .m-mycard {
-  flex: none; width: 54px; height: 81px; padding: 0; cursor: pointer; overflow: hidden;
+  flex: none; width: 66px; align-self: center; padding: 0; cursor: pointer; overflow: hidden;
   border-radius: var(--r-sm); border: none; background: none;
 }
 .m-mycard .card-frame { width: 100%; }
-.m-mycard:active { transform: scale(.96); }
-.m-keys { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 0; }
-.m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.m-mycard:active { transform: scale(.97); }
+.m-keys {
+  flex: 0 0 auto; min-width: 84px;
+  display: flex; flex-direction: column; gap: 6px; justify-content: center;
+}
+.m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .pending-hint {
   border-left: 3px solid var(--accent); padding-left: var(--sp-2);
   font-size: var(--fs-sm); line-height: 1.45; color: var(--text-dim);
 }
 .pending-hint.mine { color: #ffd98a; border-left-color: var(--gold); }
 .pending-hint.waiting { border-left-color: var(--line); color: var(--muted); }
-.m-dialog { flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; justify-content: center; min-width: 0; }
+.m-dialog { flex: 1 1 auto; display: flex; flex-direction: column; gap: 6px; justify-content: flex-end; min-width: 0; }
 .m-dialog textarea {
-  width: 100%; min-height: 46px; max-height: 28vh; margin: 0; resize: none;
-  font-size: var(--fs-base);
+  width: 100%; min-height: 68px; max-height: 30vh; margin: 0; resize: none;
+  font-size: var(--fs-base); line-height: 1.6;
 }
-.m-dialog .mrow { display: flex; gap: 5px; align-items: center; }
-.m-dialog .mrow .btn { flex: 1 1 0; min-height: 40px; }
+.m-dialog .mrow { display: flex; gap: 6px; align-items: stretch; }
+.m-dialog .mrow .key { flex: 1 1 0; }
+/* 无操作时对话框是空的：让说明卡片撑满这块高度，底部才不会显得扁 */
 .m-dialog .idle {
-  font-size: var(--fs-sm); color: var(--muted); line-height: 1.5;
-  border: 1px dashed var(--line-dim); border-radius: var(--r-sm); padding: var(--sp-2);
+  flex: 1 1 auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  font-size: var(--fs-sm); color: var(--muted); line-height: 1.6;
+  border: 1px dashed var(--line-dim); border-radius: var(--r-sm); padding: var(--sp-3);
   text-align: center;
 }
+.m-dialog .pick-hint { color: var(--muted); }
+/* 已选目标：单独一行、金色加粗，一眼能确认选的是谁 */
+.m-dialog .pick-sel { font-size: var(--fs-sm); color: var(--text-dim); }
+.m-dialog .pick-sel b { font-family: var(--font-goth); font-size: 19px; color: var(--gold-bright); }
 
 /* ---------- 技能键：可用=红，不可用=灰红（用户明确要求的语义） ---------- */
 .key {
-  min-height: 38px; padding: 0 var(--sp-3); cursor: pointer;
+  min-height: 46px; padding: 0 var(--sp-3); cursor: pointer;
   border-radius: var(--r-sm); font-size: var(--fs-md); font-weight: 600;
   display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   border: 1px solid transparent; white-space: nowrap;

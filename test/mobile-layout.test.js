@@ -175,7 +175,62 @@ test('齿轮菜单：两端都把设置/规则书/退出收进一处', () => {
   assert.ok(/查看我的身份牌/.test(gear) && /结束本局/.test(gear), '齿轮菜单项缺失');
 });
 
-// ---------------------------------------------------------------- ⑤ 规则书
+test('座位：去掉外框、缩小头像、均匀铺开（把宽度让给中间的发言正文）', () => {
+  const row = block(MCSS, '.srow {');
+  // 用户明确要求"去掉外部的方框"：座位格不能有边框/底色块
+  assert.match(row, /border:\s*none/, '.srow 必须去掉外框（border:none）');
+  assert.match(row, /background:\s*none/, '.srow 必须去掉底色块（background:none）');
+  assert.match(row, /min-height:\s*(4[4-9]|[5-9]\d)px/, '.srow 可点高度仍需 ≥44px（去掉方框不等于缩小触控目标）');
+  // 头像缩小 + 状态改用圆环表达
+  const num = block(MCSS, '.srow .num {');
+  assert.match(num, /width:\s*3[0-2]px/, '.srow .num 头像应缩小到 30~32px');
+  assert.match(num, /border-radius:\s*50%/, '头像必须是圆形');
+  // 列宽收窄 + 均匀分布
+  const col = block(MCSS, '.m-seatcol {');
+  const w = Number((col.match(/flex:\s*0 0 (\d+)px/) || [])[1]);
+  assert.ok(w > 0 && w <= 56, `座位列必须收窄到 ≤56px（当前 ${w}px）：每多 1px 都是从发言正文里抠的`);
+  assert.match(col, /justify-content:\s*space-evenly/, '座位要在列高里均匀铺开（用户要求"头像之间离远一点"）');
+  // 状态不再依赖方框描边
+  assert.ok(!/\.srow\.picked \{[\s\S]{0,80}border:\s*1px solid/.test(MCSS), '.picked 应改用头像圆环，不再给整格描边');
+  assert.match(block(MCSS, '.srow.pickable .num {'), /border-style:\s*dashed/, '可选座位的虚线应落在头像圆环上');
+  assert.match(block(MCSS, '.srow.picked .num {'), /border:\s*2px solid var\(--accent\)/, '已选座位要用红色圆环');
+});
+
+test('消息：一律左对齐，靠颜色区分（不再 AI 左我右）', () => {
+  const flow = block(MCSS, '.m-flow .msg {');
+  assert.match(flow, /align-self:\s*stretch/, '消息必须占满整列宽度，否则右半边宽度被浪费');
+  assert.match(flow, /max-width:\s*100%/, '消息不得再被 max-width 限制成 86%');
+  // m.js 不能再给发言打 right 类
+  const speech = MJS.slice(MJS.indexOf("case 'speech':"), MJS.indexOf("case 'role_reveal'"));
+  assert.ok(!/'right'/.test(speech), "m.js 仍给发言加 right 类（AI 左/我右已被用户否掉）");
+  assert.match(speech, /mine \? 'mine'/, "发言应改用 mine 类做颜色区分");
+  assert.match(block(MCSS, '.m-flow .msg.mine {'), /border-left:\s*3px solid var\(--gold\)/, '我自己的消息要用金色左边框区分');
+  assert.match(MCSS, /\.m-flow \.msg\.mine \.meta \.who::after/, '我自己的消息要加"（我）"标记，否则只靠颜色不够明确');
+});
+
+test('底部坞：给足高度（不能扁），身份牌保持 2:3 且垂直居中', () => {
+  const dock = block(MCSS, '.m-dock {');
+  const mh = Number((dock.match(/min-height:\s*(\d+)px/) || [])[1]);
+  assert.ok(mh >= 150, `底部坞需要 min-height ≥150px 才有分量（当前 ${mh || '无'}）`);
+  const card = block(MCSS, '.m-mycard {');
+  assert.match(card, /width:\s*\d+px/, '身份牌要有明确宽度');
+  assert.match(card, /align-self:\s*center/, '身份牌必须垂直居中：stretch 会把 2:3 的牌拉变形/留大片空白');
+  const ta = block(MCSS, '.m-dialog textarea {');
+  assert.ok(Number((ta.match(/min-height:\s*(\d+)px/) || [])[1]) >= 60, '输入框给足高度（旧版 46px 太扁）');
+  // 无操作时说明卡要撑满，否则空档状态底部塌陷
+  assert.match(block(MCSS, '.m-dialog .idle {'), /flex:\s*1 1 auto/, '空档说明卡必须撑满对话框高度');
+});
+
+test('规则书入口在顶栏右上角（专用按钮），齿轮里不再重复', () => {
+  assert.ok(/id="m-rulebook-btn"/.test(MHTML), '顶栏右上角缺少规则书按钮');
+  assert.ok(/class="m-bar-btn"\s+id="m-rulebook-btn"/.test(MHTML.replace(/\s+/g, ' ')), '规则书按钮应使用顶栏右侧样式 m-bar-btn');
+  assert.match(MCSS, /\.m-bar-btn \{[^}]*margin-left:\s*auto/, 'm-bar-btn 必须靠右（margin-left:auto）');
+  assert.match(MJS, /\$\('#m-rulebook-btn'\)\.addEventListener\('click', openRulebook\)/, '规则书按钮必须接线到 openRulebook');
+  const gear = MJS.slice(MJS.indexOf('function openGear'), MJS.indexOf('function askTerminate'));
+  assert.ok(!/openRulebook/.test(gear), '齿轮菜单里不应再重复列规则书（已在右上角）');
+});
+
+// ---------------------------------------------------------------- ⑥ 规则书
 
 test('规则书：结构合法、章节齐全、两端共用同一份', () => {
   const S = Rulebook.SECTIONS;
