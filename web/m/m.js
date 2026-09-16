@@ -1353,4 +1353,11 @@ async function terminateGame() {
   } catch (e) { hint(`✗ ${e.message}`); }
 }
 
+/** 牌背（#m-flip 里的 .flip-back）是静态 HTML，框层在这里注入 —— 保持"卡框只有一份实现" */
+function ensureCardBacks() {
+  for (const node of document.querySelectorAll('.flip-back')) {
+    if (!node.querySelector('.fr-svg')) node.insertAdjacentHTML('afterbegin', window.CardFrame.html());
+  }
+}
+ensureCardBacks();
 init().catch((e) => { document.body.innerHTML = `<div style="padding:40px;color:#e89ba4">初始化失败：${escapeHtml(e.message)}</div>`; });

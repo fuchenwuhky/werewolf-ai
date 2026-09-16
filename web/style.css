@@ -624,13 +624,17 @@ details summary:hover { color: var(--gold-bright); }
    用 hue 混合之后，蓝阵营是"蓝钢"、绿阵营是"青铜绿"、红阵营是"血铜"，
    线脚的高光与暗槽全在，才像不同材质的卡框，而不是同一张卡蒙了张色片。
    不支持 mix-blend-mode 的老 WebView 落到 --fr-tint-a 那层低浓度平涂：
-   颜色淡一些，但金属质感与金色都还在，不会难看。 */
-.card-frame .fr-tint { mix-blend-mode: hue; opacity: var(--fr-tint-h, 0); }
+   颜色淡一些，但金属质感与金色都还在，不会难看。
+
+   ⚠ 选择器必须宿主无关（.fr-svg 后代），不能写成 `.card-frame .fr-tint`：
+   牌背 .flip-back 不是 .card-frame，规则不命中时染色层会拿到默认 opacity:1 ——
+   整条框带被实心染成一色（实测横剖 16 个像素全是 #a8781a，金属质感全丢）。 */
+.fr-svg .fr-tint { mix-blend-mode: hue; opacity: var(--fr-tint-h, 0); }
 @supports not (mix-blend-mode: hue) {
-  .card-frame .fr-tint { opacity: var(--fr-tint-a, 0); }
+  .fr-svg .fr-tint { opacity: var(--fr-tint-a, 0); }
 }
 /* 金属面（导轨之下）再按阵营色洗一遍，导轨本身保持金色 —— 金镶彩钢，层次更足 */
-.card-frame .fr-tint-under { opacity: var(--fr-tint-a, 0); }
+.fr-svg .fr-tint-under { opacity: var(--fr-tint-a, 0); }
 /* 卡框配色表：**每个角色一张卡**。data-role 由 CardFrame.roleAttr() 写到外层 div 上，
    颜色只在这里定义一处 —— 调用方不需要知道阵营。
      阵营约定（按需求定死，别随手改）：**狼 = 红、神 = 金、民 = 绿**。
@@ -714,12 +718,23 @@ details summary:hover { color: var(--gold-bright); }
 }
 .flip-back {
   overflow: hidden;
+  /* 牌背没有 data-role（人人相同），默认的裸青铜偏黑；这里单独给一层暖金染色，
+     让它读起来是"鎏金黑卡"而不是"黑框"。
+     注意 .flip-back 不是 .card-frame，拿不到那边的默认值，所以 --fr-tint* 必须在这里给全。 */
+  --fr-tint: #a8781a; --fr-tint-a: .3; --fr-tint-h: .45;
   background:
     radial-gradient(ellipse at center, #2c1a3a 0%, #120c1c 75%),
     #120c1c;
-  border: 1px solid var(--gold-dim);
-  outline: 1px solid rgba(201,162,39,.3); outline-offset: -8px;
+  /* 边框/内框线交给 SVG 框层（下面那条），这里不再自己画一圈 —— 牌背与牌面才是同一套语言 */
+  border: none;
   font-size: 17px; color: var(--muted); font-family: var(--font-cn-title); letter-spacing: 3px;
+}
+/* 牌背也套同一套框：整张框层压在牌背图之上（画窗透明，牌背图从窗口透出来）。
+   .flip-back 是静态 HTML，框层由 app.js / m.js 启动时用 CardFrame.html() 注入 ——
+   绝不在 HTML 里内联一份 SVG，那就成了第二份实现。 */
+.flip-back > .fr-svg {
+  position: absolute; inset: 0; z-index: 2; display: block;
+  width: 100%; height: 100%; pointer-events: none;
 }
 .flip-back .cb-img {
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;

@@ -1896,6 +1896,13 @@ async function pollAgent() {
 }
 
 // ---------------- 启动 ----------------
+/** 牌背（.flip-back）是静态 HTML，框层在这里注入 —— 保持"卡框只有一份实现" */
+function ensureCardBacks() {
+  for (const node of document.querySelectorAll('.flip-back')) {
+    if (!node.querySelector('.fr-svg')) node.insertAdjacentHTML('afterbegin', window.CardFrame.html());
+  }
+}
+ensureCardBacks();
 initSetup().then(() => {
   const saved = localStorage.getItem('ww_current');
   if (saved) {

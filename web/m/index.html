@@ -114,7 +114,9 @@
 <div id="m-flip" class="m-flip hidden">
   <div class="flip-card" id="m-flip-card">
     <div class="flip-inner">
-      <div class="flip-back" data-i18n-html="m.flipHint">身份牌<br>点击翻开</div>
+      <!-- 提示文案放在内层 span：i18n 是直接重写 [data-i18n-html] 元素的 innerHTML 的，
+           挂在 .flip-back 上会把启动时注入的框层一起冲掉（桌面端的 .cb-txt 就是这个结构） -->
+      <div class="flip-back"><span class="cb-txt" data-i18n-html="m.flipHint">身份牌<br>点击翻开</span></div>
       <div class="flip-front" id="m-flip-front"></div>
     </div>
   </div>

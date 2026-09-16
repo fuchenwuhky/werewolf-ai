@@ -237,8 +237,20 @@ test('每个角色都有配色规则：阵营 = 狼红 / 神金 / 民绿，且�
   assert.ok(g.r > 120 && g.g > 80 && g.b < g.g, `神阵营必须是金（红绿高、蓝低）: ${god[0]}`);
   assert.ok(v.g > v.r && v.g > v.b, `民阵营必须是绿: ${villager[0]}`);
   // 染色只改色相，且必须有降级
-  assert.match(css, /\.card-frame\s+\.fr-tint\s*\{[^}]*mix-blend-mode:\s*hue/, '染色层必须用色相混合（平涂会把金属染成泥）');
-  assert.match(css, /@supports\s+not\s+\(mix-blend-mode:\s*hue\)\s*\{[^}]*\.card-frame\s+\.fr-tint[^}]*opacity/, '缺少不支持混合模式时的降级');
+  assert.match(css, /\.fr-svg\s+\.fr-tint\s*\{[^}]*mix-blend-mode:\s*hue/, '染色层必须用色相混合（平涂会把金属染成泥）');
+  assert.match(css, /@supports\s+not\s+\(mix-blend-mode:\s*hue\)\s*\{[^}]*\.fr-svg\s+\.fr-tint[^}]*opacity/, '缺少不支持混合模式时的降级');
+  // ⚠ 染色层的 opacity 规则必须**宿主无关**（.fr-svg 后代）：写成 .card-frame 后代时，
+  //   牌背 .flip-back（不是 .card-frame）不命中，染色层会拿到默认 opacity:1 ——
+  //   整条框带被实心染成一色。这条断言就是那次事故的守卫。
+  //   （先剥掉注释：解释这件事的注释里正好写着那个错误写法）
+  const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.ok(!/\.card-frame\s+\.fr-tint/.test(cssCode), '染色层的 opacity 规则不许限定在 .card-frame 下（牌背不是 .card-frame，会变成实心染色）');
+  assert.match(css, /\.fr-svg\s+\.fr-tint-under\s*\{[^}]*opacity:\s*var\(--fr-tint-a/, '下染色层的 opacity 必须由宿主无关的规则给出');
+  // 牌背作为另一个宿主，必须自带完整的染色变量（拿不到 .card-frame 的默认值）
+  const flipBack = css.match(/\.flip-back\s*\{([^}]*)\}/)[1];
+  for (const v of ['--fr-tint:', '--fr-tint-a:', '--fr-tint-h:']) {
+    assert.ok(flipBack.includes(v), `.flip-back 缺少 ${v}（牌背是独立宿主，拿不到 .card-frame 的默认值）`);
+  }
   // FRAME 里两层染色层的 class 要对得上
   assert.match(CF.FRAME, /class="fr-tint-under"/, 'FRAME 缺少导轨之下的染色层');
   assert.ok(!/class="fr-tint-under"[^>]*opacity=/.test(CF.FRAME), '染色浓度应由 CSS 决定，不要写死在标记里');
@@ -259,6 +271,20 @@ test('卡框只有一份实现：两处页面都调 window.CardFrame，不许各
   assert.match(css, /\.inspect-card\s*\{[^}]*\}/, '缺少 .inspect-card 规则');
   const inspectBlock = css.match(/\.inspect-card\s*\{([^}]*)\}/)[1];
   assert.ok(!/linear-gradient\(168deg/.test(inspectBlock), '.inspect-card 又自己拼了一份金属渐变（应复用 .card-frame）');
+  // 牌背（静态 HTML）也要套同一套框：框层由脚本注入，绝不在 HTML 里内联一份 SVG
+  for (const f of ['index.html', 'm/index.html']) {
+    const html = read(f);
+    assert.ok(!/class="fr-svg"/.test(html), `${f} 内联了框 SVG —— 牌背的框必须由脚本用 CardFrame.html() 注入`);
+    assert.match(html, /class="flip-back"/, `${f} 里找不到牌背 .flip-back`);
+  }
+  for (const f of ['app.js', 'm/m.js']) {
+    const src = read(f);
+    assert.match(src, /function ensureCardBacks\(\)/, `${f} 缺少 ensureCardBacks（牌背框层注入）`);
+    assert.match(src, /^ensureCardBacks\(\);$/m, `${f} 没有在启动时调用 ensureCardBacks()`);
+    assert.match(src, /querySelectorAll\('\.flip-back'\)[\s\S]{0,160}CardFrame\.html\(\)/, `${f} 的牌背注入没用共享的 CardFrame.html()`);
+  }
+  assert.match(css, /\.flip-back\s*>\s*\.fr-svg\s*\{[^}]*position:\s*absolute/, 'CSS 缺少牌背框层的定位规则');
+  assert.ok(!/\.flip-back\s*\{[^}]*outline:\s*1px/.test(css), '.flip-back 还留着自己画的 outline（已由 SVG 框层接管）');
 });
 
 test('页面接线：两个入口都先加载 card-frame.js，且进离线预缓存', () => {
