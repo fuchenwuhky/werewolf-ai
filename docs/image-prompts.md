@@ -1,109 +1,71 @@
-# 角色卡 AI 生图提示词（哥特暗黑风）
+# 角色卡 AI 生图提示词 v2（哥特暗黑风 · 故事重制版 · 全 15 角色）
 
-> 用法：把下面的英文 prompt 喂给 Midjourney / Stable Diffusion / 即梦 / DALL·E 等任意生图工具。
-> 生成后把图片按"目标文件名"保存到 `web/assets/roles/` 目录（覆盖同名 .svg 占位图，
-> 或直接放 .png——程序自动识别 png > webp > svg），刷新页面即生效。
-> 建议尺寸：**768×1024（竖版 2:3）**，PNG 或 WebP。
+> 用法：把下面每个角色的**完整提示词（一段话）**直接喂给 Gemini 等生图工具（中文即可）。
+> 生成后把图片保存为 `web/assets/roles/<角色key>.png` 覆盖占位图（程序自动识别 png > webp > svg），
+> 刷新页面即全端生效。建议尺寸 **768×1024（竖版 2:3）**。
+>
+> ⚠ 画面**不要画任何边框/装饰框**——金色雕花框由程序在卡牌外层统一叠加；
+> 提示词里已包含"不要边框、不要文字"的要求。
+>
+> **月亮规则（本轮设定）**：狼人阵营或战斗场面 → **血月**；日常/非战斗场景 → **白月**。
+> 狼营（红月）：狼人/狼王/白狼王/隐狼（红月半掩）/狼美人；战斗（红月）：骑士/守卫/猎人；
+> 白月：预言家/女巫/摄梦人/乌鸦/白痴/暗恋者/平民。
 
-## 统一风格前缀（每张 prompt 都以这段开头，保证整套一致）
+## 统一风格要素（已融入每条提示词开头）
 
-```
-Gothic dark fantasy oil painting, werewolf game character card, dramatic chiaroscuro lighting,
-deep black and crimson red with antique gold accents, foggy moonlit atmosphere, macabre elegance,
-highly detailed, portrait orientation, full-bleed artwork with no border, edge-to-edge painting
-```
+哥特暗黑奇幻油画 · 强烈明暗对比 · 深黑/暗红/古金配色 · 月夜浓雾 · 细腻笔触 · 竖版 2:3 · full-bleed 无框 · 无文字无水印。
 
-统一负面提示词（Negative prompt，SD 系适用）：
-
-```
-text, watermark, signature, bright cheerful colors, cartoon, chibi, low quality, blurry,
-deformed hands, modern clothing, daylight, oversaturated, frame, border
-```
-
-出图参数：`--ar 2:3`（Midjourney）；一致性技巧：固定同一风格前缀、尽量用同一 seed、
-先出一张满意的当"垫图/风格参考"再生成其余。
-
-> **注意：画面不要画边框！** 金色雕花边框由程序在卡牌外层统一叠加，
-> AI 只需要画出顶到边缘的角色画（full-bleed）。生成时负面提示词里可加 `frame, border`。
+负面参考：明亮欢快配色、卡通/ Q 版、白天、过曝、描边框、文字水印、现代服装、低质量。
 
 ---
 
-## 角色卡（10 张）
+## 狼营（红月）
 
-### 1. 狼人 → `web/assets/roles/wolf.png`
-- 中文：月下荒原上一头半直立的黑毛巨狼，猩红双眼发光，獠牙滴涎，身后血月与枯树剪影，雾气缠绕爪牙
-- 英文：`a massive black dire wolf standing half-upright on a misty moor under a blood moon, glowing crimson eyes, bared fangs, silhouettes of dead trees, swirling fog around its claws` + 统一前缀
+### 1. 狼人 → `wolf.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。血月悬在枯林之上，像一只充血的瞳孔。一头半直立的黑色巨狼从浓雾中踏出，獠牙滴涎，猩红双眼映着红月光；它脚下是撕碎的猎人披风和一束折断的银箭，爪边雾气翻卷——今晚的猎杀才刚刚开始。
 
-### 2. 狼王 → `web/assets/roles/wolfking.png`
-- 中文：戴破碎黑铁王冠的狼人王者，披风染血，居座于骸骨王座，手持弯月战斧，眼中有王者的冷光
-- 英文：`an alpha werewolf king wearing a broken black iron crown and blood-stained cloak, seated on a bone throne, holding a crescent battle axe, cold glowing eyes` + 统一前缀
+### 2. 狼王 → `wolfking.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。骸骨堆成的王座立在山崖之巅，戴破碎黑铁王冠的巨狼王单手撑颐而坐，另一手拄着弯月战斧，破旧披风被夜风掀起露出满身旧伤；它俯视山下村庄，点点灯火在它眼中如待宰的羊群。血月悬在王座正后方，像一枚正在加冕的徽章。
 
-### 3. 白狼王 → `web/assets/roles/whitewolfking.png`
-- 中文：苍白毛发上沾霜雪的巨型白狼王，双眼金红，周身缠绕闪电与白雾，气质狂傲，背景是被撕裂的教堂彩窗
-- 英文：`a colossal white alpha wolf with frost-covered fur, golden-red eyes, arcs of lightning and pale mist, proud and ferocious, shattered cathedral stained-glass window behind` + 统一前缀
+### 3. 白狼王 → `whitewolfking.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。苍白巨狼一只脚踩在一名倒地平民的胸口，平民手中的镰刀已经脱落；白狼王昂首长啸，霜白毛发飞扬，金色竖瞳里没有杀意、只有野心——它要的不是一场猎杀，是整座王座。一顶破碎的王冠悬在血月之前，红光从王冠裂隙中漏下，如同正在为它加冕。
 
-### 4. 预言家 → `web/assets/roles/seer.png`
-- 人设：**年轻的女性预言家**（官方形象），神秘学少女
-- 中文：年轻的哥特裙少女预言家俯视发光水晶球，球中狼形暗影，桌面星图塔罗，烛光与青蓝秘法光辉
-- 英文：`a beautiful young female seer in a dark gothic gown gazing down into a glowing crystal ball revealing a shadowy wolf silhouette, star charts and tarot cards scattered on the table, candlelight mixed with arcane blue glow on her face, mysterious youthful beauty` + 统一前缀（负面词加 `old man, beard`）
+### 4. 隐狼 → `hiddenwolf.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。血月被薄云半掩——月仍是红的，只是藏了一半。村庄巷口，一个披斗篷的"普通人"背对画面而立，兜帽下只露出一丝獠牙的阴影和一只反光的眼；他周身没有一丝杀戮痕迹，雾在他脚边散开，隐约映出半张狼脸——他从不动手，他只是从来不会被验出来。
 
-### 5. 女巫 → `web/assets/roles/witch.png`
-- 人设：**成熟妩媚的黑袍女巫**；与守卫是情侣——腕间系一小段**红色丝带**作为信物（画面含蓄点到即可）
-- 中文：成熟妩媚的黑袍女巫在坩埚前调药，手持解药红瓶，腕间系一小段红色丝带，绿紫毒雾升腾，窗外血月，架上有骷髅与干草药
-- 英文：`a mature alluring witch in an elegant dark gothic gown brewing potions beside a cauldron, holding a red vial of antidote, a small red ribbon tied around her wrist, green and purple toxic mist swirling, skulls and dried herbs on shelves, blood moon through the window` + 统一前缀
+### 5. 狼美人 → `wolfbeauty.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。废墟教堂前，红裙狼美人回眸，唇边一丝几不可察的獠牙，琥珀色瞳孔在血月下泛着狼光；她指尖缠着几缕发光的丝线，丝线另一端连着几个虚化失焦的人影——被魅惑的人。教堂破碎彩窗的中央圆窗正是一轮血月，像她涂红的唇。
 
-### 6. 猎人 → `web/assets/roles/hunter.png`
-- 中文：披斗篷的猎人持老式火枪，枪口仍冒着蓝烟，腰间挂银弹与狼牙项链，雪夜森林背景，眼神冷峻
-- 英文：`a cloaked hunter aiming an antique flintlock gun with blue smoke, silver bullets and a wolf-fang necklace on his belt, snowy night forest, cold determined eyes` + 统一前缀
+## 好人·战斗（红月）
 
-### 7. 守卫 → `web/assets/roles/guard.png`
-- 人设：**成熟稳重的重甲守卫**；与女巫是情侣——剑柄上系着**同款红色丝带**（呼应女巫腕间，不点破）
-- 中文：成熟稳重的中世纪重甲守卫持塔盾与长剑立于村庄大门，剑柄系一小段红色丝带，盾面刻十字玫瑰纹，身后火把长廊，坚定中带一丝柔情
-- 英文：`a mature resolute medieval guardian in heavy plate armor holding a tower shield etched with a cross and roses and a longsword, a small red ribbon tied around the sword hilt, standing at a village gate, torch-lit corridor behind, solemn with a trace of tenderness` + 统一前缀
+### 6. 骑士 → `knight.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。雨后的战场，染血的骑士单膝跪地，长剑插在身前泥土里，双手扶着剑柄低头喘息；他身旁横着三具狼人尸体，黑毛凌乱。铠甲上新旧伤痕交叠，血还在往下滴。血月从乌云裂隙照下，正打在剑刃和他的头盔上——他没有胜利者的姿态，只有疲惫，和不肯倒下的坚定；远处雾中还有一双绿色的眼睛在窥视。
 
-### 8. 骑士 → `web/assets/roles/knight.png`
-- 中文：银甲骑士单膝跪地、长剑指天，剑身圣纹发光，破披风在夜风中猎猎，身后是残破教堂与血月，庄严悲壮
-- 英文：`a silver-armored knight kneeling on one knee raising a glowing longsword etched with holy runes, tattered cape fluttering in the night wind, ruined cathedral and blood moon behind, solemn and tragic` + 统一前缀
+### 7. 守卫 → `guard.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。深夜的森林边缘，女巫小屋的木门半开，门缝与窗棂透出坩埚的幽绿药光和袅袅药雾；守卫就站在门前台阶上，轻甲伤痕累累渗着血，左臂圆盾死死抵住一头扑来的黑狼的利爪，爪与盾摩擦迸出火星，右手长矛后撤蓄力随时反击；他腰间挂着一枚泛着柔和绿光的女巫治疗药剂。血月照亮人与狼僵持的剪影，把守卫的影子长长投在小屋门板上——他守的从来不是自己，是门后的那个人。
 
-### 9. 白痴 → `web/assets/roles/idiot.png`
-- 中文：戴破帽的傻瓜疯癫大笑，手里抛着三张旧塔罗牌，衣服补丁似小丑但眼瞳深处藏着一丝清醒，荒诞马戏团废墟
-- 英文：`a mad fool in a torn jester hat laughing wildly, juggling three worn tarot cards, patchwork clothes, a spark of lucidity in his eyes, ruined gothic circus background` + 统一前缀
+### 8. 猎人 → `hunter.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。林间空地，风衣猎猎的老猎人保持着火枪击发后的姿势，枪口硝烟未散，一头黑狼应声倒地化作雾气；他脸上一道旧疤，眼神冷静得像在清点猎物。火枪准星里映着头顶的血月——在这场游戏里，猎人与狼互为猎物。
 
-### 10. 平民 → `web/assets/roles/villager.png`
-- 中文：粗布斗篷的村民提一盏油灯站在自家木门前，门后是黑暗森林，脸上是恐惧与坚毅交织，油灯是画面唯一暖光
-- 英文：`a common villager in rough cloak holding an oil lantern in front of a wooden door, dark forest looming behind, mixed fear and resolve on his face, the lantern is the only warm light` + 统一前缀
+## 好人·非战斗（白月）
 
----
+### 9. 预言家 → `seer.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。占星塔顶，年轻的哥特裙女预言家双手捧起发光的水晶球，球中浮现一缕狼形暗影；深蓝星纹长袍被夜风轻扬，桌面摊着星图、塔罗与羽毛笔。皎洁的白月悬在塔窗正后方，清辉与水晶球的青蓝秘光交映在她脸上——她看见了真相，但没人相信她的时候最孤独。
 
-## 附加素材（可选）
+### 10. 女巫 → `witch.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。森林深处的石屋药房，黑裙女巫立于咕嘟作响的坩埚前，一手悬着幽灵绿的药液注入玻璃瓶，一手按着摊开的古药典；窗外白月清辉照进屋内，照亮她身后的药草架——解药泛蓝、毒药泛绿，分列两端。她的表情是苦乐参半的平静：今晚的抉择，救一个，或杀一个。
 
-### 牌背 → `web/assets/roles/card_back.png`（用于卡背，可选）
-- 中文：哥特玫瑰窗纹样居中，月轮与十字碑环绕，黑金对称花纹，中央一颗血红宝石
-- 英文：`ornate gothic rose window pattern, crescent moon and crossed tombstones, symmetrical black and gold filigree, a single crimson gemstone in the center, no characters` + 统一前缀（把 character 相关词删掉）`--ar 2:3`
+### 11. 摄梦人 → `dreamer.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。沉睡的村庄上空，白袍摄梦人赤足飘行在雾海上，双眼缠着一条发光的缎带（不见而视），指尖垂下银丝，连进窗内熟睡者的眉心；白月又大又近，像一颗悬在夜空的梦境之眼。而他自己脚下投出的影子，是一头小小的狼——摄梦的力量从来是双刃。
 
-### 桌面端背景 → `web/assets/bg_desktop.png`（2560×1440，可压缩）
-- 中文：俯视一张古老木桌，桌上散落羊皮纸、蜡烛、银匕首与塔罗牌，中央留大面积暗部供 UI 叠加
-- 英文：`top-down view of an ancient wooden table scattered with parchment scrolls, burning candles, a silver dagger and tarot cards, large dark empty area in the center, vignette` + 统一前缀 `--ar 16:9`
+### 12. 乌鸦 → `crow.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。墓园老树的枯枝上，一只墨羽巨鸦收拢双翼俯视村庄，颈上一圈银白羽毛，喙间衔着一枚刻着符文的铜币；它眼底映着白月，冷峻如替死亡记账的书记官——它不杀人，它只是把名字记下来，交给明天白天的绞索。月色清辉如霜，落在它翅尖。
 
-### APP 图标 → `web/assets/icon.png`（1024×1024）
-- 中文：极简哥特狼头剪影嵌在血月之中，黑底金边，边缘雕花
-- 英文：`minimalist gothic wolf head silhouette inside a blood moon, black background with gold ornate border, flat emblem style` `--ar 1:1`
+### 13. 白痴 → `idiot.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。绞架广场，披着小丑铃铛斗篷的白痴坐在断掉的绞架横梁上晃着腿，对身下愤怒的人群举杯大笑；绳套松松挂在他颈边，却怎么也收紧不了。白月照着他一脸满不在乎的笑——人们以为抓住了他，其实是他在所有人的命门上跳舞。
 
----
+### 14. 暗恋者 → `admirer.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。舞会废墟的门柱阴影里，一位少女静静望着场中央欢舞的人群，指尖系着一条发光的红线——红线另一端没入人群，连向一个看不清脸的背影；她的胜负与那个人绑在一起，而那个人永远不会知道。白月从破碎的穹顶洒下，把她的影子拉得很长、很孤单。
 
-## 接入清单（生成后对照放文件）
-
-| 图 | 文件 | 备注 |
-|---|---|---|
-| 狼人 | `web/assets/roles/wolf.png` | 竖版 2:3 |
-| 狼王 | `web/assets/roles/wolfking.png` | 同上 |
-| 白狼王 | `web/assets/roles/whitewolfking.png` | 同上 |
-| 预言家 | `web/assets/roles/seer.png` | 同上 |
-| 女巫 | `web/assets/roles/witch.png` | 同上 |
-| 猎人 | `web/assets/roles/hunter.png` | 同上 |
-| 守卫 | `web/assets/roles/guard.png` | 同上 |
-| 骑士 | `web/assets/roles/knight.png` | 同上 |
-| 白痴 | `web/assets/roles/idiot.png` | 同上 |
-| 平民 | `web/assets/roles/villager.png` | 同上 |
-
-> 放好后刷新浏览器即可（服务会自动扫描识别）。占位 SVG 保留不影响，程序优先用 .png。
+### 15. 平民 → `villager.png`
+哥特暗黑奇幻油画风格的狼人杀角色卡插画：强烈明暗对比，深黑、暗红与古金配色，月夜浓雾氛围，笔触细腻、诡异而优雅，竖版 2:3 构图，画面顶到画布边缘，不要画任何边框、装饰框或文字。村庄酒馆门前，粗布衣的年轻平民抱着农具坐在台阶上，火把光映着他不安的脸；远处雾里传来狼嚎，头顶白月清冷。他没有神力，没有武器，只有一颗想活下去的心——和今晚唯一能做的事：听清火把边每一个说话的人，然后押对一边。
