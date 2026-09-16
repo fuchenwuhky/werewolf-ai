@@ -166,6 +166,13 @@ test('齿轮菜单：两端都把设置/规则书/退出收进一处', () => {
   assert.match(MJS, /结束本局/, '手机齿轮菜单缺少"结束本局"');
   assert.match(MJS, /返回首页|退出到首页/, '齿轮菜单缺少退出入口');
   assert.match(APPJS, /返回首页/, '桌面齿轮菜单缺少退出入口');
+  // ⚠ "是否在对局中"必须用 state.game：玩家视图 v 里没有 game 字段，
+  // 用 v.game 判定会让"查看我的身份牌/结束本局"永远不出现（这轮踩过）。
+  const gearSrc = MJS.slice(MJS.indexOf('function openGear'), MJS.indexOf('function askTerminate'));
+  const gear = gearSrc.replace(/\/\/[^\n]*/g, ''); // 剥掉行注释：注释里会提到这个坑本身
+  assert.match(gear, /state\.game && state\.game\.gameId/, 'openGear 必须用 state.game 判定是否在对局中');
+  assert.ok(!/v\.game\b/.test(gear), 'openGear 不能用 v.game 判定（玩家视图里没有这个字段）');
+  assert.ok(/查看我的身份牌/.test(gear) && /结束本局/.test(gear), '齿轮菜单项缺失');
 });
 
 // ---------------------------------------------------------------- ⑤ 规则书

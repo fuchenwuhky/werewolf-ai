@@ -60,28 +60,34 @@ async function init() {
 /** 菜单项：对局中才有的项（结束本局）按状态显示 */
 function openGear() {
   const v = state.view;
-  const inGame = !!(v && v.game);
+  // ⚠ 判定"是否在对局中"必须用 state.game（本地保存的对局句柄）：玩家视图 v 里
+  // 没有 game 字段，用 v.game 会让"查看我的身份牌/结束本局"永远不出现（踩过一次）。
+  const inGame = !!(state.game && state.game.gameId);
+  const over = !!(v && v.finished);
   const rows = [];
-  if (inGame) {
-    rows.push(['🎴 查看我的身份牌', () => { if (v.me && v.me.role) openInspect(v.me.role); }]);
+  if (inGame && v && v.me && v.me.role) {
+    rows.push(['🎴 查看我的身份牌', () => openInspect(v.me.role)]);
   }
   rows.push(['📖 规则书', () => openRulebook()]);
   rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);
   rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
-  if (inGame && !v.finished) {
+  if (inGame && !over) {
     rows.push(['⏹ 结束本局', () => askTerminate()]);
+  } else {
+    rows.push(['🏠 返回首页', () => { localStorage.removeItem('mww_current'); location.reload(); }]);
   }
-  if (!inGame) rows.push(['🏠 返回首页', () => { localStorage.removeItem('mww_current'); location.reload(); }]);
   const wrap = el('div', 'modal');
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const box = el('div', 'gear-list');
-  rows.forEach(([label, fn], i) => {
-    const b = el('button', 'gear-item' + (i === rows.length - 1 && inGame ? ' danger' : ''), label);
+  rows.forEach(([label, fn]) => {
+    const b = el('button', 'gear-item' + (/结束本局/.test(label) ? ' danger' : ''), label);
     b.addEventListener('click', () => { $('#m-modal').innerHTML = ''; fn(); });
     box.appendChild(b);
   });
   wrap.appendChild(box);
-  wrap.appendChild(el('p', 'hint', inGame ? `对局 ${v.game.gameId}${v.day ? ` · 第 ${v.day} 天` : ''}` : ''));
+  wrap.appendChild(el('p', 'hint', inGame
+    ? `对局 ${state.game.gameId}${v && v.day ? ` · 第 ${v.day} 天` : ''}${over ? ' · 已结算' : ''}`
+    : ''));
   const close = el('button', 'btn ghost', '关闭');
   close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
   wrap.appendChild(close);
