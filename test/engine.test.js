@@ -916,9 +916,16 @@ test('上下文：预算裁剪（超预算时降级且仍可组装）', () => {
   assert.ok(out.trimmed, '触发裁剪');
   assert.ok(out.text.includes('局面快照'), '快照永不裁掉');
   assert.ok(out.text.includes('当前任务'), '任务永不裁掉');
-  // 阈值 2000 → 2700：注入防御（P2-3）给每条玩家发言加了 spotlight 标记，
-  // 实测 26 字符/条（本例 40 条 ≈ +693 tokens）。这是刻意的安全成本，不是预算失控。
-  assert.ok(out.tokens < 2700, `裁剪后总量受限（实际 ${out.tokens}）`);
+  // 阈值 2000 → 2700：注入防御（P2-3）给每条玩家发言加了 spotlight 标记，实测 26 字符/条。
+  // B3 起估算改为按字符类别（中文 1 字 ≈ 1 token，旧 len/1.5 低估 1.5 倍），同一份内容估出来的
+  // token 数随之变大，所以这里钉**结构**而不是一个会漂移的绝对值：
+  //   ① 总量必须有界（不能"预算 300 却组装出 900"）；
+  //   ② 快照必须有独立上限（B3 的核心：以前快照无上界，能把可用预算挤到 500）。
+  assert.ok(out.tokens < 4200, `裁剪后总量受限（实际 ${out.tokens}）`);
+  // 快照的"可选区"（逐条明细 + 新事件栏）必须受预算约束；结构区（时钟/座位/确知/脊柱）是下限，永不裁。
+  // 本例一次性注入了 40 条发言，新事件栏会被截断并写明丢了几条 —— 而不是把快照撑到无界。
+  assert.match(out.sections.snapshot, /只列最近|未展开/, '新事件栏超预算时必须如实说明被截断');
+  assert.ok(out.sectionTokens.snapshot < 2000, `快照必须有界（实际 ${out.sectionTokens.snapshot}）`);
 });
 
 test('任务分层：effort 与 maxTokens 映射', () => {

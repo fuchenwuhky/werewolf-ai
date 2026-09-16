@@ -14,7 +14,7 @@
 const { renderEvent, PHASE_LABEL } = require('../engine/render');
 const { spotlightEvent } = require('./spotlight');
 const { estimateTokens } = require('./tokens');
-const { selectMemory } = require('./memory');
+const { selectMemory, MEMORY_HEADER } = require('./memory');
 
 const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'vote_progress']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
@@ -107,8 +107,59 @@ function dayFacts(game, dayEvents) {
   return lines;
 }
 
+/**
+ * 每天的"决定性结论"压成一行 —— 硬事实**脊柱**。
+ *
+ * 为什么需要它：逐条明细会随天数无限增长，长局里必然要被裁；而"第 3 天到底是谁被票走的"
+ * 这种结论是**不能因为对局长就消失**的。所以事实分两层（和卡框的粗/细档同理）：
+ *   · 脊柱（本函数）：一天一行，代码生成，永不裁剪；
+ *   · 明细（`dayFacts`）：逐条事件行，只保最近几天。
+ * 只用引擎自己发过的事件，不做任何推断。
+ */
+function daySpine(game, dayEvents) {
+  const votes = [];
+  const bits = [];
+  for (const e of dayEvents) {
+    const d = e.data || {};
+    if (e.type === 'deaths' && Array.isArray(d.deaths) && d.deaths.length) {
+      bits.push(`夜里 ${d.deaths.map((x) => `${x.seat}号`).join('、')} 出局`);
+    } else if (e.type === 'vote_reveal' && d.tally) {
+      // 一天可能有多轮亮票（平票 PK）；只留最后 3 轮 —— 结论以最终那轮为准，
+      // 否则"每天一行"会被同一天的多次 PK 撑爆（实测 20 轮亮票 ≈ 2600 token）。
+      const top = Object.entries(d.tally)
+        .filter(([k, n]) => k !== '0' && n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2);
+      if (top.length) {
+        votes.push(`亮票 ${top.map(([s, n]) => `${s}号${n}票`).join('、')}`);
+        if (votes.length > 3) votes.shift();
+      }
+    } else if (e.type === 'sheriff_elected' && d.seat) {
+      bits.push(`警长 ${d.seat}号`);
+    } else if (e.type === 'role_reveal' && d.seat) {
+      bits.push(`翻牌 ${d.seat}号=${roleName(d.role)}`);
+    } else if (e.type === 'idiot_save' && d.seat) {
+      bits.push(`白痴翻牌 ${d.seat}号`);
+    } else if (e.type === 'shoot' && d.target) {
+      bits.push(`枪杀 ${d.target}号`);
+    } else if (e.type === 'explode') {
+      bits.push(d.target ? `自爆带走 ${d.target}号` : '自爆');
+    } else if (e.type === 'duel') {
+      bits.push('骑士决斗');
+    }
+  }
+  const parts = [...bits, ...votes];
+  // 硬上限：脊柱是"永不裁剪"的，所以它自己必须有界（否则预算约束形同虚设）
+  let out = '';
+  for (const p of parts) {
+    if (out && (out + '；' + p).length > 120) return `${out}；…（共 ${parts.length} 条）`;
+    out = out ? `${out}；${p}` : p;
+  }
+  return out;
+}
+
 /** 局面快照：时钟 + 座位 + 确知/不知 + 公开硬事实 + 新事件清单（易变区，放最末保证缓存前缀稳定） */
-function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = null) {
+function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = null, opts = {}) {
   const phaseName = PHASE_LABEL[game.phase] || game.phase;
   const head = `【局面快照】当前时刻：第 ${game.day} 天 · ${phaseName}${request && request.task === 'speech' ? '（正在逐个发言）' : ''} —— 一切以本快照为准，这是"现在"的唯一事实。`;
   const seatLine = game.players
@@ -131,27 +182,82 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = 
   notKnow.push('未翻牌玩家的真实身份——夜里你只获得系统明确告诉你的信息，其余一概不知');
   if (player.role !== 'seer') notKnow.push('任何人的查验结果（除非对方主动声称）');
   notKnow.push('已经过去的时间里"本应发生但日志中没有"的事——日志里没有就是没发生');
-  const factLines = [];
   const days = [...ledger.byDay.keys()].sort((a, b) => a - b);
+  // ① 脊柱：每天一行结论，永不裁剪（事实不能因为对局长就消失）
+  const spine = [];
   for (const d of days) {
-    const f = dayFacts(game, ledger.byDay.get(d));
-    if (f.length) factLines.push(`第${d}天：\n${f.join('\n')}`);
+    const s = daySpine(game, ledger.byDay.get(d) || []);
+    if (s) spine.push(`  第${d}天·结论：${s}`);
   }
-  const fresh = ledger.events.filter((e) => e.seq > lastSeq && !NOISE_TYPES.has(e.type));
-  const freshText = fresh.length
-    ? '自你上次行动后的新事件（此前实录中未出现的部分）：\n' + fresh.map((e) => {
-      const line = spotlightEvent(game, e, renderEvent(game, e));
-      return line && line.trim() ? '  ◆ ' + line : '';
-    }).filter(Boolean).join('\n')
-    : '';
-  return [
+  const spineBlock = spine.length ? `公开硬事实时间线：\n  每日脊柱（代码生成，永不裁剪）：\n${spine.join('\n')}` : '';
+  // ② 结构区（时钟/座位/确知/脊柱）是快照的**下限**，任何预算下都不裁 —— 先量出它的体积
+  const structural = [
     head,
     `座位与状态：${seatLine}`,
     '你确知（私密）：\n' + youKnow,
     '你不知道（不要臆测）：\n' + notKnow.map((s) => `  · ${s}`).join('\n'),
-    factLines.length ? '公开硬事实时间线：\n' + factLines.join('\n') : '',
-    freshText,
-  ].filter(Boolean).join('\n');
+    spineBlock,
+  ].filter(Boolean);
+  const budget = opts.tokenBudget;
+  const fixedTokens = structural.reduce((a, s) => a + estimateTokens(s), 0);
+  const room = budget != null ? Math.max(0, budget - fixedTokens) : Infinity;
+  // ③ 明细：从最新的一天往前放，放不下就整段丢
+  //    （最新一天在放得下时总是保留 —— 那是正在讨论的现场）
+  const detailOf = (d) => {
+    const f = dayFacts(game, ledger.byDay.get(d) || []);
+    return f.length ? `  第${d}天：\n${f.join('\n')}` : '';
+  };
+  const detailBudget = room === Infinity ? Infinity : Math.max(150, Math.floor(room * 0.5));
+  const keptDays = [];
+  let detailTokens = 0;
+  for (let i = days.length - 1; i >= 0; i--) {
+    const block = detailOf(days[i]);
+    if (!block) continue;
+    const cost = estimateTokens(block);
+    if (keptDays.length && detailTokens + cost > detailBudget) break;
+    keptDays.unshift(days[i]);
+    detailTokens += cost;
+  }
+  const detailBlocks = keptDays.map(detailOf).filter(Boolean);
+  const folded = days.filter((d) => !keptDays.includes(d) && (ledger.byDay.get(d) || []).length);
+  const foldedNote = folded.length
+    ? `  （第${folded[0]}~${folded[folded.length - 1]}天的逐条明细已折叠；结论仍在上面的每日脊柱里）`
+    : '';
+  // ④ 事实区 = 脊柱 + 预算内的明细 + 折叠说明（明细必须真的拼进来：只算不拼等于白算）
+  const factSection = spineBlock
+    ? [spineBlock, ...detailBlocks, foldedNote].filter(Boolean).join('\n')
+    : (detailBlocks.length ? `公开硬事实时间线：\n${[...detailBlocks, foldedNote].filter(Boolean).join('\n')}` : '');
+  const fresh = ledger.events.filter((e) => e.seq > lastSeq && !NOISE_TYPES.has(e.type));
+  const freshLines = fresh.map((e) => {
+    const line = spotlightEvent(game, e, renderEvent(game, e));
+    return line && line.trim() ? line : '';
+  }).filter(Boolean);
+  let freshText = '';
+  if (freshLines.length) {
+    const head2 = '自你上次行动后的新事件（此前实录中未出现的部分）：';
+    const full = `${head2}\n${freshLines.map((l) => '  ◆ ' + l).join('\n')}`;
+    // 新事件这栏会随"一次爆发"而增长（例如同轮几十条发言）；超预算时保**最近**的几条，
+    // 并如实写明丢了几条 —— 反正更早的那些就在上方实录里，不写清楚反而让人以为"只有这些"。
+    const freshRoom = budget != null ? Math.max(0, budget - fixedTokens - detailTokens) : Infinity;
+    if (estimateTokens(full) <= freshRoom) {
+      freshText = full;
+    } else {
+      const kept = [];
+      let used = 0;
+      for (let i = freshLines.length - 1; i >= 0; i--) {
+        const cost = estimateTokens(freshLines[i]) + 1;
+        if (kept.length && used + cost > freshRoom) break;
+        kept.unshift(freshLines[i]);
+        used += cost;
+      }
+      freshText = kept.length
+        ? `${head2}共 ${freshLines.length} 条，此处只列最近 ${kept.length} 条（更早的见上方实录）：\n${kept.map((l) => '  ◆ ' + l).join('\n')}`
+        : `自你上次行动后的新事件：共 ${freshLines.length} 条，预算不足未展开（见上方实录）。`;
+    }
+  }
+  return [head, `座位与状态：${seatLine}`, '你确知（私密）：\n' + youKnow, '你不知道（不要臆测）：\n' + notKnow.map((s) => `  · ${s}`).join('\n'), factSection, freshText]
+    .filter(Boolean)
+    .join('\n');
 }
 
 /** L2 实录：days 数组内每天的可见事件逐字渲染（完全稳定，不掺任何易变标记） */
@@ -174,7 +280,7 @@ function renderTranscript(game, ledger, days) {
 function renderDigests(digests) {
   const days = [...digests.keys()].sort((a, b) => a - b);
   if (!days.length) return '';
-  const parts = ['──── 早期记忆纪要（更早天数的事实与判断要点）────'];
+  const parts = [MEMORY_HEADER];
   for (const d of days) parts.push(`◆ 第${d}天纪要：\n${digests.get(d)}`);
   return parts.join('\n');
 }
@@ -269,17 +375,32 @@ function assemble(game, player, request, state) {
   };
 }
 
-/** 预算裁剪：快照与任务永远完整，只裁记忆区（昨日降级 → 实录保尾 → 丢最旧纪要） */
 /**
- * 预算裁剪：快照与任务永远完整，只裁记忆区（昨日降级 → 实录保尾 → 记忆按相关度检索）
+ * 预算裁剪：快照与任务永远完整，只裁记忆区。
  *
- * P2-5 改动：最后一步从"丢弃最旧的纪要"改为"按 recency × importance × relevance 检索"。
- * 理由很直接——"第 1 天 3 号跳预言家"通常比"第 5 天 9 号打了个哈欠"重要，
- * 而旧策略先丢的恰恰是前者。装得下时（短局常态）**不做任何检索**，逐字与旧行为一致。
+ * 顺序：① 昨日实录降级 → ② 先压旧记忆（按 recency × importance × relevance 检索）
+ *      → ③ 实录按天保尾 → ④ 极端兜底。
+ *
+ * B3 修正了两件事：
+ *   · **快照有了独立上限**（预算的 25%）。以前它没有上界，长局里能把可用预算挤到 500，
+ *     于是"当天的发言被裁光、十天前的死讯却一条不少"——该留的被裁、该省的留着。
+ *   · **②③ 顺序对调**。实录是正在讨论的现场（当天发言链），旧纪要是可检索的历史，
+ *     必须先省后者；旧顺序先切实录，恰好把最该留的切掉了。
+ * 装得下时（短局常态）**不做任何检索与裁剪**，逐字与旧行为一致。
  */
 function trimToBudget(game, player, request, state, budgetTokens) {
   const P = assembleParts(game, player, request, state); // 此处不检索：先量出"全量记忆"的体积
-  const fixedTokens = estimateTokens(P.snapshotText) + estimateTokens(P.taskText);
+  // 快照的独立上限：以前预算只约束"记忆+实录"，而快照（含**全部天数**的逐条事实）没有上界，
+  // 长局里它能把 avail 压到 500 → 当天的发言被裁光、十天前的死讯却一条不少。
+  // 超限时重渲染：脊柱仍保留每一天，只折叠早期的逐条明细。
+  const snapshotCap = Math.max(400, Math.floor(budgetTokens * 0.25));
+  let snapshotText = P.snapshotText;
+  if (estimateTokens(snapshotText) > snapshotCap) {
+    snapshotText = renderSnapshot(game, player, P.ledger, request, state.lastSeq || 0, state.suspicion || null, {
+      tokenBudget: snapshotCap,
+    });
+  }
+  const fixedTokens = estimateTokens(snapshotText) + estimateTokens(P.taskText);
   const avail = Math.max(500, budgetTokens - fixedTokens);
   const today = game.day || 0;
   let days = state.transcriptDays != null ? state.transcriptDays.slice() : [today - 1, today].filter((d) => d >= 1);
@@ -294,15 +415,10 @@ function trimToBudget(game, player, request, state, budgetTokens) {
     transcriptText = renderTranscript(game, P.ledger, days);
     trimmed = true;
   }
-  // 2) 实录保尾截断（近期发言比开局的更重要）
-  if (over() && transcriptText) {
-    const keepChars = Math.max(200, Math.floor(avail * 1.5) - Math.floor(estimateTokens(digestsText) * 1.5));
-    transcriptText = '（早期实录已因预算截断）\n' + transcriptText.slice(-keepChars);
-    trimmed = true;
-  }
-  // 3) 记忆检索：把剩余预算交给记忆流，按相关度挑条目（取代旧的"丢弃最旧纪要"）
+  // 2) 先压**旧记忆**（可检索、可省），再动实录 —— 旧顺序反了：
+  //    实录是正在讨论的现场（当天的发言链），旧纪要是可检索的历史，必须先省后者。
   if (over() && state.digests && state.digests.size) {
-    const memoryBudget = Math.max(200, avail - estimateTokens(transcriptText));
+    const memoryBudget = Math.max(200, Math.floor(avail * 0.4));
     memory = selectMemory(state.digests, {
       nowDay: today,
       query: memoryQuery(game, player, request, P.ledger, state.suspicion),
@@ -311,21 +427,37 @@ function trimToBudget(game, player, request, state, budgetTokens) {
     digestsText = memory.text;
     trimmed = true;
   }
-  // 4) 极端情况：实录再压一档
-  if (over() && transcriptText) {
-    transcriptText = transcriptText.slice(-Math.max(200, Math.floor(avail * 1.2)));
+  // 3) 实录按天保尾：先丢最旧的那一天（不从句中切），保证当天的发言链完整
+  if (over() && transcriptText && days.length > 1) {
+    const blocks = days.map((d) => ({ d, text: renderTranscript(game, P.ledger, [d]) })).filter((b) => b.text);
+    const kept = [];
+    let used = estimateTokens(digestsText);
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const cost = estimateTokens(blocks[i].text);
+      if (kept.length && used + cost > avail) break;
+      kept.unshift(blocks[i]);
+      used += cost;
+    }
+    const droppedDays = blocks.length - kept.length;
+    transcriptText = (droppedDays ? `（更早的 ${droppedDays} 天实录已因预算省略）\n` : '') + kept.map((b) => b.text).join('\n');
+    days = kept.map((b) => b.d);
     trimmed = true;
   }
-  const text = [digestsText, transcriptText, P.snapshotText, P.taskText].filter(Boolean).join('\n\n');
+  // 4) 极端情况：当天实录本身就超预算 —— 只能从句首截，但**明确标注截断**（不静默）
+  if (over() && transcriptText) {
+    transcriptText = '（当天的早期发言已因预算截断）\n' + transcriptText.slice(-Math.max(200, Math.floor(avail * 1.2)));
+    trimmed = true;
+  }
+  const text = [digestsText, transcriptText, snapshotText, P.taskText].filter(Boolean).join('\n\n');
   return {
     text,
-    sections: { digests: digestsText, transcript: transcriptText, snapshot: P.snapshotText },
-    // 分区体积（应用自报，供上帝面板/评测查看）：contextBudget 只约束"记忆+实录"，
+    sections: { digests: digestsText, transcript: transcriptText, snapshot: snapshotText },
+    // 分区体积（应用自报，供上帝面板/评测查看）：预算只约束"记忆+实录"，
     // 快照与任务永不裁剪 —— 没有这几个数，"为什么上下文 3000 tok 而预算是 900"就只能靠猜。
     sectionTokens: {
       memory: estimateTokens(digestsText),
       transcript: estimateTokens(transcriptText),
-      snapshot: estimateTokens(P.snapshotText),
+      snapshot: estimateTokens(snapshotText),
       task: estimateTokens(P.taskText),
       total: estimateTokens(text),
     },
@@ -339,6 +471,6 @@ function trimToBudget(game, player, request, state, budgetTokens) {
 
 module.exports = {
   FAST_TASKS, NOISE_TYPES, taskEffort, taskMaxTokens, estimateTokens, aggregate,
-  renderSnapshot, renderTranscript, renderDigests, skeletonDigest, dayFacts,
+  renderSnapshot, renderTranscript, renderDigests, skeletonDigest, dayFacts, daySpine,
   privateLedger, memoryQuery, assemble, trimToBudget,
 };

@@ -174,6 +174,15 @@ function renderByDay(entries) {
 }
 
 /**
+ * 记忆区标题 —— **唯一实现**（context.js 的 renderDigests 也用它）。
+ *
+ * 措辞必须说清"这是模型自己的复述、不是事实"：旧标题写"事实与判断要点"，
+ * 等于把 AI 的猜测盖上事实的章 —— 错一次，之后每一轮都会把它当既定事实继续推理。
+ * 权威事实由引擎生成、放在局面快照的"公开硬事实时间线"里。
+ */
+const MEMORY_HEADER = '──── 早期记忆纪要（AI 自述·可能失真；权威硬事实见下方局面快照）────';
+
+/**
  * 记忆检索主入口。
  *
  * @param {Map<number,string>} digests  day → 纪要文本
@@ -184,7 +193,7 @@ function selectMemory(digests, opts = {}) {
   const nowDay = opts.nowDay || 0;
   const budgetTokens = opts.budgetTokens != null ? opts.budgetTokens : Infinity;
   const entries = toEntries(digests);
-  const header = '──── 早期记忆纪要（更早天数的事实与判断要点）────';
+  const header = MEMORY_HEADER;
   if (!entries.length) return { text: '', kept: 0, total: 0, omitted: 0, tokens: 0, retrieved: false };
 
   // 约束 2：装得下就原样全给（与重构前逐字一致，短局零行为变化）
@@ -228,5 +237,5 @@ function selectMemory(digests, opts = {}) {
 
 module.exports = {
   IMPORTANCE_HINTS, WEIGHTS,
-  splitDigest, toEntries, seatsIn, importanceOf, recencyOf, relevanceOf, scoreOf, rankEntries, renderByDay, selectMemory,
+  splitDigest, toEntries, seatsIn, importanceOf, recencyOf, relevanceOf, scoreOf, rankEntries, renderByDay, selectMemory, MEMORY_HEADER,
 };

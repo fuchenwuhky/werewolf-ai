@@ -149,5 +149,10 @@ test('记忆流：空记忆返回空串（不产生空标题）', () => {
 test('记忆流：估算函数只有一个实现（tokens.js），避免预算口径分叉', () => {
   const { estimateTokens: fromContext } = require('../src/ai/context');
   assert.strictEqual(fromContext, estimateTokens, 'context.js 必须复用 tokens.js 的实现，不允许各写一份');
-  assert.strictEqual(estimateTokens('中文文本'), Math.ceil(4 / 1.5));
+  assert.strictEqual(estimateTokens('中文文本'), 4, '汉字 1 字 ≈ 1 token（旧算法 len/1.5 系统性低估 1.5 倍）');
+  assert.strictEqual(estimateTokens('abcdefgh'), 2, 'ASCII 4 字符 ≈ 1 token');
+  assert.strictEqual(estimateTokens(''), 0, '空串为 0（各预算计算都依赖它）');
+  // 与旧算法的关系：对纯中文约 1.3~1.5 倍（取整差异）。这不是"顺手调大"，而是把系统性低估修掉 ——
+  // 低估意味着"预算 12000 实际塞进更多"，裁剪决策跟着一起错（见 docs/fluency-plan.md B3）。
+  assert.ok(estimateTokens('中文文本内容更多一些') > Math.ceil(10 / 1.5), '中文口径必须显著大于旧算法');
 });
