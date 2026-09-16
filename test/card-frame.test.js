@@ -194,17 +194,60 @@ test('无 DOM 时也能加载：ensureDefs 静默跳过而不是抛错', () => {
   assert.match(CF.DEFS, /width="0"\s+height="0"/, 'defs 容器必须是 0 尺寸（不能 display:none，有些浏览器不解析其渐变）');
 });
 
-test('roleAttr：把角色 id 带到外层 div 上，且只放行安全字符', () => {
+test('roleAttr：把角色 id 与阵营带到外层 div 上，且只放行安全字符', () => {
   assert.strictEqual(typeof CF.roleAttr, 'function');
-  assert.strictEqual(CF.roleAttr('seer'), ' data-role="seer"');
+  assert.strictEqual(CF.roleAttr('seer'), ' data-role="seer" data-faction="god"');
+  assert.strictEqual(CF.roleAttr('wolf'), ' data-role="wolf" data-faction="wolf"');
   assert.strictEqual(CF.roleAttr(''), '', '没有角色时不该输出空属性');
   assert.strictEqual(CF.roleAttr(undefined), '');
   assert.strictEqual(CF.roleAttr('wo"lf>x'), ' data-role="wolfx"', '非法字符必须被剔除，不能破坏属性');
+  assert.strictEqual(CF.roleAttr('nobody'), ' data-role="nobody"', '不认识的 id 不带阵营（徽记回落成狼爪）');
+  // 检视大卡走的是 dataset 赋值，用的是同一个原语；手写 dataset.role 会漏掉阵营。
+  // 注意模块是在 vm 沙箱里加载的（另一个 realm），deepStrictEqual 会比原型而失败，所以按序列化比。
+  const attrs = (rid) => JSON.stringify(CF.roleAttrs(rid));
+  assert.strictEqual(attrs('seer'), '{"role":"seer","faction":"god"}');
+  assert.strictEqual(attrs('wolf'), '{"role":"wolf","faction":"wolf"}');
+  assert.strictEqual(attrs('nobody'), '{"role":"nobody"}');
+  assert.strictEqual(attrs(''), '{}');
   for (const f of ['app.js', 'm/m.js']) {
     const src = read(f);
     assert.match(src, /window\.CardFrame\.roleAttr\(/, `${f} 应把角色 id 交给 CardFrame.roleAttr()`);
     assert.ok(!/data-role="\$\{/.test(src), `${f} 又自己拼 data-role 了（配色表靠这个属性命中）`);
+    assert.ok(!/dataset\.role\s*=/.test(src), `${f} 直接写 dataset.role 会漏掉 data-faction（检视大卡的徽记会永远是狼爪）`);
+    assert.match(src, /Object\.assign\(card\.dataset,\s*window\.CardFrame\.roleAttrs\(/, `${f} 的检视大卡没有走 roleAttrs 原语`);
   }
+});
+
+test('徽记按阵营换：狼爪 / 神星 / 民麦，且阵营表与 roles.js 一致', () => {
+  const roles = require('../src/engine/roles.js');
+  const list = Object.values(roles.ROLES || roles);
+  const ids = list.map((r) => r.id).filter(Boolean);
+  assert.ok(ids.length >= 15, `roles.js 里应能读到全部角色（读到 ${ids.length} 个）`);
+  // 阵营表必须与引擎逐条一致：漂移的后果是"预言家卡上印狼爪"这种默默错下去的事
+  for (const r of list) {
+    if (!r.id) continue;
+    assert.strictEqual(CF.FACTION[r.id], r.category, `${r.id} 的阵营与 roles.js 不一致（${CF.FACTION[r.id]} ≠ ${r.category}）`);
+  }
+  assert.strictEqual(Object.keys(CF.FACTION).length, ids.length, '阵营表条目数与角色数不等（多了或少了角色）');
+  // 三个徽记图形与三个占位组都要在
+  for (const [g, id] of [['fr-crest-wolf', 'frCrest'], ['fr-crest-god', 'frCrestGod'], ['fr-crest-vil', 'frCrestVil']]) {
+    assert.ok(CF.FRAME.includes(`class="${g}"`), `FRAME 里缺少 ${g} 占位组`);
+    assert.ok(CF.DEFS.includes(`id="${id}"`), `DEFS 里缺少 ${id} 图形`);
+    assert.ok(CF.FRAME.includes(`href="#${id}"`), `FRAME 里没有引用 ${id}`);
+  }
+  // 图形必须用阵营色填充（否则三个徽记都是死色）
+  for (const id of ['frCrestGod', 'frCrestVil']) {
+    const at = CF.DEFS.indexOf(`id="${id}"`);
+    const block = CF.DEFS.slice(at, at + 3000); // 取足够长的一段（内部还有子组，别用 </g> 切）
+    assert.ok(block.includes('var(--fr-accent'), `${id} 没用阵营强调色填充`);
+    assert.ok(block.includes('PLATE') === false && block.includes('fill="url(#frPlate)"'), `${id} 缺少共用的徽记底盘`);
+  }
+  // CSS 必须按 data-faction 切换显示，且默认（牌背，无阵营）露狼爪
+  const css = read('style.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(css, /\.fr-svg\s+\.fr-crest-god,\s*\.fr-svg\s+\.fr-crest-vil\s*\{\s*display:\s*none/, '神/民徽记默认必须藏起来');
+  assert.match(css, /\[data-faction='god'\]\s+\.fr-crest-wolf[\s\S]{0,80}display:\s*none/, '神阵营没有藏起狼爪');
+  assert.match(css, /\[data-faction='god'\]\s+\.fr-crest-god,\s*\.card-frame\[data-faction='villager'\]\s+\.fr-crest-vil\s*\{\s*display:\s*block/, '神/民阵营没有露出对应徽记');
+  assert.match(css, /\[data-faction='villager'\]\s+\.fr-crest-wolf/, '民阵营没有藏起狼爪');
 });
 
 test('每个角色都有配色规则：阵营 = 狼红 / 神金 / 民绿，且染色层只改色相', () => {
@@ -304,9 +347,15 @@ test('小卡降级：<100px 隐藏整个细档，露出高对比的粗档', () =
   const cq = css.match(/@container\s*\(max-width:\s*(\d+)px\)\s*\{\s*\.card-frame\s+\.fr-fine\s*\{\s*display:\s*none/);
   assert.ok(cq, '缺少"按容器宽度隐藏细档"的容器查询');
   const limit = Number(cq[1]);
+  // ⚠ 容器查询量的是容器的**内容盒**宽度，而 .card-frame 左右各有 7% padding，
+  //   所以 CSS 里的 limit 换算成"卡宽"要除以 0.86。写断言时别忘了这一步 ——
+  //   实测 104px 的卡上细档是 display:none（limit=99 看着像"104 放行"，其实不是）。
+  const cardMax = limit / 0.86;
   // 移动端坞内身份牌 52px、桌面侧栏 64px 必须落到粗档；图鉴/检视的 210/230/273px 必须是细档
-  assert.ok(limit >= 64, `阈值 ${limit}px 太小：64px 的侧栏身份卡仍会用细档`);
-  assert.ok(limit < 104, `阈值 ${limit}px 太大：104px 的卡已经看得清托角与徽记，不该降级`);
+  assert.ok(cardMax >= 92, `阈值 ${limit}px（≈卡宽 ${cardMax.toFixed(0)}px）太小：64px 的侧栏身份卡会误用细档`);
+  assert.ok(cardMax <= 140, `阈值 ${limit}px（≈卡宽 ${cardMax.toFixed(0)}px）太大：104~210px 的卡已经看得清托角与徽记，不该降级`);
+  assert.ok(cardMax > 64, '阈值必须让 64px 的侧栏身份卡走粗档');
+  assert.ok(cardMax < 210, '阈值必须让 210px 的图鉴卡走细档');
   // 粗档和细档都要有实际内容（不能空壳）
   assert.match(CF.FRAME, /class="fr-bold">[\s\S]*url\(#frBoldTop\)/, '粗档里没有框带填充');
   assert.match(CF.FRAME, /class="fr-fine">[\s\S]*url\(#frBandTop\)/, '细档里没有框带填充');

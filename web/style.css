@@ -669,6 +669,15 @@ details summary:hover { color: var(--gold-bright); }
 .card-frame[data-role='dreamer'] { --fr-accent: #c8a8f2; }
 .card-frame[data-role='crow'] { --fr-accent: #c4c4d0; }
 .card-frame[data-role='admirer'] { --fr-accent: #d9b0f0; }
+
+/* 徽记按阵营换图形：狼爪 / 神星（四芒星）/ 民麦（麦穗）。
+   默认（没有 data-faction，例如牌背）露狼爪 —— 那是这个游戏的品牌记号。
+   十五个角色只在 card-frame.js 的 FACTION 表里归一次类，测试逐条比对 roles.js。 */
+.fr-svg .fr-crest-god, .fr-svg .fr-crest-vil { display: none; }
+.card-frame[data-faction='god'] .fr-crest-wolf,
+.card-frame[data-faction='villager'] .fr-crest-wolf { display: none; }
+.card-frame[data-faction='god'] .fr-crest-god,
+.card-frame[data-faction='villager'] .fr-crest-vil { display: block; }
 /* 框层铺满整卡并压在插画之上（画窗处透明，插画透出来）。
    pointer-events:none 保证不挡检视卡的点击与指针倾斜。 */
 .card-frame > .fr-svg {
@@ -688,6 +697,10 @@ details summary:hover { color: var(--gold-bright); }
    此时隐藏整个"细档"，露出底下那层高对比的"粗档"（外暗口 + 阵营色框面 + 内亮唇线）。
    注意阈值取 100 而不是 150：104/140px 的卡还能看清托角与徽记，没必要降级。
    容器查询不支持的老 WebView 会保留细档：属"多画了细节"，不会坏。 */
+/* 卡宽 < ~115px 时细档整组隐藏（露出粗档）。
+   ⚠ 这里量的 99px 是**容器的内容盒**宽度，而 .card-frame 左右各有 7% 的 padding：
+   所以 99px 实际等价于"卡宽 < 99/0.86 ≈ 115px"。
+   别把它当成"104px 的卡还走细档" —— 实测 104px 卡上细档是 display:none（踩过）。 */
 @container (max-width: 99px) {
   .card-frame .fr-fine { display: none; }
 }

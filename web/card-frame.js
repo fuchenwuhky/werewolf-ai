@@ -103,6 +103,39 @@
         <ellipse cx="1.02" cy="-2.92" rx=".86" ry="1.62" transform="rotate(11 1.02 -2.92)"/>
         <ellipse cx="2.78" cy="-1.75" rx=".88" ry="1.52" transform="rotate(30 2.78 -1.75)"/>`;
 
+  /** 徽记底盘：六边凹座（三个阵营共用）。大了才读得出是"徽记"而不是一颗扣子。 */
+  const PLATE = `
+        <path d="M-8 0 L-5.2 -4.35 H5.2 L8 0 L5.2 4.35 H-5.2 Z" fill="url(#frPlate)" stroke="#080502" stroke-width=".55"/>
+        <path d="M-8 0 L-5.2 -4.35 H5.2 L8 0" fill="none" stroke="#cbb573" stroke-width=".34" opacity=".45"/>
+        <path d="M-5.2 4.35 H5.2 L8 0" fill="none" stroke="#000" stroke-width=".3" opacity=".5"/>
+        <path d="M-6.8 0 L-4.5 -3.55 H4.5 L6.8 0 L4.5 3.55 H-4.5 Z" fill="none" stroke="#f2e2a8" stroke-width=".16" opacity=".2"/>`;
+
+  /** 神阵营徽记的图形：四芒星（神力 / 启示）。凹角用曲线，缩下去才不像"十字"。 */
+  const STAR = `
+        <path d="M0 -4.35 C.5 -1.5 1.5 -.5 4.35 0 C1.5 .5 .5 1.5 0 4.35 C-.5 1.5 -1.5 .5 -4.35 0 C-1.5 -.5 -.5 -1.5 0 -4.35 Z"/>`;
+
+  /** 民阵营徽记的图形：麦苗（平民 / 收成）。
+   *  ⚠ 走过一次弯路：一开始画的是"麦穗"（三对谷粒 + 顶粒），但谷粒之间只差 0.2 单位，
+   *  在 16 单位的徽记里直接被"深色描边 + 阵营色填充"两遍画法糊成一个色块（像个叶子）。
+   *  改成茎 + 四片分开的叶：每片都是独立轮廓，缩到 20px 也读得出是"苗"。
+   *  全部用填充不用描边 —— 两遍画法只对填充路径成立。 */
+  const WHEAT = `
+        <path d="M-.32 4.25 C-.56 2.2 -.56 .3 -.36 -1.5 C-.12 -1.5 .12 -1.5 .34 -1.45 C.28 .4 .32 2.2 .34 4.25 Z"/>
+        <path d="M-.3 -.95 C-1.5 -1.05 -2.7 -1.85 -3.5 -2.95 C-2.05 -3.0 -.85 -2.25 -.18 -1.15 Z"/>
+        <path d="M.3 -.95 C1.5 -1.05 2.7 -1.85 3.5 -2.95 C2.05 -3.0 .85 -2.25 .18 -1.15 Z"/>
+        <path d="M-.2 -1.2 C-1.15 -2.05 -1.6 -3.15 -1.45 -4.35 C-.4 -3.7 .35 -2.55 .2 -1.2 Z"/>
+        <path d="M.2 -1.2 C1.15 -2.05 1.6 -3.15 1.45 -4.35 C.4 -3.7 -.35 -2.55 -.2 -1.2 Z"/>`;
+
+  /** 角色 → 阵营。徽记按阵营换（狼爪 / 神星 / 民麦），所以框层必须知道阵营。
+   *  这份表与 src/engine/roles.js 的一致性由 test/card-frame.test.js 逐条钉住，
+   *  两边漂移会直接测试失败（否则就是"预言家卡上印狼爪"这种默默错下去的事）。 */
+  const FACTION = {
+    wolf: 'wolf', wolfking: 'wolf', whitewolfking: 'wolf', wolfbeauty: 'wolf', hiddenwolf: 'wolf',
+    seer: 'god', witch: 'god', hunter: 'god', guard: 'god',
+    idiot: 'god', knight: 'god', dreamer: 'god', crow: 'god',
+    villager: 'villager', admirer: 'villager',
+  };
+
   /** 页面级 defs：四个方向的剖面渐变 + 角块渐变 + 抛光 + 徽记/宝石/卷草（页面只注入一份） */
   const DEFS = `
 <svg id="${DEFS_ID}" width="0" height="0" aria-hidden="true" focusable="false"
@@ -190,13 +223,10 @@
       <path d="M1.5 0 V3" stroke="#000" stroke-width=".3" opacity=".15"/>
     </pattern>
 
-    <!-- ============ 顶部徽记：月牙 + 狼爪（阵营色由 var(--fr-accent) 注入） ============ -->
+    <!-- ============ 徽记底盘（三个阵营共用：六边凹座） ============ -->
+    <!-- ============ 狼阵营徽记：月牙 + 狼爪；也是无阵营时（牌背）的品牌记号 ============ -->
     <g id="frCrest">
-      <!-- 底盘：六边凹座（大了才读得出是"徽记"而不是一颗扣子） -->
-      <path d="M-8 0 L-5.2 -4.35 H5.2 L8 0 L5.2 4.35 H-5.2 Z" fill="url(#frPlate)" stroke="#080502" stroke-width=".55"/>
-      <path d="M-8 0 L-5.2 -4.35 H5.2 L8 0" fill="none" stroke="#cbb573" stroke-width=".34" opacity=".45"/>
-      <path d="M-5.2 4.35 H5.2 L8 0" fill="none" stroke="#000" stroke-width=".3" opacity=".5"/>
-      <path d="M-6.8 0 L-4.5 -3.55 H4.5 L6.8 0 L4.5 3.55 H-4.5 Z" fill="none" stroke="#f2e2a8" stroke-width=".16" opacity=".2"/>
+      ${PLATE}
       <!-- 月牙（银白）：比爪印大一圈，从两侧与上方露出来 -->
       <path d="M0.7 -4.15 A4.15 4.15 0 1 0 0.7 4.15 A3.25 3.25 0 1 1 0.7 -4.15 Z"
             fill="#e6ecf7" opacity=".5"/>
@@ -213,6 +243,31 @@
       <path d="M1.95 2.55 C2.6 1.5 2.7 .6 2.45 -.15 C2.35 1.05 2.2 1.95 1.95 2.55 Z" fill="#0d0802" opacity=".45"/>
       <ellipse cx="-0.95" cy="-3.25" rx=".38" ry=".5" fill="#fff8dc" opacity=".3"/>
       <ellipse cx="1.0" cy="-3.22" rx=".38" ry=".5" fill="#fff8dc" opacity=".3"/>
+    </g>
+
+    <!-- ============ 神阵营徽记：四芒星（神力 / 启示） ============ -->
+    <g id="frCrestGod">
+      ${PLATE}
+      <g fill="#140d03" stroke="#140d03" stroke-width=".7">${STAR}
+      </g>
+      <g fill="var(--fr-accent, #e8c45c)">${STAR}
+      </g>
+      <path d="M-1.05 -1.5 C-.4 -.7 -.2 -.4 0 0 C-.5 -.35 -1.0 -.85 -1.05 -1.5 Z" fill="#fff8dc" opacity=".38"/>
+      <circle cx="0" cy="0" r=".6" fill="#fff8dc" opacity=".5"/>
+      <!-- 两角小火花：让"神"的徽记比狼爪更亮、更"在放光" -->
+      <path d="M3.3 -2.95 L3.62 -3.5 L3.94 -2.95 L3.62 -2.4 Z" fill="var(--fr-accent, #e8c45c)" opacity=".75"/>
+      <path d="M-3.94 -2.95 L-3.62 -3.5 L-3.3 -2.95 L-3.62 -2.4 Z" fill="var(--fr-accent, #e8c45c)" opacity=".75"/>
+    </g>
+
+    <!-- ============ 民阵营徽记：麦穗（平民 / 收成） ============ -->
+    <g id="frCrestVil">
+      ${PLATE}
+      <g fill="#140d03" stroke="#140d03" stroke-width=".62">${WHEAT}
+      </g>
+      <g fill="var(--fr-accent, #cfe0a0)">${WHEAT}
+      </g>
+      <path d="M-.5 3.3 C-.7 2 -.7 .5 -.45 -1 C-.3 .5 -.26 2 -.16 3.3 Z" fill="#fff8dc" opacity=".24"/>
+      <ellipse cx="0" cy="-3.0" rx=".28" ry=".6" fill="#fff8dc" opacity=".3"/>
     </g>
 
     <!-- ============ 底部铭牌：浅弧托板 + 中央菱形 ============ -->
@@ -335,7 +390,11 @@
     <use class="fr-stud" href="#frStud" xlink:href="#frStud" transform="translate(3.5 98) rotate(90)"/>
     <use class="fr-stud" href="#frStud" xlink:href="#frStud" transform="translate(96.5 52) rotate(90)"/>
     <use class="fr-stud" href="#frStud" xlink:href="#frStud" transform="translate(96.5 98) rotate(90)"/>
-    <use class="fr-crest" href="#frCrest" xlink:href="#frCrest" transform="translate(50 5.5)"/>
+    <!-- 徽记按阵营换：默认（无 data-faction，例如牌背）露狼爪 —— 那是这个游戏的品牌记号。
+         三个都画好放在这里，由 CSS 按 data-faction 切换显示，避免在 JS 里拼分支。 -->
+    <g class="fr-crest-wolf"><use href="#frCrest" xlink:href="#frCrest" transform="translate(50 5.5)"/></g>
+    <g class="fr-crest-god"><use href="#frCrestGod" xlink:href="#frCrestGod" transform="translate(50 5.5)"/></g>
+    <g class="fr-crest-vil"><use href="#frCrestVil" xlink:href="#frCrestVil" transform="translate(50 5.5)"/></g>
     <use class="fr-plate" href="#frPlateOrn" xlink:href="#frPlateOrn" transform="translate(50 ${VIEW.h - 5})"/>
     <use class="fr-corner" href="#frCorner" xlink:href="#frCorner" transform="translate(${BX} ${BYT})"/>
     <use class="fr-corner" href="#frCorner" xlink:href="#frCorner" transform="translate(${VIEW.w - BX} ${BYT}) scale(-1 1)"/>
@@ -370,18 +429,34 @@
   }
 
   /**
-   * 角色卡的外层 <div> 需要带 `data-role="<id>"`：框带的阵营染色与
-   * 角色专属强调色（徽记 / 托角宝石）全部由 style.css 里
-   * `.card-frame[data-role=...]` 那组规则决定 —— 这样"每个角色一张卡"的
-   * 配色只有一处来源，调用方只负责把 id 带过来。
-   * @param {string} [rid] 角色 id；空值返回空串（无角色卡走默认金色）
+   * 取角色对应的数据集属性（单一原语，`roleAttr()` 与调用方 `dataset` 赋值都走这里，
+   * 免得两处各自清理字符、各自忘记带阵营）。
+   * @param {string} [rid] 角色 id
+   * @returns {{role?: string, faction?: string}}
    */
-  function roleAttr(rid) {
-    if (!rid) return '';
-    return ` data-role="${String(rid).replace(/[^\w-]/g, '')}"`;
+  function roleAttrs(rid) {
+    if (!rid) return {};
+    const id = String(rid).replace(/[^\w-]/g, '');
+    if (!id) return {};
+    return FACTION[id] ? { role: id, faction: FACTION[id] } : { role: id };
   }
 
-  const api = { html, ensureDefs, roleAttr, DEFS, FRAME, DEFS_ID, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R };
+  /**
+   * 角色卡的外层 <div> 需要带 `data-role="<id>"` 与 `data-faction="<阵营>"`：
+   * 框带的阵营染色、角色专属强调色（徽记 / 托角宝石）与**徽记图形**全部由 style.css 里
+   * `.card-frame[data-role=...]` / `[data-faction=...]` 那组规则决定 ——
+   * 这样"每个角色一张卡"的配色只有一处来源，调用方只负责把 id 带过来。
+   * @param {string} [rid] 角色 id；空值返回空串（无角色卡走默认金色 + 狼爪品牌徽记）
+   */
+  function roleAttr(rid) {
+    const a = roleAttrs(rid);
+    let out = '';
+    if (a.role) out += ` data-role="${a.role}"`;
+    if (a.faction) out += ` data-faction="${a.faction}"`;
+    return out;
+  }
+
+  const api = { html, ensureDefs, roleAttr, roleAttrs, DEFS, FRAME, DEFS_ID, FACTION, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R };
   root.CardFrame = api;
   // 用 typeof 守卫而不是 root.module：被 require 的模块里 globalThis.module 是 undefined，
   // root.module 那条路永远不会执行（require 只会拿到空对象）。浏览器里没有 module，

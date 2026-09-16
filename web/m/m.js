@@ -1274,7 +1274,8 @@ function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
   const card = el('div', 'inspect-card card-frame');
-  card.dataset.role = rid;
+  // 与桌面端同理：走 roleAttrs 原语，必须同时带上 data-faction，否则徽记永远是狼爪
+  Object.assign(card.dataset, window.CardFrame.roleAttrs(rid));
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
   const frame = window.CardFrame.html();
   if (ext) {

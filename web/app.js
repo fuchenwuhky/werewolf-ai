@@ -907,7 +907,9 @@ function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
   const card = el('div', 'inspect-card card-frame');
-  card.dataset.role = rid;
+  // 走 roleAttrs 原语而不是手写 data-role：它同时给出阵营（徽记按阵营换图形），
+  // 只写 data-role 的话检视大卡会一直露狼爪
+  Object.assign(card.dataset, window.CardFrame.roleAttrs(rid));
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
   const frame = window.CardFrame.html();
   if (ext) {
