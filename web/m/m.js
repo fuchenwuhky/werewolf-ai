@@ -1268,12 +1268,13 @@ function roleArtHtml(rid) {
   const face = ext
     ? `<img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}">`
     : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
-  return `<div class="card-frame">${window.CardFrame.html()}${face}</div>`;
+  return `<div class="card-frame"${window.CardFrame.roleAttr(rid)}>${window.CardFrame.html()}${face}</div>`;
 }
 function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
   const card = el('div', 'inspect-card card-frame');
+  card.dataset.role = rid;
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
   const frame = window.CardFrame.html();
   if (ext) {

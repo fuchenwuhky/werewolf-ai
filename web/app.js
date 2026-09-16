@@ -899,7 +899,7 @@ function roleArtHtml(rid) {
   const face = ext
     ? `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">`
     : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
-  return `<div class="card-frame">${window.CardFrame.html()}${face}</div>`;
+  return `<div class="card-frame"${window.CardFrame.roleAttr(rid)}>${window.CardFrame.html()}${face}</div>`;
 }
 
 /** 检视模式：大卡 + 指针 3D 倾斜（复用 .card-frame，不再单独维护一份金属框 CSS） */
@@ -907,6 +907,7 @@ function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
   const card = el('div', 'inspect-card card-frame');
+  card.dataset.role = rid;
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
   const frame = window.CardFrame.html();
   if (ext) {
@@ -1226,7 +1227,7 @@ function renderMyRoleCard(v) {
     ? `<img class="role-art" src="assets/roles/${v.me.role}${ext}" alt="">`
     : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div></div>`;
   box.innerHTML = `
-    <div class="mrc-art"><div class="card-frame">${window.CardFrame.html()}${face}</div></div>
+    <div class="mrc-art"><div class="card-frame"${window.CardFrame.roleAttr(v.me.role)}>${window.CardFrame.html()}${face}</div></div>
     <div class="mrc-info">
       <div class="mrc-role" style="color:${r.color}">${r.emoji} ${r.name}</div>
       <div class="mrc-sub">${v.me.seat}号 · ${v.me.alive ? '存活' : '出局'}${v.me.isSheriff ? ' · 👑警长' : ''}</div>
