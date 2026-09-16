@@ -857,28 +857,28 @@ function seatLabel(seat) {
 function roleInfo(rid) { return state.meta.roles[rid]; }
 
 /** 角色卡图：assets/roles/<id>.<ext> 存在则用图，否则回退内置哥特占位卡。
- *  两种都套同一套金属框 —— 缺图时也不该是一张没有装饰的裸框。 */
+ *  两种都套同一套手绘 SVG 金属框（card-frame.js）—— 缺图时也不该是一张没有装饰的裸框。 */
 function roleArtHtml(rid) {
   const r = roleInfo(rid);
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const orn = '<span class="fr-corner c1"></span><span class="fr-corner c2"></span><span class="fr-corner c3"></span><span class="fr-corner c4"></span><span class="fr-gem"></span><span class="fr-orn">✠</span>';
   const face = ext
     ? `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">`
     : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
-  return `<div class="card-frame">${orn}${face}</div>`;
+  return `<div class="card-frame">${window.CardFrame.html()}${face}</div>`;
 }
 
-/** 检视模式：大卡 + 指针 3D 倾斜 + 雾气流光 */
+/** 检视模式：大卡 + 指针 3D 倾斜（复用 .card-frame，不再单独维护一份金属框 CSS） */
 function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
-  const card = el('div', 'inspect-card');
+  const card = el('div', 'inspect-card card-frame');
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
+  const frame = window.CardFrame.html();
   if (ext) {
-    card.innerHTML = `<div class="inner"><img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">
+    card.innerHTML = `${frame}<div class="inner"><img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">
       <div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div></div>`;
   } else {
-    card.innerHTML = `<div class="in-body"><div class="in-emoji">${r.emoji}</div>
+    card.innerHTML = `${frame}<div class="in-body"><div class="in-emoji">${r.emoji}</div>
       <div class="in-name gilt-name">${r.name}</div>
       <div class="in-desc">${escapeHtml(r.short)}</div></div>`;
   }
@@ -1186,9 +1186,13 @@ function renderMyRoleCard(v) {
   const r = roleInfo(v.me.role);
   box.classList.remove('hidden');
   const ext = state.meta.roleArt && state.meta.roleArt[v.me.role];
-  const art = ext ? `<img src="assets/roles/${v.me.role}${ext}" alt="">` : `<span class="mrc-emoji">${r.emoji}</span>`;
+  // 与翻牌 / 检视 / 图鉴共用同一套手绘 SVG 框。
+  // 这里原来直接塞一张裸 <img>（全站唯一没有卡框的角色卡），同一个"角色卡"有两套视觉。
+  const face = ext
+    ? `<img class="role-art" src="assets/roles/${v.me.role}${ext}" alt="">`
+    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div></div>`;
   box.innerHTML = `
-    <div class="mrc-art">${art}</div>
+    <div class="mrc-art"><div class="card-frame">${window.CardFrame.html()}${face}</div></div>
     <div class="mrc-info">
       <div class="mrc-role" style="color:${r.color}">${r.emoji} ${r.name}</div>
       <div class="mrc-sub">${v.me.seat}号 · ${v.me.alive ? '存活' : '出局'}${v.me.isSheriff ? ' · 👑警长' : ''}</div>

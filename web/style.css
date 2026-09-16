@@ -370,12 +370,12 @@ details summary:hover { color: var(--gold-bright); }
   border: 1px solid var(--line-dim); border-radius: var(--r-md);
   box-shadow: var(--el-2), inset 0 0 0 1px rgba(201,162,39,.14);
 }
-.mrc-art { flex: none; width: 58px; border-radius: var(--r-sm); overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,.6); }
-.mrc-art img { width: 58px; height: 87px; object-fit: cover; display: block; }
-.mrc-art .mrc-emoji {
-  width: 58px; height: 87px; display: flex; align-items: center; justify-content: center; font-size: 32px;
-  background: radial-gradient(ellipse at center, #2a2038, #0e0b16);
-}
+/* 侧栏常驻身份卡：以前是 58×87 的**裸图**（全站唯一没有卡框的角色卡），
+   现在套同一套 SVG 金属框。宽度从 58 → 64px，让 7% 的框带（4.5px）在线脚上还分得清。 */
+.mrc-art { flex: none; width: 64px; }
+.mrc-art .card-frame { width: 100%; }
+.mrc-art .role-art-fallback .fa-emoji { font-size: 20px; }
+.mrc-art .role-art-fallback .fa-name { display: none; } /* 64px 宽放不下角色名 */
 .mrc-info { flex: 1; min-width: 0; }
 .mrc-role { font-size: var(--fs-lg); font-family: var(--font-cn-title); letter-spacing: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mrc-sub { font-size: var(--fs-xs); color: var(--muted); margin-top: 2px; }
@@ -575,67 +575,45 @@ details summary:hover { color: var(--gold-bright); }
 .codex .r-card h4 { margin: var(--sp-2) 0 var(--sp-1); font-size: var(--fs-base); font-family: var(--font-cn-title); color: var(--gold-bright); }
 .codex .r-card p { margin: 0 0 var(--sp-1); color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; }
 /* ============================================================
-   角色卡：分层金属框
+   角色卡：手绘 SVG 金属框
    ------------------------------------------------------------
-   原来是一圈 5px 的扁平金色渐变带，四角铆钉与顶部宝石用负偏移放在框**外面**
-   （-6px / -9px），看起来像没对齐的瑕疵；画窗又压了 16px 的黑色内阴影，
-   整张卡发灰（用户说的"糊"）。现在：
-     外圈暗包边 → 金属带（斜向明暗 + 高光）→ 内侧暗刻线 → 画窗（细亮线 + 很轻的凹感）
-   所有装饰都落在框带上，不外溢。
+   框本体由 card-frame.js 画（内联 SVG，设计说明见该文件顶部）：
+   四条斜接梯形 + 横截面金属渐变（外暗边→亮倒角→刻槽→反光轨→内凹边）+ 抛光斜高光
+   + 四角金托角饰 + 顶部切面宝石 + 底部对称卷草。CSS 不再用 background 拼金属。
+
+   ⚠ 两个变量必须与 SVG 的 viewBox(100×150、框带 7 单位) 严格对应：
+     --band   = 7%      —— 百分比 padding / left / right 按**宽度**解析 ✓
+     --band-y = 4.667%  —— 百分比 top / bottom 按**高度**解析，7/150 = 4.667%，纵向必须用这个
+     给 bottom 直接写 var(--band) 会算成 10.5 单位（不是 7），角色名底板会压住框带（踩过）
    ============================================================ */
 .card-frame {
   position: relative; width: 100%; aspect-ratio: 2/3;
-  --band: 11px;                         /* 框带宽度，装饰按它定位 */
+  --band: 7%;
+  --band-y: 4.667%;
   padding: var(--band);
-  border-radius: 5px;
-  background:
-    linear-gradient(135deg, rgba(255,248,220,.30), transparent 36%),
-    linear-gradient(168deg,
-      #6b5416 0%, #a8842a 7%, #e8d18d 20%, #bb9539 36%, #8a6d1d 49%,
-      #dcc276 60%, #a8842a 74%, #5c4712 90%, #7d6318 100%);
-  box-shadow:
-    0 0 0 1px #16110a,                                  /* 外圈暗包边 */
-    0 12px 32px rgba(0,0,0,.72),
-    inset 0 0 0 1px rgba(255,246,214,.28);
+  background: none;
+  box-shadow: 0 12px 32px rgba(0,0,0,.72);   /* 只保留投影：框体本身由 SVG 画 */
+  container-type: inline-size;                /* 供下面按卡宽隐藏过细的装饰 */
 }
-.card-frame::before {                 /* 画窗：暗槽 + 内亮线 + 极轻的凹感 */
-  content: ''; position: absolute; inset: var(--band); z-index: 2; pointer-events: none;
-  border-radius: 2px;
-  box-shadow:
-    inset 0 0 0 1px #0c0804,
-    inset 0 0 0 2px rgba(244,227,160,.24),
-    inset 0 2px 8px rgba(0,0,0,.55);
+/* 框层铺满整卡并压在插画之上（画窗处透明，插画透出来）。
+   pointer-events:none 保证不挡检视卡的点击与指针倾斜。 */
+.card-frame > .fr-svg {
+  position: absolute; inset: 0; z-index: 3; display: block;
+  width: 100%; height: 100%; pointer-events: none;
 }
-.card-frame::after {                  /* 框带上的内刻线 */
-  content: ''; position: absolute; inset: 4px; z-index: 1; pointer-events: none;
-  border-radius: 4px; border: 1px solid rgba(18,12,4,.8);
-}
-/* 框内插画不再自己算比例（否则 aspect-ratio 会参与高度解析，卡框比卡片高出 4px） */
+/* 插画圆角要与 SVG 画窗的圆角一致：SVG 里 rx=1.6 单位 = 宽度 1.6% = 高度 1.067%，
+   所以用 x/y 两个值（写单个百分比会被解析成纵向也按该比例，比画窗更圆） */
 .card-frame .role-art {
+  position: relative; z-index: 1;
   width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover;
-  display: block; border-radius: 2px; margin: 0;
+  display: block; margin: 0; border-radius: 1.6% / 1.067%;
 }
-/* 四角铆钉：缩小并落在框带中线上（原来是 12px 且偏移 -6px，整个飘在框外） */
-.card-frame .fr-corner {
-  position: absolute; z-index: 4; width: 9px; height: 9px; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(circle at 33% 28%, #fdf3c8 0%, #ecd489 30%, #c9a227 58%, #7a5f14 86%, #57430e 100%);
-  box-shadow: 0 0 0 1px #1c1408, 0 1px 3px rgba(0,0,0,.8);
-}
-.card-frame .fr-corner.c1 { top: 3px; left: 3px; }
-.card-frame .fr-corner.c2 { top: 3px; right: 3px; }
-.card-frame .fr-corner.c3 { bottom: 3px; left: 3px; }
-.card-frame .fr-corner.c4 { bottom: 3px; right: 3px; }
-/* 顶部血红宝石：坐在框带上（原来 top:-9px，一半悬在卡外） */
-.card-frame .fr-gem {
-  position: absolute; top: 2px; left: 50%; z-index: 4;
-  width: 9px; height: 9px; transform: translateX(-50%) rotate(45deg);
-  background: radial-gradient(circle at 34% 30%, #ffb3bb 0%, #e0334a 40%, #8e1022 76%, #4a0511 100%);
-  box-shadow: 0 0 0 1px #1c1408, 0 0 0 2px #d9bc6a, 0 2px 5px rgba(0,0,0,.8);
-}
-.card-frame .fr-orn {
-  position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%);
-  z-index: 3; font-size: 9px; color: #f0dfa0; line-height: 1; pointer-events: none;
-  text-shadow: 0 1px 1px #140e05;
+.card-frame .role-art-fallback { position: relative; z-index: 1; }
+/* 卡宽 < 150px 时（侧栏身份卡/抽屉身份卡），框带上的菱形铆钉只有 1px 上下，
+   渲染出来就是一团糊 —— 直接不画。容器查询不支持的老 WebView 会保留铆钉：
+   属于"多画了一点细节"，不会坏。 */
+@container (max-width: 150px) {
+  .card-frame .fr-stud { display: none; }
 }
 .role-art { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block; border-radius: var(--r-sm); margin-bottom: var(--sp-2); }
 /* 无插画时的回退卡：也套同一套框，别让"缺图"变成一张没装饰的裸框 */
@@ -681,13 +659,12 @@ details summary:hover { color: var(--gold-bright); }
   background: radial-gradient(ellipse at center, #1a1428 0%, #0e0b16 80%);
   padding: 0;
   /* 角色名是 .card-frame 的**兄弟**节点：自定义属性不跨兄弟继承，
-     所以 --band 必须也定义在 .flip-front 上（否则下面 left/bottom 的 var() 整条失效，
+     所以 --band/--band-y 必须也定义在 .flip-front 上（否则下面 left/bottom 的 var() 整条失效，
      角色名会掉到卡外面去 —— 踩过一次）。position:relative 让它成为定位参照。 */
-  position: relative; --band: 11px;
+  position: relative; --band: 7%; --band-y: 4.667%;
 }
 /* 卡框必须严格等于卡片尺寸：不能让它按插画的自然比例长高（实测会高出 2~4px 顶出卡外） */
 .flip-front .card-frame { flex: none; width: 100%; height: 100%; aspect-ratio: auto; }
-.flip-front .card-frame .fr-orn { display: none; } /* 底部中央留给角色名 */
 .flip-front .role-art-fallback { flex: 1; aspect-ratio: auto; }
 /* 錾金标题字：金色渐变填充 + 细描边 + 一层暗投影。
    原来描边 1px + 两层 drop-shadow，中文字形笔画密，叠起来就是"糊"；现在描边减半、投影只留一层。 */
@@ -703,10 +680,10 @@ details summary:hover { color: var(--gold-bright); }
    .gilt-name 是靠 background-clip:text + color:transparent 上色的，两者都写 background 时
    底板会覆盖金色渐变，文字就整段变成透明的（踩过一次，名字直接消失）。 */
 .flip-front .r-name {
-  position: absolute; left: var(--band); right: var(--band); bottom: var(--band); z-index: 5;
+  position: absolute; left: var(--band); right: var(--band); bottom: var(--band-y); z-index: 5;
   font-size: 24px; letter-spacing: 5px; text-indent: 5px; line-height: 1.2;
   padding: 26px var(--sp-2) var(--sp-2);
-  border-radius: 0 0 2px 2px;
+  border-radius: 0 0 2% 2%;
 }
 .flip-front .r-name::before {
   content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 0 0 2px 2px;
@@ -743,43 +720,25 @@ details summary:hover { color: var(--gold-bright); }
   animation: mist 9s ease-in-out infinite alternate;
 }
 @keyframes mist { from { transform: translateX(-3%) scale(1); } to { transform: translateX(3%) scale(1.06); } }
-/* 检视模式：同一套金属框 + 底部信息板（去掉扫过文字的流光动画 —— 它每 3.2 秒洗一次角色名） */
+/* 检视模式：复用同一套 .card-frame（框体由 SVG 画），这里只加"大卡 + 指针 3D 倾斜"
+   和底部信息板。原来这里有一份与 .card-frame 平行的金属框 CSS（同样是 background 拼），
+   两处会各自漂移；现在统一到一处。 */
 .inspect-card {
   position: relative; width: min(320px, 70vw); aspect-ratio: 2/3;
-  --band: 12px;
   transform-style: preserve-3d; transition: transform .12s ease-out;
-  padding: var(--band); border-radius: var(--r-sm);
-  background:
-    linear-gradient(135deg, rgba(255,248,220,.30), transparent 36%),
-    linear-gradient(168deg,
-      #6b5416 0%, #a8842a 7%, #e8d18d 20%, #bb9539 36%, #8a6d1d 49%,
-      #dcc276 60%, #a8842a 74%, #5c4712 90%, #7d6318 100%);
-  box-shadow:
-    0 0 0 1px #16110a,
-    0 32px 90px rgba(0,0,0,.85),
-    inset 0 0 0 1px rgba(255,246,214,.28);
+  box-shadow: 0 32px 90px rgba(0,0,0,.85);
   cursor: pointer;
 }
-.inspect-card::before {          /* 画窗刻线 */
-  content: ''; position: absolute; inset: var(--band); z-index: 2; pointer-events: none;
-  border-radius: var(--r-xs);
-  box-shadow: inset 0 0 0 1px #0c0804, inset 0 0 0 2px rgba(244,227,160,.24);
-}
-.inspect-card::after {           /* 静态高光（不再做扫光动画） */
-  content: ''; position: absolute; inset: var(--band); z-index: 3; pointer-events: none;
-  border-radius: var(--r-xs);
-  background: linear-gradient(122deg, rgba(255,255,255,.09) 0%, transparent 34%);
-}
-.inspect-card .inner { position: absolute; inset: var(--band); border-radius: var(--r-xs); overflow: hidden; }
+.inspect-card .inner { position: absolute; inset: var(--band-y) var(--band); overflow: hidden; }
 .inspect-card .in-overlay {
   position: absolute; left: 0; right: 0; bottom: 0; padding: 40px var(--sp-4) var(--sp-3); text-align: center;
   background: linear-gradient(180deg, transparent 0%, rgba(6,4,10,.72) 40%, rgba(6,4,10,.96) 100%);
 }
 .inspect-card .in-overlay .in-name { font-size: 22px; font-family: var(--font-cn-title); letter-spacing: 5px; text-indent: 5px; }
 .inspect-card .in-overlay .in-desc { font-size: var(--fs-md); color: var(--text-dim); margin-top: var(--sp-2); line-height: 1.65; }
-.inspect-card img.role-art { width: 100%; height: 100%; margin: 0; border: none; border-radius: var(--r-xs); display: block; }
+.inspect-card img.role-art { width: 100%; height: 100%; margin: 0; border: none; display: block; }
 .inspect-card .in-body {
-  position: absolute; inset: var(--band); border-radius: var(--r-xs);
+  position: absolute; inset: var(--band-y) var(--band);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); padding: var(--sp-5);
   background: radial-gradient(ellipse at 50% 34%, #322647 0%, #120d1c 76%);
 }

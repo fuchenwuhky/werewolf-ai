@@ -27,6 +27,7 @@ const SHELL = [
   '/index.html',
   '/style.css',
   '/i18n.js',
+  '/card-frame.js',
   '/app.js',
   '/pwa.js',
   '/offline.html',

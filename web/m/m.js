@@ -54,7 +54,15 @@ async function init() {
   $('#m-me-btn').addEventListener('click', showMyCard);
   $('#m-drawer-close').addEventListener('click', closeDrawer);
   $('#m-drawer-mask').addEventListener('click', closeDrawer);
-  document.querySelectorAll('.dtab[data-tab]').forEach((b) => b.addEventListener('click', () => selectDrawerTab(b.dataset.tab)));
+  // 点标签只切显示、不渲染内容 —— renderMeTab() 原先只在 openDrawer('me') 里调用，
+  // 而 openDrawer('me') 没有任何调用方（头部 🎴 按钮走的是 showMyCard 翻牌浮层），
+  // 于是"我的身份"标签永远是一张空白页。这里补上内容渲染。
+  document.querySelectorAll('.dtab[data-tab]').forEach((b) =>
+    b.addEventListener('click', () => {
+      selectDrawerTab(b.dataset.tab);
+      if (b.dataset.tab === 'me') renderMeTab();
+    })
+  );
   tryResume();
   window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
 }
@@ -1130,19 +1138,25 @@ function buildActionUI(v, p, box) {
 function roleArtHtml(rid) {
   const r = roleInfo(rid);
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const corners = '<span class="fr-corner c1"></span><span class="fr-corner c2"></span><span class="fr-corner c3"></span><span class="fr-corner c4"></span><span class="fr-gem"></span><span class="fr-orn">✠</span>';
-  if (ext) return `<div class="card-frame">${corners}<img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}"></div>`;
-  return `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
+  // 注意：这里原来只在"有插画"的分支外面包 .card-frame，缺图时返回的是一张**没有卡框**的裸卡；
+  // 桌面版两个分支都包了。现在两支统一走同一套手绘 SVG 框（card-frame.js）。
+  const face = ext
+    ? `<img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}">`
+    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
+  return `<div class="card-frame">${window.CardFrame.html()}${face}</div>`;
 }
 function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
-  const card = el('div', 'inspect-card');
+  const card = el('div', 'inspect-card card-frame');
   const ext = state.meta.roleArt && state.meta.roleArt[rid];
+  const frame = window.CardFrame.html();
   if (ext) {
-    card.innerHTML = `<img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}"><div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div>`;
+    // 插画与信息板都放进 .inner：绝对定位的包含块是 padding box，
+    // 直接挂在卡上会让底部信息板压住金框下沿（桌面版一直有 .inner 包着）
+    card.innerHTML = `${frame}<div class="inner"><img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}"><div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div></div>`;
   } else {
-    card.innerHTML = `<div class="in-body"><div class="in-emoji">${r.emoji}</div><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div>`;
+    card.innerHTML = `${frame}<div class="in-body"><div class="in-emoji">${r.emoji}</div><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div>`;
   }
   stage.appendChild(card);
   stage.appendChild(el('div', 'inspect-hint', '移动指针检视 · 点击关闭'));
