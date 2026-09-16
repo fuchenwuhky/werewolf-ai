@@ -142,3 +142,37 @@ test('/api/config：GET 必须能读回全部配置项（除密钥），PUT 的�
   }
 });
 
+test('/view：流式缓冲里的 JSON 壳子不得下发（用户反馈"先出现 text 标签，输出完才消失"）', () => {
+  const api = makeApi();
+  const g = makeGame('api-live-shell');
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
+  api.games.set(g.id, entry);
+  const view = () => {
+    const box = capture();
+    api.view(box.res, entry, new URLSearchParams('token=gt&after=0'));
+    return box.body.live;
+  };
+
+  // 模型是被 JSON schema 约束着输出的，逐字增量拼起来就是这种半成品 JSON
+  g.beginLive({ seat: 1, task: 'speech', public: true });
+  g.updateLive({ content: '{"text":"我是好人' });
+  assert.strictEqual(view().text, '我是好人', '下发的必须只有正文，不能带 {"text":" 壳子');
+
+  // 还没吐到 text 的值：给空串（前端显示"正在思考…"，而不是半个壳子）
+  g.live.text = '{"te';
+  assert.strictEqual(view().text, '', '壳子阶段必须为空');
+
+  // 吐完：正好是全文，且不带后面的 ","explode":false}
+  g.live.text = '{"text":"我是好人，先听后置位。","explode":false,"target":0}';
+  assert.strictEqual(view().text, '我是好人，先听后置位。');
+
+  // 上帝视角的内心独白是自由文本，不能被当 JSON 处理
+  g.live.reasoning = '他这句像是在保 7 号';
+  const godView = view();
+  assert.strictEqual(godView.reasoning, '他这句像是在保 7 号', 'reasoning 必须原样保留给上帝面板');
+  assert.strictEqual(godView.task, 'speech');
+  assert.strictEqual(godView.public, true);
+  g.endLive();
+  assert.strictEqual(view(), null, '空闲时仍必须是 null');
+});
+

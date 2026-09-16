@@ -119,17 +119,21 @@ html, body { height: 100%; overscroll-behavior: none; }
   padding: var(--sp-2) var(--sp-2) 0;
 }
 /* 座位列刻意做窄：它每多 1px 都是从中间的发言正文里抠走的。
-   列高通常远大于 6 个座位，用 space-evenly 把头像均匀铺开（用户要求"头像之间离远一点"）；
-   16 人局超出一屏时它会退化成从顶部排列 + 自己滚动。 */
+   间隔固定 14px（**不进 space-* 分布**：那会把间隔拉到 40px+，看着松散 ——
+   用户反馈"头像之间不需要间隔那么大"）；整组在列内竖向居中，留白上下对称。
+   `safe center` 是关键：16 人局内容超高时它会退回顶部并正常滚动，
+   而纯 center 在溢出时会把第一个座位顶到滚不到的位置。 */
 .m-seatcol {
   flex: 0 0 52px; min-width: 0;
-  display: flex; flex-direction: column; justify-content: space-evenly; gap: 6px;
+  display: flex; flex-direction: column; justify-content: safe center; gap: 14px;
   padding: 2px 0; overflow: auto; overscroll-behavior: contain;
 }
 .m-flow-wrap { position: relative; flex: 1 1 auto; min-width: 0; display: flex; }
 .m-flow {
-  flex: 1 1 auto; min-width: 0; overflow: auto; overscroll-behavior: contain;
-  padding: 6px 5px 18px;
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  display: flex; flex-direction: column; gap: 8px; /* 气泡之间必须有间隔，否则挤成一片 */
+  overflow: auto; overscroll-behavior: contain;
+  padding: 7px 6px 18px;
   background: linear-gradient(180deg, rgba(30,23,46,.5), rgba(12,9,20,.72));
   border: 1px solid var(--line-dim); border-radius: var(--r-md);
   font-size: var(--fs-base); line-height: 1.7;
@@ -149,7 +153,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 }
 .m-flow .msg.mine .meta .who { color: var(--gold-bright); }
 .m-flow .msg.mine .meta .who::after { content: '（我）'; color: var(--muted); font-weight: 400; }
-.m-flow .msg.event { max-width: 100%; text-align: left; }
+.m-flow .msg.event { max-width: 100%; align-self: stretch; text-align: left; }
 .m-flow .banner { font-size: var(--fs-md); padding: 5px var(--sp-2); }
 .m-flow .sysline { max-width: 100%; font-size: var(--fs-sm); }
 /* 「↓ 最新」：往上翻看历史时出现，避免"信息跑出视野后回不去" */

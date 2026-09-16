@@ -219,7 +219,10 @@ test('座位：去掉外框、缩小头像、均匀铺开（把宽度让给中�
   const col = block(MCSS, '.m-seatcol {');
   const w = Number((col.match(/flex:\s*0 0 (\d+)px/) || [])[1]);
   assert.ok(w > 0 && w <= 56, `座位列必须收窄到 ≤56px（当前 ${w}px）：每多 1px 都是从发言正文里抠的`);
-  assert.match(col, /justify-content:\s*space-evenly/, '座位要在列高里均匀铺开（用户要求"头像之间离远一点"）');
+  // 不进"铺满整列"那种分布：铺满会把间隔拉到 40px+，看着松散（用户反馈过）
+  assert.match(col, /justify-content:\s*safe center/, '座位整组竖向居中，且用 safe 防止溢出时滚不到头');
+  assert.ok(!/space-(evenly|between|around)/.test(col), '座位不许再用 space-* 铺开整列');
+  assert.match(col, /gap:\s*(1[0-9]|2[0-5])px/, '座位间隔 ≤25px');
   // 状态不再依赖方框描边
   assert.ok(!/\.srow\.picked \{[\s\S]{0,80}border:\s*1px solid/.test(MCSS), '.picked 应改用头像圆环，不再给整格描边');
   assert.match(block(MCSS, '.srow.pickable .num {'), /border-style:\s*dashed/, '可选座位的虚线应落在头像圆环上');
@@ -227,9 +230,15 @@ test('座位：去掉外框、缩小头像、均匀铺开（把宽度让给中�
 });
 
 test('消息：一律左对齐，靠颜色区分（不再 AI 左我右）', () => {
-  const flow = block(MCSS, '.m-flow .msg {');
-  assert.match(flow, /align-self:\s*stretch/, '消息必须占满整列宽度，否则右半边宽度被浪费');
-  assert.match(flow, /max-width:\s*100%/, '消息不得再被 max-width 限制成 86%');
+  const flow = block(MCSS, '.m-flow {');
+  // 气泡必须有间隔：旧版 .m-flow 不是 flex 容器、.msg 也没有 margin，
+  // 相邻两条气泡是贴在一起的（用户反馈"消息气泡之间间隔太小"）
+  assert.match(flow, /display:\s*flex/, '.m-flow 必须是 flex 列，否则 .msg 的 align-self 无效、气泡之间也没有间隔');
+  assert.match(flow, /flex-direction:\s*column/);
+  assert.ok(Number((flow.match(/gap:\s*(\d+)px/) || [])[1]) >= 6, '气泡间隔至少 6px');
+  const msg = block(MCSS, '.m-flow .msg {');
+  assert.match(msg, /align-self:\s*stretch/, '消息必须占满整列宽度，否则右半边宽度被浪费');
+  assert.match(msg, /max-width:\s*100%/, '消息不得再被 max-width 限制成 86%');
   // m.js 不能再给发言打 right 类
   const speech = MJS.slice(MJS.indexOf("case 'speech':"), MJS.indexOf("case 'role_reveal'"));
   assert.ok(!/'right'/.test(speech), "m.js 仍给发言加 right 类（AI 左/我右已被用户否掉）");

@@ -47,6 +47,7 @@ const { ALL: NAME_POOL } = require('./names');
 const { PACES, detectPace } = require('./config');
 const { reviewFacts, humanSeatOf } = require('./engine/review');
 const { generateCoachReview, ruleReview } = require('./ai/coach');
+const { extractLiveText } = require('./ai/stream');
 
 const APP_DATA_DIR = process.env.WW_DATA_DIR || process.env.DATADIR;
 const SAVE_DIR = APP_DATA_DIR
@@ -655,7 +656,8 @@ class Api {
       } : null,
       me: me ? { seat: me.seat, name: me.name, role: me.role, alive: me.alive, isSheriff: me.isSheriff, lostVote: me.lostVote, teammates: game.wolves().some((w) => w.seat === me.seat) ? game.wolves().filter((w) => w.alive && w.seat !== me.seat).map((w) => w.seat) : [] } : null,
       // 流式直播缓冲（"打字中"）：公开发言全员可见，私密决策仅本人与上帝，reasoning 仅上帝
-      live: game.liveFor(viewer), // 流式直播缓冲（只在 AI 正在输出时才非 null，不能拿它判断"能否继续对局"）
+      // 只在 AI 正在输出时才非 null，不能拿它判断"能否继续对局"
+      live: this.cleanLive(game.liveFor(viewer)),
       // 日切反思进度（"AI 正在整理记忆…"）
       memory: game.memory || null,
       llmStats: isGod ? game.llmStats : undefined,
@@ -803,6 +805,17 @@ class Api {
         this.dropStream(st);
       }
     }
+  }
+
+  /**
+   * 直播缓冲里存的是**模型原始 JSON 增量**（`{"text":"我是好人…`）。
+   * 直接下发的话，玩家会先看到 `{"text":"` 这种壳子，等输出完解析成事件才变正常
+   * （用户反馈："先出现 text 标签，等他全部输入完才会正常消失"）。
+   * 这里把 text 字段取出来，reasoning 原样保留（那是给上帝面板看的思考）。
+   */
+  cleanLive(live) {
+    if (!live) return null;
+    return Object.assign({}, live, { text: extractLiveText(live.text) });
   }
 
   /**
