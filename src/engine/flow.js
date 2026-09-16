@@ -18,10 +18,30 @@ const { resolveNightDamage, triggersCharm } = require('./damage');
  * 现在共用语义有名字（pickTarget / mustPickOther / textOnly…），任务表一眼能看出谁和谁同类；
  * 未登记的任务会明确报"未知任务"（不是静默接受任意载荷）。
  */
+
+/** 发言正文上限（字）。超长会被截断，但**必须留痕**：静默截断会让人误以为"AI 就说了这么多"。 */
+const SPEECH_MAX_CHARS = 600;
+
+/**
+ * 截断发言并留痕（god 可见）。
+ * 为什么在这里发事件而不是在调用方：校验器是唯一还知道"原始长度"的地方，
+ * 值一旦被裁短，调用方就再也看不出这条发言被砍过。
+ */
+function clipSpeech(game, seat, raw) {
+  const t = typeof raw === 'string' ? raw.trim() : '';
+  if (t.length <= SPEECH_MAX_CHARS) return t;
+  game.emit('llm_error', {
+    actor: seat,
+    visibleTo: 'god',
+    data: { task: 'speech', error: `发言超长已截断（${t.length} → ${SPEECH_MAX_CHARS} 字）`, truncated: true },
+  });
+  return t.slice(0, SPEECH_MAX_CHARS);
+}
+
 const V = {
   /** 白天发言（含竞选发言与 PK 发言）：可附带自爆意图 */
-  speech: ({ payload, req, p, game, asInt, inCand, fail, task }) => {
-    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+  speech: ({ payload, req, p, game, asInt, inCand, fail, task, seat }) => {
+    const text = clipSpeech(game, seat, payload.text);
     if (!text) return fail('发言内容不能为空');
     const value = { text, explode: false, target: 0, withdraw: false };
     if (payload.explode) {
@@ -34,18 +54,20 @@ const V = {
         value.target = t;
       }
     }
-    if (task === 'sheriff_speech') value.withdraw = !!payload.withdraw;
+    // 退水只在允许退水的轮次生效：不该让引擎"悄悄忽略"模型以为已经生效的动作
+    // （PK 轮传 canWithdraw:false，schema 也会把 withdraw 锁成 false）
+    if (task === 'sheriff_speech' && req.canWithdraw) value.withdraw = !!payload.withdraw;
     return { ok: true, value };
   },
   /** 只要求一段文本（遗言 / 狼队提议） */
-  textOnly: ({ payload, fail }) => {
-    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+  textOnly: ({ payload, fail, game, seat }) => {
+    const text = clipSpeech(game, seat, payload.text);
     if (!text) return fail('内容不能为空');
     return { ok: true, value: { text } };
   },
   /** 狼队讨论：发言必填，可带刀口建议（0 = 建议空刀） */
-  wolfChat: ({ payload, req, asInt, inCand, fail }) => {
-    const text = typeof payload.text === 'string' ? payload.text.trim().slice(0, 600) : '';
+  wolfChat: ({ payload, req, asInt, inCand, fail, game, seat }) => {
+    const text = clipSpeech(game, seat, payload.text);
     if (!text) return fail('讨论发言不能为空');
     let target = 0;
     const raw = payload.target;
@@ -203,17 +225,38 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
     return game.ask(seat, req); // resolveHuman 内已用同一 validatePayload 校验
   }
   let note = '';
+  let lastError = '';
   for (let i = 0; i <= maxRetries; i++) {
     const request = note ? { ...req, _retryNote: note } : req;
     const raw = await game.ask(seat, request);
     const v = validatePayload(req.task, raw, req, game, seat);
     if (v.ok) return v.value;
+    lastError = v.error;
     note = `你上一次的输出不合法（${v.error}），请严格按照要求的 JSON 格式重新输出。`;
     game.logger.warn('ai', `${seat}号 ${req.task} 输出不合法：${JSON.stringify(raw).slice(0, 200)} — ${v.error}`);
+    // 每一次非法都留痕：以前只有"最终降级"那一条，中间失败几次、失败在哪一项都看不出来
+    game.emit('llm_error', {
+      actor: seat,
+      visibleTo: 'god',
+      data: { task: req.task, attempt: i + 1, error: v.error, degraded: false },
+    });
   }
   game.logger.warn('ai', `${seat}号 ${req.task} 多次输出不合法，使用降级方案`);
-  game.emit('llm_error', { actor: seat, visibleTo: 'god', data: { task: req.task, message: '多次输出不合法，已降级处理' } });
-  return fallback ? fallback() : null;
+  const value = fallback ? fallback() : null;
+  // 降级必须可见：以前只留一行"已降级处理"，玩家侧完全无感 ——
+  // 于是"暗恋对象莫名其妙绑到 1 号""遗言凭空消失"这类现象看起来像 bug 却无从追查。
+  game.emit('llm_error', {
+    actor: seat,
+    visibleTo: 'god',
+    data: {
+      task: req.task,
+      attempts: maxRetries + 1,
+      error: lastError,
+      degraded: true,
+      degradedTo: value == null ? 'null' : JSON.stringify(value).slice(0, 120),
+    },
+  });
+  return value;
 }
 
 const fb = (fn) => ({ fallback: fn });
@@ -321,7 +364,10 @@ async function settleDeath(game, seat, cause, opts = {}) {
   if (lw) {
     const req = { task: 'lastwords', _allowDead: true };
     const v = await askValidated(game, seat, req, fb(() => ({ text: '' })));
-    if (v && v.text) game.emit('speech', { actor: seat, data: { text: v.text, context: 'lastwords' } });
+    const text = (v && v.text) || '';
+    // 遗言降级不再"凭空消失"：以前 text 为空就一条事件都不发，玩家分不清
+    // "他不想说"与"AI 挂了"。现在一律落一条**中性占位**（不编造内容）并标记 degraded。
+    game.emit('speech', { actor: seat, data: { text: text || '（他没有留下遗言。）', context: 'lastwords', degraded: !text } });
   }
   // 警徽
   if (p.isSheriff) await badgeResolve(game, seat);
@@ -825,10 +871,15 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
       )
     : null;
   const bySeat = new Map();
-  for (const p of eligible) {
-    if (p.isHuman) continue;
+  const aiVoters = eligible.filter((p) => !p.isHuman);
+  // 进度可见：一次放逐投票要串行 8~11 次调用，期间**没有任何输出**，玩家只能盯着"正在思考"。
+  // 这里只播报计数（done/total），不带任何目标或座位 —— 泄露投票方向就是泄露游戏信息。
+  // 该事件同时被 context 的 NOISE_TYPES 与 effort 的 CHATTER_TYPES 排除，AI 完全感知不到。
+  if (aiVoters.length) game.emit('vote_progress', { data: { done: 0, total: aiVoters.length } });
+  for (const p of aiVoters) {
     const v = await askValidated(game, p.seat, req, fb(() => ({ target: 0 })));
     bySeat.set(p.seat, v);
+    game.emit('vote_progress', { data: { done: bySeat.size, total: aiVoters.length } });
   }
   if (humanJob) {
     const r = await humanJob;
@@ -1071,4 +1122,4 @@ async function runGameInner(game, resumeFrom = null) {
 
 module.exports = { runGame, validatePayload, secretVote, buildSpeechOrder, checkWinWithPending,
   // 供单元测试直接驱动内部阶段
-  _internals: { nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS } };
+  _internals: { askValidated, nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS } };

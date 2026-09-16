@@ -31,6 +31,10 @@ const EVENT_VISIBILITY = {
   withdraw: 'public',
   deaths: 'public',
   vote_reveal: 'public',
+  // 私密投票的"进度可见"：只播报已收集的**条数**，绝不带目标/座位 ——
+  // 投票方向是游戏信息，泄露它就是改游戏。所以它同时进 context 的 NOISE_TYPES 与
+  // effort 的 CHATTER_TYPES：AI 上下文与思考预算都不受它影响（纯 UI 反馈）。
+  vote_progress: 'public',
   sheriff_run: 'public',
   sheriff_none: 'public',
   sheriff_elected: 'public',

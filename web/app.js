@@ -846,15 +846,20 @@ async function resumePausedGame() {
 function renderLive(v) {
   const node0 = document.getElementById('live-typing');
   const l = v && v.live;
-  if (!l) {
+  // 私密投票期间：没有公开发言，但服务端会播报"已收集几票"——
+  // 那是这个阶段唯一能让玩家知道"在跑"的信号（不泄露任何目标），不能因为 live 为空就收掉。
+  const vpRaw = v && !v.finished ? state.voteProgress : null;
+  const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
+  if (!l && !vp) {
     if (node0) node0.remove();
     state.liveSig = '';
     return;
   }
-  const text = l.text || '';
-  const reasoning = l.reasoning || '';
-  const canSeeText = !!l.public || !!state.godMode;
-  const sig = `${l.seat}|${l.task}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}`;
+  const text = l ? l.text || '' : '';
+  const reasoning = l ? l.reasoning || '' : '';
+  const canSeeText = !!l && (!!l.public || !!state.godMode);
+  const secs = vp ? Math.max(0, Math.round((Date.now() - vp.at) / 1000)) : 0;
+  const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${vp ? `${vp.done}/${vp.total}@${secs}` : ''}`;
   if (node0 && state.liveSig === sig) return; // 1.2s 轮询且文本未增长：不重建 DOM
   state.liveSig = sig;
   let node = node0;
@@ -863,9 +868,17 @@ function renderLive(v) {
     node.id = 'live-typing';
     $('#stream').appendChild(node);
   }
-  const who = seatLabel(l.seat);
+  const who = l ? seatLabel(l.seat) : '';
+  const counter = vp ? ` <span class="typing-tag">已思考 ${vp.done}/${vp.total} · ${secs}s</span>` : '';
+  if (!l) {
+    let only = '<div class="meta"><span class="typing-tag">… 正在收集投票</span></div>';
+    only += `<div class="typing-body muted">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
+    node.innerHTML = only;
+    autoScroll();
+    return;
+  }
   const tag = canSeeText && text ? '✍ 正在发言' : '… 正在思考';
-  let html = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span></div>`;
+  let html = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span>${counter}</div>`;
   if (canSeeText && text) html += `<div class="typing-body">${escapeHtml(text)}<span class="caret"></span></div>`;
   else html += '<div class="typing-body muted">正在思考…<span class="caret"></span></div>';
   if (state.godMode && reasoning) html += `<div class="typing-reason">💭 ${escapeHtml(reasoning.slice(-400))}</div>`;
@@ -949,6 +962,14 @@ function appendEvents(events) {
   const stream = $('#stream');
   for (const e of events) {
     if (e.type === 'night_step') state.lastNightStep = e.data;
+    // 私密投票进度：不渲染成消息（会刷屏），只更新状态供 renderLive 显示"已思考 N/M"。
+    // 服务端只播报计数，不含任何目标/座位 —— 这里也不许把它写进聊天流。
+    if (e.type === 'vote_progress') {
+      const d = e.data || {};
+      state.voteProgress = d.done < d.total ? { done: d.done, total: d.total, at: Date.now() } : null;
+      continue;
+    }
+    if (e.type === 'vote_reveal' || e.type === 'phase' || e.type === 'game_over') state.voteProgress = null;
     const node = renderEventNode(e);
     if (node) stream.appendChild(node);
   }

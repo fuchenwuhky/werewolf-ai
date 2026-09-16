@@ -16,7 +16,7 @@ const { spotlightEvent } = require('./spotlight');
 const { estimateTokens } = require('./tokens');
 const { selectMemory } = require('./memory');
 
-const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning']);
+const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'vote_progress']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
 // lastwords：遗言是一次性短内容，high 档推理曾出现 7k tokens/286s 的极差体验，策略菜单已由提示词托底
 const FAST_TASKS = new Set([
@@ -338,7 +338,7 @@ function trimToBudget(game, player, request, state, budgetTokens) {
 }
 
 module.exports = {
-  FAST_TASKS, taskEffort, taskMaxTokens, estimateTokens, aggregate,
+  FAST_TASKS, NOISE_TYPES, taskEffort, taskMaxTokens, estimateTokens, aggregate,
   renderSnapshot, renderTranscript, renderDigests, skeletonDigest, dayFacts,
   privateLedger, memoryQuery, assemble, trimToBudget,
 };

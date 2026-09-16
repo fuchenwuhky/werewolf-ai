@@ -65,6 +65,7 @@ const TIER_ORDER = ['minimal', 'low', 'normal', 'high', 'critical'];
 const CHATTER_TYPES = new Set([
   'speech', 'wolf_propose', 'ai_thinking', 'ai_reasoning', 'phase', 'night_step',
   'system', 'direction', 'deal', 'teammates', 'llm_error', 'await_input', 'game_paused',
+  'vote_progress', // 纯 UI 进度反馈，不是信息：不参与"信息量→思考预算"的打分
 ]);
 
 /** 采集决策特征（全部确定性，零 LLM 成本） */

@@ -15,6 +15,7 @@
     "gate": "npm run lint && npm run eslint && npm run coverage && npm run eval",
     "simulate": "node scripts/simulate.js",
     "bench:memory": "node scripts/memory-bench.js",
+    "bench:pace": "node scripts/pace-bench.js",
     "gen-docs": "node scripts/gen-roles-doc.js",
     "gen-icons": "node scripts/make-icons.js",
     "ui:check": "node scripts/ui-check.js",

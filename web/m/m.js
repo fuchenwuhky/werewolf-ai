@@ -798,6 +798,12 @@ function feedStage(e, fresh) {
     }
     case 'vote_reveal':
       state.speakingSeat = 0; // 投票阶段没有发言者
+      state.voteProgress = null;
+      break;
+    // 私密投票的进度（服务端只播报计数，不含任何目标/座位）：
+    // 一次放逐投票要串行 8~11 次调用、期间没有任何输出，这里是唯一能让玩家知道"在跑"的信号。
+    case 'vote_progress':
+      state.voteProgress = d.done < d.total ? { done: d.done, total: d.total, at: Date.now() } : null;
       break;
     case 'deaths': {
       const ds = d.deaths || [];
@@ -834,17 +840,28 @@ function updateLive(v) {
   const flow = $('#m-flow');
   if (!flow) return;
   const live = v && v.live && !v.finished ? v.live : null;
+  // 私密投票期间没有公开发言（live.public=false），但服务端会播报"已收集几票"——
+  // 那是这个阶段唯一能让玩家知道"程序在跑"的信号，不能因为 live 为空就把节点收掉。
+  const vpRaw = v && v.finished ? null : state.voteProgress;
+  const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
   const node = $('#m-live');
-  if (!live) { if (node) node.remove(); return; }
+  if (!live && !vp) { if (node) node.remove(); return; }
   const n = node || (() => { const x = el('div', 'msg live'); x.id = 'm-live'; return x; })();
   if (n.parentNode !== flow) flow.appendChild(n);
   else if (n !== flow.lastElementChild) flow.appendChild(n); // 始终贴底
-  const lp = (v.players || []).find((x) => x.seat === live.seat);
-  const sig = `${live.seat}|${live.public ? 1 : 0}|${live.text || ''}`;
+  const lp = live ? (v.players || []).find((x) => x.seat === live.seat) : null;
+  const secs = vp ? Math.max(0, Math.round((Date.now() - vp.at) / 1000)) : 0;
+  const sig = `${live ? live.seat : 0}|${live && live.public ? 1 : 0}|${(live && live.text) || ''}|${vp ? `${vp.done}/${vp.total}@${secs}` : ''}`;
   if (n.dataset.sig === sig) return; // 1.2s 轮询：内容没变不重建 DOM
   n.dataset.sig = sig;
+  if (!live) {
+    // 只有投票进度：明确告诉玩家"已经收到几票、等了多久"，而不是让他盯着空白
+    n.innerHTML = '<div class="meta"><span class="hint">… 正在收集投票</span></div>'
+      + `<div class="hint">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
+    return;
+  }
   n.innerHTML = `<div class="meta"><span class="who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
-    + ` <span class="hint">${live.public ? '✍ 正在发言' : '… 正在思考'}</span></div>`
+    + ` <span class="hint">${live.public ? '✍ 正在发言' : '… 正在思考'}${vp ? ` ${vp.done}/${vp.total} · ${secs}s` : ''}</span></div>`
     + (live.public && live.text
       ? `<div>${escapeHtml(live.text)}<span class="caret"></span></div>`
       : '<div class="hint">正在思考…</div>');

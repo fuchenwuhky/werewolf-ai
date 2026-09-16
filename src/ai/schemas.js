@@ -36,7 +36,16 @@ function strictObj(props) {
 const BUILDERS = {
   // 发言类：可带自爆；白狼王自爆带人的目标必须落在候选座位上（与 validatePayload 的 inCand 严丝合缝）
   speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates), withdraw: BOOL }),
-  sheriff_speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates), withdraw: BOOL }),
+  // 退水只在允许退水的轮次存在：不允许时把 withdraw **锁成 false**（enum 单值），
+  // 否则模型会以为"我退水了"而引擎照样把它留在 PK 名单里 —— 模型侧与引擎侧的认知分歧，
+  // 正是"看起来像 bug"的来源。校验器里另有一道同样的归一化（纵深防御）。
+  sheriff_speech: (req) =>
+    strictObj({
+      text: TEXT,
+      explode: BOOL,
+      target: seatProp(req.candidates),
+      withdraw: req.canWithdraw ? BOOL : { type: 'boolean', enum: [false] },
+    }),
   pk_speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates) }),
   lastwords: () => strictObj({ text: TEXT }),
   wolf_propose: () => strictObj({ text: TEXT }),
