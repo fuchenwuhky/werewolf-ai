@@ -12,10 +12,10 @@
  *     单 API Key = 1 并发 → 天然串行；用 --max-calls 兜住花费。
  *
  * 用法：
- *   node scripts/eval-harness.js                          # mock，2 个引擎配置 × 8 局
- *   node scripts/eval-harness.js --games=20 --json        # 只看机器可读结果
- *   node scripts/eval-harness.js --live --games=2 --max-calls=200
- *   node scripts/eval-harness.js --update-baseline        # 把本次结果写成新基线（改引擎后要看懂差异再用）
+ *   node scripts/eval/eval-harness.js                          # mock，2 个引擎配置 × 8 局
+ *   node scripts/eval/eval-harness.js --games=20 --json        # 只看机器可读结果
+ *   node scripts/eval/eval-harness.js --live --games=2 --max-calls=200
+ *   node scripts/eval/eval-harness.js --update-baseline        # 把本次结果写成新基线（改引擎后要看懂差异再用）
  */
 'use strict';
 const fs = require('fs');

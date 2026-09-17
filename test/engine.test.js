@@ -1696,3 +1696,17 @@ test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接�
   }
 });
 
+test('配置：带 BOM 的 config.json 也必须能读（记事本另存为 UTF-8 就会带 BOM）', () => {
+  // 真实遇到：用 PowerShell Set-Content -Encoding UTF8 写出配置文件后 JSON.parse 直接抛错，
+  // 而 load() 的 catch 会**静默回落成默认配置** —— 用户的 key 与端点"莫名其妙没了"且无从排查。
+  const fsx = require('node:fs');
+  const osx = require('node:os');
+  const px = require('node:path');
+  const dir = fsx.mkdtempSync(px.join(osx.tmpdir(), 'ww-bom-'));
+  const file = px.join(dir, 'config.json');
+  fsx.writeFileSync(file, '\uFEFF' + JSON.stringify({ apiKey: 'sk-bom-test', model: 'bom-model' }), 'utf8');
+  const { config } = createConfig(file).load();
+  assert.strictEqual(config.apiKey, 'sk-bom-test', '带 BOM 的配置必须被正常读取');
+  assert.strictEqual(config.model, 'bom-model');
+  fsx.rmSync(dir, { recursive: true, force: true });
+});

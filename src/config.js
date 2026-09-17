@@ -216,7 +216,11 @@ function createConfig(file) {
     /** @returns {{config: object, migrated: boolean}} migrated=true 表示有旧值被自动迁移 */
     load() {
       try {
-        const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+        // 去掉 BOM：Windows 记事本另存为 UTF-8 会加 BOM，而 JSON.parse 不认它 →
+        // 以前会静默走 catch 回落成默认配置（用户的 key/端点"莫名其妙没了"，还查不出原因）。
+        // 真实遇到：测试脚本用 PowerShell Set-Content -Encoding UTF8 写出的配置文件带 BOM。
+        const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+        const j = JSON.parse(raw);
         const before = JSON.stringify(j);
         const merged = migrateConfig({ ...DEFAULT_CONFIG, ...j });
         const migrated = before !== JSON.stringify({ ...j, ...merged });

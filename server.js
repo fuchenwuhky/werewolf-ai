@@ -14,7 +14,11 @@ const ROOT = __dirname;
 // APP 内嵌时由 capacitor-nodejs 注入 DATADIR（应用私有持久目录），也可用 WW_DATA_DIR 覆盖
 const DATA_DIR = process.env.WW_DATA_DIR || process.env.DATADIR || ROOT;
 const WEB_DIR = path.join(ROOT, 'web');
-const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+// 配置与数据同目录（APP 内嵌时 DATADIR 是应用私有目录），可用 WW_CONFIG 单独指定配置文件。
+// WW_CONFIG 是**测试专用**入口：真实对局测试要把某一实例指向假 LLM 端点，
+// 而设置页保存写的就是这个文件 —— 没有它就只能去改正式 config.json（污染风险）。
+// 缺省行为与以前完全一致（DATA_DIR/config.json）。
+const CONFIG_FILE = process.env.WW_CONFIG || path.join(DATA_DIR, 'config.json');
 const PORT = Number(process.env.PORT || 3210);
 
 // ---------- 配置 ----------
