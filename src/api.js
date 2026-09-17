@@ -652,7 +652,15 @@ class Api {
       return this.json(res, 200, { ok: true, settled: true });
     }
     game.terminate('玩家手动终止对局');
-    return this.json(res, 200, { ok: true });
+    // 结算与落盘必须在这里也做一次（与上面暂停路径一致）。
+    // P2-c 实测：驱动循环收到 abort 后会抛出并"优雅结算"，但那发生在另一个异步分支里，
+    // 于是存在一个"内存里 finished=true、磁盘上还是活局"的窗口 —— 客户端刷新后
+    // 按存档把它当活局自动恢复，就进了死局界面（用户为了清场被迫逐局终止）。
+    // finish() 幂等，force 落盘写的是终结状态，两条路径从此一致。
+    game.finish();
+    await this.saveGame(entry, { force: true });
+    this.logger.info('api', `运行中的对局 ${game.id} 已被终止并结算`);
+    return this.json(res, 200, { ok: true, settled: true });
   }
 
   view(res, entry, query) {

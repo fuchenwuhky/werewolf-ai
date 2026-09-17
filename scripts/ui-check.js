@@ -263,6 +263,22 @@ class Browser {
     await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 0)`);
     await sleep(300);
 
+    // ---- 3.4 手机端：试玩开关必须在板子页一眼可见（P2-b：原来只藏在设置弹窗最底下） ----
+    {
+      await b.goto(base + '/m/', 2000);
+      const mock = await b.eval(`(() => {
+        const el = document.getElementById('m-mock-btn');
+        return el ? { text: el.textContent, danger: el.classList.contains('danger') } : null;
+      })()`);
+      check('手机端板子页有可见的试玩开关', !!mock, mock ? mock.text : 'NOT_FOUND');
+      check('试玩开关默认显示「真实对局（花钱）」警示', !!(mock && /花钱|真实/.test(mock.text) && mock.danger), mock ? mock.text : '');
+      await b.click('#m-mock-btn');
+      await sleep(400);
+      const after = await b.eval(`document.getElementById('m-mock-btn').textContent`);
+      check('点击后切换到试玩态（不花钱）', /不花钱|试玩/.test(after), after);
+      await b.goto(base + '/', 1500); // 回到桌面端，后续图鉴/对局断言都在桌面端进行
+    }
+
     // ---- 3.5 角色图鉴（独立成屏：左翻牌、右细节） ----
     log('\n=== 角色图鉴 ===');
     await b.click('#btn-codex');

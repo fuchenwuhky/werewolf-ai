@@ -241,8 +241,8 @@ const BOARDS = {
   quick10: {
     id: 'quick10',
     name: '10人速推局',
-    desc: '3狼 + 预女猎 + 3民，节奏快、消耗少',
-    roles: { wolf: 3, seer: 1, witch: 1, hunter: 1, villager: 3 },
+    desc: '3狼 + 预女猎 + 4民（标准 10 人局），节奏快、消耗少',
+    roles: { wolf: 3, seer: 1, witch: 1, hunter: 1, villager: 4 },
   },
   wwknight12: {
     id: 'wwknight12',

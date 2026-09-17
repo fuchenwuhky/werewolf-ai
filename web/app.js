@@ -607,7 +607,11 @@ async function checkResume() {
       // 注意：判断"能否继续"必须用 inMemory（对局是否还在服务端内存里）。
       // 曾经这里用的是 v.live —— 那是流式直播缓冲，没人在打字时就是 null，
       // 于是刷新页面会被误判成"不可恢复"，紧接着把用户令牌删掉（丢档）。
-      if (v && !v.finished && v.started && v.inMemory) { $('#resume-box').classList.remove('hidden'); return; }
+      if (v && !v.finished && v.started && v.inMemory) {
+        $('#resume-box').classList.remove('hidden');
+        $('#resume-box h2').textContent = `发现进行中的对局（继续上次的局）${await resumeDetail(g.gameId, v)}`;
+        return;
+      }
       localStorage.removeItem('ww_current'); // 已结束/从未开局（设置页放弃的创建残留）→ 不恢复
     } catch (_) { localStorage.removeItem('ww_current'); }
   }
@@ -622,7 +626,7 @@ async function checkResume() {
       if (v && !v.finished) {
         localStorage.setItem('ww_current', JSON.stringify(g));
         $('#resume-box').classList.remove('hidden');
-        $('#resume-box h2').textContent = '发现进行中的对局（已自动找回会话）';
+        $('#resume-box h2').textContent = `发现进行中的对局（已自动找回会话）${await resumeDetail(g.gameId, v)}`;
         return;
       }
     }
@@ -631,11 +635,34 @@ async function checkResume() {
     if (resumable) {
       localStorage.setItem('ww_resumable', JSON.stringify({ gameId: resumable.id, day: resumable.day }));
       $('#resume-box').classList.remove('hidden');
-      $('#resume-box h2').textContent = `发现中断的对局（进行到第 ${resumable.day} 天，服务重启过）`;
+      $('#resume-box h2').textContent = `发现中断的对局（服务重启过）${await resumeDetail(resumable.id, resumable)}`;
       $('#btn-resume').textContent = '从断点恢复对局';
       return;
     }
   } catch (_) { /* 无可恢复对局 */ }
+}
+
+/**
+ * 恢复卡片的一句话详情（P3-a）：人数 / 第几天 / 试玩还是真局 / 存档多久前。
+ * 以前卡片只有一句"发现对局"，玩家不知道要恢复的是哪一局什么状态（实测反馈）。
+ * 拿不到详情不影响恢复 —— 详情是锦上添花，恢复本身不能因为它失败。
+ */
+async function resumeDetail(gameId, v) {
+  const parts = [];
+  if (v && v.day != null) parts.push(`第 ${v.day} 天`);
+  try {
+    const { rows } = await api('GET', '/api/games');
+    const r = (rows || []).find((x) => x.id === gameId);
+    if (r) {
+      if (r.seats) parts.push(`${r.seats} 人局`);
+      parts.push(r.mock ? '试玩局（不调用 API）' : '真实对局（调用 API，会消耗额度）');
+      if (r.date) {
+        const mins = Math.round((Date.now() - new Date(r.date).getTime()) / 60000);
+        if (mins >= 1) parts.push(`存档于 ${mins} 分钟前`);
+      }
+    }
+  } catch (_) { /* 详情拿不到就只显示已知信息 */ }
+  return parts.length ? `（${parts.join(' · ')}）` : '';
 }
 
 async function resumeFromAnchor() {
@@ -781,6 +808,10 @@ async function terminateGame() {
       if (state.view && state.view.finished) break;
     }
     $('#pending-hint').textContent = '对局已终止，全场亮牌 ✓';
+    // 终止是终态：立刻把"当前对局"从 localStorage 里清掉。
+    // 以前只在 poll 循环里根据 view.finished 清，而中止那一刻循环可能已经 break 了，
+    // 于是残留下来，下次进页面会被当成活局恢复（P2-c，桌面/移动双端都复现过）。
+    localStorage.removeItem('ww_current');
   } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
 }
 
@@ -799,9 +830,19 @@ function startPolling() {
 function startPollFallback() {
   if (state.pollTimer) return;
   state.pollTimer = setInterval(poll, 1200);
+  // 降级不是终态（P2-a）：每 30s 试着重连推送，成功就撤掉提示、回到推送通道。
+  // 原来一旦降级就再也回不去，横幅还会永久挂在事件流里。
+  if (!state.streamRetry) {
+    state.streamRetry = setInterval(() => {
+      if (state.stream || !state.game) return;
+      if (state.view && state.view.finished) return;
+      if (startStream()) setStreamStatus(null);
+    }, 30000);
+  }
   poll();
 }
 function stopPolling() {
+  if (state.streamRetry) { clearInterval(state.streamRetry); state.streamRetry = null; }
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = null;
   stopStream();
@@ -832,11 +873,12 @@ function startStream() {
     state.streamWatchdog = setInterval(() => {
       if (!state.stream) return;
       if (Date.now() - (state.lastStreamAt || 0) > STREAM_DEAD_MS) {
-        appendSys('⚠️ 推送连接无响应，已切换为轮询');
+        setStreamStatus('⚠️ 推送连接无响应，已转为轮询（每 30s 自动尝试恢复推送）');
         stopStream();
         startPollFallback();
       }
     }, 4000);
+    setStreamStatus(null); // 连上了就把降级提示撤掉（P2-a）
     return true;
   } catch (e) {
     stopStream();
@@ -867,7 +909,7 @@ function openViewStream(kind, token, cursorOf) {
     // 服务端明确报错（视图构造失败等）：不能静默卡死，回退轮询并把原因显示出来
     if (es.readyState === 2) {
       stopStream();
-      appendSys('⚠️ 推送通道中断，已切换为轮询');
+      setStreamStatus('⚠️ 推送通道中断，已转为轮询（每 30s 自动尝试恢复推送）');
       startPollFallback();
     }
   });
@@ -1163,6 +1205,19 @@ function autoScroll() {
 }
 
 function appendSys(text) { $('#stream').appendChild(el('div', 'sysline', text)); autoScroll(); }
+
+/**
+ * 推送通道状态条（P2-a）：唯一且会被更新的一个元素。
+ * 原来断线时 appendSys 追加一条"已切换为轮询"，既不会被撤掉、重连成功也无从体现 ——
+ * 横幅永久留在事件流里，玩家分不清"现在到底走的是推送还是轮询"。
+ */
+function setStreamStatus(text) {
+  let n = document.getElementById('stream-status');
+  if (!text) { if (n) n.remove(); return; }
+  if (!n) { n = el('div', 'sysline'); n.id = 'stream-status'; $('#stream').appendChild(n); }
+  if (n.textContent !== text) n.textContent = text;
+  autoScroll();
+}
 
 function roleChipHtml(rid) {
   const r = roleInfo(rid);
@@ -1736,6 +1791,16 @@ function targetPicker(candidates, opts = {}) {
   return wrap;
 }
 
+/**
+ * 目标必选的决策：没选就提交会静默变成 target=0（空刀/空守/空枪），而玩家以为自己投过了。
+ * 实测踩过：狼队"投刀"时有人没点座位，只剩 2:1 才保住刀口 —— 提交的是空刀，界面上却看不出。
+ * confirmBtn 会捕获这里抛出的错误并显示在提示行，所以玩家得到的是明确的"请先选目标"，而不是一次假提交。
+ */
+function pickedTarget(label) {
+  if (!actionState.target) throw new Error(`请先点一个座位选出${label || '目标'}`);
+  return actionState.target;
+}
+
 function confirmBtn(text, buildPayload) {
   const b = el('button', 'btn primary', text || '确认');
   b.addEventListener('click', async () => {
@@ -1835,7 +1900,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 摄梦人：选择今晚的摄梦对象（梦游者当夜免疫刀/毒；连摄两晚同一人则其死亡）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认摄梦', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('确认摄梦', () => ({ target: pickedTarget('摄梦对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1843,7 +1908,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 狼美人：选择今晚的魅惑对象（你出局时他殉情，骑士决斗除外）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认魅惑', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('确认魅惑', () => ({ target: pickedTarget('魅惑对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1851,7 +1916,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 乌鸦：选择今晚的诅咒对象（明日放逐投票他+0.5票）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认诅咒', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('确认诅咒', () => ({ target: pickedTarget('诅咒对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1859,7 +1924,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 暗恋者：暗选你的暗恋对象（胜负阵营与他终身绑定，对方不知情）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认心动', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('确认心动', () => ({ target: pickedTarget('暗恋对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1867,7 +1932,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 狼队投票：选择今晚的刀口';
       box.appendChild(targetPicker(p.candidates, { noneLabel: p.allowNone ? '空刀' : null }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('投刀', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('投刀', () => ({ target: p.allowNone ? actionState.target : pickedTarget('刀口') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1875,7 +1940,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 预言家：选择今晚查验对象';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('查验', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('查验', () => ({ target: pickedTarget('查验对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -1931,7 +1996,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长离场：移交警徽或撕毁';
       box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('移交给该玩家', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('移交给该玩家', () => ({ target: pickedTarget('接任警长') })));
       const tear = el('button', 'btn danger', '撕毁警徽');
       tear.addEventListener('click', () => submitSimple({ target: 0 }));
       btnRow.appendChild(tear);
@@ -1943,7 +2008,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = `⏳ ${labels[p.task]}（互相保密）`;
       box.appendChild(targetPicker(p.candidates, { noneLabel: p.allowNone ? '弃票' : null }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('投票', () => ({ target: actionState.target })));
+      btnRow.appendChild(confirmBtn('投票', () => ({ target: p.allowNone ? actionState.target : pickedTarget('投票对象') })));
       box.appendChild(btnRow);
       break;
     }

@@ -390,7 +390,10 @@ class Agent {
     const hit = out.usage.promptTokens ? out.usage.cachedTokens / out.usage.promptTokens : 1;
     if (!this._cacheWarned && g.llmStats.calls > 4 && out.usage.promptTokens > 4000 && hit < 0.25) {
       this._cacheWarned = true;
-      this.logger.warn('ai', `${seat}号 缓存命中率低（${Math.round(hit * 100)}%，${out.usage.cachedTokens}/${out.usage.promptTokens} tokens）——多为服务商缓存 TTL 过期，本局不再重复提醒`, { task: request.task, seat });
+      // 措辞依据（2026-09 实测，同一段提示词连发三次）：冷启动 0 命中 → 立刻重发 93% 命中 →
+      // 60 秒后仍命中。所以 0% 一般是"前缀变了的那一次"（换天 / 换了角色的私有段 / 长时间空闲），
+      // 不是缓存机制坏了。这里如实说明，避免把它读成系统性缺陷（用户实测报告里正是这么理解的）。
+      this.logger.warn('ai', `${seat}号 本次未命中前缀缓存（${Math.round(hit * 100)}%，${out.usage.cachedTokens}/${out.usage.promptTokens} tokens）——常见于换天后/该角色首次调用/长时间空闲后的第一次，属正常冷启动；本局不再重复提醒`, { task: request.task, seat });
     }
     if (this.logger) {
       this.logger.debug('ai', `${seat}号 ${request.task} 模型回复：${(out.content || '').slice(0, 200)}`, {

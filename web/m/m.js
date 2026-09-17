@@ -41,6 +41,18 @@ async function init() {
   $('#m-next').addEventListener('click', gotoRules);
   $('#m-back').addEventListener('click', () => showScreen('m-boards'));
   $('#m-start').addEventListener('click', startGame);
+  // P2-b：试玩开关必须一眼可见。它原来只藏在「⚙ 设置」弹窗最底下，
+  // 实测出现过"以为在试玩、其实在花额度"（设置弹窗里的勾选状态看不见）。
+  if ($('#m-mock-btn')) {
+    $('#m-mock-btn').addEventListener('click', () => {
+      state.mock = !state.mock;
+      syncMockBtn();
+      flash(state.mock
+        ? '🧪 已切换为 Mock 试玩：不调用 API、不消耗额度'
+        : '💳 已切换为真实对局：会调用 API 并消耗额度');
+    });
+    syncMockBtn();
+  }
   $('#m-gear').addEventListener('click', openGear);
   $('#m-codex-btn').addEventListener('click', openCodex);
   $('#m-codex-back').addEventListener('click', closeCodex);
@@ -285,7 +297,7 @@ function wireSettings() {
       }
       paceHint(e.target.value);
     });
-    $('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; });
+    $('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; syncMockBtn(); });
     $('#ms-save').addEventListener('click', async () => {
       const b = { baseUrl: $('#ms-baseurl').value.trim(), model: $('#ms-model').value.trim(), modelFast: $('#ms-modelfast').value.trim(), maxTokens: Number($('#ms-maxtokens').value), temperature: Number($('#ms-temp').value), reasoningEffort: $('#ms-effort').value || 'medium', fastEffort: $('#ms-fasteffort').value || 'low', contextBudget: Number($('#ms-budget').value) || 12000 };
       const pace = $('#ms-pace').value;
@@ -457,6 +469,8 @@ async function startGame() {
     const wolves = Object.entries(counts).filter(([r]) => state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
     if (total < 4 || wolves < 1 || wolves >= total - wolves) { $('#m-err').textContent = '⚠ 板子配置不合法'; return; }
     const useMock = !!state.mock;
+    // 开局明确播报本局是否花钱（P2-b）：这句是玩家最后一次确认的机会
+    flash(useMock ? '🧪 Mock 试玩：本局不调用 API、不消耗额度' : '💳 真实对局：本局会调用 API 并消耗额度');
     const cfg = await api('GET', '/api/config');    if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在 ⚙ 设置 里填写 API Key（或勾选 Mock 试玩）'; return; }
     const seatChoice = String($('#m-my-seat').value || 'random');
     const randomSeat = seatChoice === 'random';
@@ -1227,6 +1241,14 @@ async function wolfTalkAction(kind, text, ta) {
   } catch (e) { $('#m-pending-hint').textContent = `✗ ${e.message}`; }
 }
 function hint(t) { $('#m-pending-hint').textContent = t; }
+
+/** 板子页试玩开关的样式与文案（P2-b）：真实对局用红字，避免"以为在试玩其实在花钱" */
+function syncMockBtn() {
+  const b = $('#m-mock-btn');
+  if (!b) return;
+  b.textContent = state.mock ? I18N.t('m.mockOn') : I18N.t('m.mockOff');
+  b.classList.toggle('danger', !state.mock);
+}
 
 /**
  * 底部坞组装：
