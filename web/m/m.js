@@ -229,6 +229,7 @@ function wireSettings() {
     body.innerHTML = `
       <label>接口地址 base_url<input id="ms-baseurl" value="${escapeHtml(cfg.baseUrl || '')}"></label>
       <label>模型 model<input id="ms-model" value="${escapeHtml(cfg.model || '')}"></label>
+      <label>快速任务模型（留空 = 与主模型相同）<input id="ms-modelfast" value="${escapeHtml(cfg.modelFast || '')}" placeholder="留空则与上面一致"></label>
       <label>API Key<input id="ms-key" type="password" placeholder="${cfg.hasKey ? '已保存（' + cfg.apiKeyMasked + '），留空不改' : 'sk-...'}"></label>
       <label>更多 API Key（可选，一行一个；多一把多一条并发通道）
         <textarea id="ms-keys" rows="2" placeholder="${cfg.extraKeys > 0 ? '已保存 ' + cfg.extraKeys + ' 把，留空不改' : '留空则只用上面那一把'}"></textarea></label>
@@ -241,12 +242,14 @@ function wireSettings() {
         <label>最大回复 tokens（建议 16000）<input id="ms-maxtokens" type="number" value="${cfg.maxTokens || 16000}"></label>
       <div class="row2">
         <label>发言思考强度<select id="ms-effort">
-          <option value="low"${(cfg.reasoningEffort || 'high') === 'low' ? ' selected' : ''}>最低 low（最快）</option>
-          <option value="high"${cfg.reasoningEffort !== 'low' ? ' selected' : ''}>普通 high（默认）</option>
+          <option value="low"${(cfg.reasoningEffort || 'medium') === 'low' ? ' selected' : ''}>最低 low（最快）</option>
+          <option value="medium"${(cfg.reasoningEffort || 'medium') === 'medium' ? ' selected' : ''}>中档 medium（默认）</option>
+          <option value="high"${cfg.reasoningEffort === 'high' ? ' selected' : ''}>最高 high（最慢）</option>
         </select></label>
         <label>快速任务强度<select id="ms-fasteffort">
           <option value="low"${(cfg.fastEffort || 'low') === 'low' ? ' selected' : ''}>最低 low（默认）</option>
-          <option value="high"${cfg.fastEffort === 'high' ? ' selected' : ''}>普通 high</option>
+          <option value="medium"${cfg.fastEffort === 'medium' ? ' selected' : ''}>中档 medium</option>
+          <option value="high"${cfg.fastEffort === 'high' ? ' selected' : ''}>最高 high</option>
         </select></label>
       </div>
       <div class="row2">
@@ -284,7 +287,7 @@ function wireSettings() {
     });
     $('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; });
     $('#ms-save').addEventListener('click', async () => {
-      const b = { baseUrl: $('#ms-baseurl').value.trim(), model: $('#ms-model').value.trim(), maxTokens: Number($('#ms-maxtokens').value), temperature: Number($('#ms-temp').value), reasoningEffort: $('#ms-effort').value || 'high', fastEffort: $('#ms-fasteffort').value || 'low', contextBudget: Number($('#ms-budget').value) || 12000 };
+      const b = { baseUrl: $('#ms-baseurl').value.trim(), model: $('#ms-model').value.trim(), modelFast: $('#ms-modelfast').value.trim(), maxTokens: Number($('#ms-maxtokens').value), temperature: Number($('#ms-temp').value), reasoningEffort: $('#ms-effort').value || 'medium', fastEffort: $('#ms-fasteffort').value || 'low', contextBudget: Number($('#ms-budget').value) || 12000 };
       const pace = $('#ms-pace').value;
       if (pace && pace !== 'custom') b.pace = pace; // custom = 保留用户自己调出来的参数
       const key = $('#ms-key').value.trim();
@@ -925,13 +928,18 @@ function updateLive(v) {
   const vpRaw = v && v.finished ? null : state.voteProgress;
   const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
   const node = $('#m-live');
-  if (!live && !vp) { if (node) node.remove(); return; }
+  if (!live && !vp) { if (node) node.remove(); state.liveSince = null; return; }
   const n = node || (() => { const x = el('div', 'msg live'); x.id = 'm-live'; return x; })();
   if (n.parentNode !== flow) flow.appendChild(n);
   else if (n !== flow.lastElementChild) flow.appendChild(n); // 始终贴底
   const lp = live ? (v.players || []).find((x) => x.seat === live.seat) : null;
-  const secs = vp ? Math.max(0, Math.round((Date.now() - vp.at) / 1000)) : 0;
-  const sig = `${live ? live.seat : 0}|${live && live.public ? 1 : 0}|${(live && live.text) || ''}|${vp ? `${vp.done}/${vp.total}@${secs}` : ''}`;
+  // 秒表：实测单条发言平均等 103.6s、最长 362s，而这段时间手机上**完全不动**。
+  // 只显示"已 N 秒"，不泄露任何私密内容（秒数进 sig，让 1.2s 轮询把表走起来）。
+  const lkey = live ? `${live.seat}|${live.task || ''}` : '';
+  if (live && (!state.liveSince || state.liveSince.key !== lkey)) state.liveSince = { key: lkey, at: Date.now() };
+  const secs = live ? Math.max(0, Math.round((Date.now() - state.liveSince.at) / 1000))
+    : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
+  const sig = `${live ? live.seat : 0}|${live && live.public ? 1 : 0}|${(live && live.text) || ''}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
   if (n.dataset.sig === sig) return; // 1.2s 轮询：内容没变不重建 DOM
   n.dataset.sig = sig;
   if (!live) {
@@ -940,8 +948,9 @@ function updateLive(v) {
       + `<div class="hint">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
     return;
   }
+  const work = live.text ? '… 正在决策' : '… 正在思考';
   n.innerHTML = `<div class="meta"><span class="who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
-    + ` <span class="hint">${live.public ? '✍ 正在发言' : '… 正在思考'}${vp ? ` ${vp.done}/${vp.total} · ${secs}s` : ''}</span></div>`
+    + ` <span class="hint">${live.public && live.text ? '✍ 正在发言' : work} · 已 ${secs}s${vp ? ` · ${vp.done}/${vp.total}` : ''}</span></div>`
     + (live.public && live.text
       ? `<div>${escapeHtml(live.text)}<span class="caret"></span></div>`
       : '<div class="hint">正在思考…</div>');

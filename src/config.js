@@ -27,7 +27,12 @@ const DEFAULT_CONFIG = {
   // 用大模型跑它们是纯浪费延迟（p50 4s 里大部分是首字前排队）。
   modelFast: '',
   temperature: 0.8,
-  maxTokens: 16000,          // 发言类任务的输出上限：思考模型的 reasoning 计入输出，起步给足防截断
+  // 发言类任务的输出上限：思考模型的 reasoning 计入输出。
+  // 实测（6 局真实对局 / 56 次调用，2026-09）：解码占 85%、首字只占 15%，而高思考档的发言
+  // 平均输出 3064 tokens、p90 直接顶到 12000 —— 按 30 tokens/s 算，一条发言就是 100s+。
+  // 档位表（effort.js）负责按任务给出更小的实际预算，这里是**兜底天花板**：
+  // 从 16000 降到 8000，让"思考失控"最多只能烧到 8000 而不是 16000。
+  maxTokens: 8000,
   fastMaxTokens: 8000,       // 快速任务（夜晚/投票等）输出上限：低思考强度下够用，降低最坏延迟
   timeoutMs: 360000,         // 硬上限（兜底）：正常情况下不会用到，真正的闸门是下面两个分任务软超时
   // 分任务软超时（A3）：实测发言 p90 34s、微决策 p50 4s，而旧配置让**所有**任务都可能等 6 分钟 ——
@@ -38,7 +43,12 @@ const DEFAULT_CONFIG = {
   // 连接复用（keep-alive）：实测串行 5 次调用从"5 条连接"降到"1 条"，省掉每次约 90ms 的 TCP+TLS 握手。
   // 若所在网络（典型是 Windows 防火墙/代理）会静默掐断空闲连接，可置 false 回到"每次新连接"。
   keepAlive: true,
-  reasoningEffort: 'high',   // 发言类任务思考强度：low=最低 / high=普通（仅两档，max 已移除）
+  // 发言类任务思考强度：low=最低 / medium=中档（默认）/ high=最深。
+  // 为什么默认从 high 降到 medium（实测依据，6 局真实对局）：
+  //   高思考档的发言平均等 103.6s、单次最长 362s（≈ 撞满 6 分钟硬超时），
+  //   而同模型同接口的微决策只要 1.3~8.8s —— 慢的不是模型，是"给发言的思考预算"。
+  //   历史遗留的 max 档已下线（迁移为 medium）。
+  reasoningEffort: 'medium',
   fastEffort: 'low',         // 快速任务（夜晚行动/投票/警竞等）思考强度：默认最低保流畅
   // info = 按"信息含量"调度思考预算（常规决策降档、关键节点加档，实测 p90 降 7×）；
   // flat = 旧的按任务名一刀切，保留用于 A/B 对比与回滚
@@ -56,7 +66,8 @@ const DEFAULT_CONFIG = {
 };
 
 // 历史版本默认值/旧建议值：思考模型一上来就被截断，自动提升到新默认
-const LEGACY_MAX_TOKENS = new Set([600, 2000, 8000]);
+// 16000 是旧默认（高思考档配套）——思考降到中档后它不再需要，自动收敛到 8000
+const LEGACY_MAX_TOKENS = new Set([600, 2000, 8000, 16000]);
 // 旧超时 120s 对高决策量调用太短，熔断后重试更浪费
 const LEGACY_TIMEOUT_MS = new Set([120000, 240000]);
 
@@ -82,8 +93,8 @@ const PACES = {
   },
   standard: {
     label: '标准局',
-    desc: '出厂默认：按信息含量分配思考预算（常规决策降档、关键节点加档），平衡发言质量与成本。',
-    values: { effortPolicy: 'info', reasoningEffort: 'high', fastEffort: 'low', digestMinEvents: 6, digestKeep: 6, contextBudget: 12000 },
+    desc: '出厂默认：中档思考（发言不再动辄等上百秒）+ 按信息含量分配预算，平衡发言质量与速度。',
+    values: { effortPolicy: 'info', reasoningEffort: 'medium', fastEffort: 'low', digestMinEvents: 6, digestKeep: 6, contextBudget: 12000 },
   },
   deep: {
     label: '深度局',

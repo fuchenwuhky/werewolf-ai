@@ -196,6 +196,7 @@
           <h2 data-no="①" data-i18n="api.title">API 配置</h2>
           <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
           <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
+          <label><span data-i18n="api.modelFast">快速任务模型（留空 = 与主模型相同）</span><input id="cfg-modelfast" placeholder="留空则与上面一致"></label>
           <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
           <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
           <div class="hint" id="cfg-channels"></div>
@@ -214,12 +215,14 @@
             <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
               <select id="cfg-effort">
                 <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
-                <option value="high" data-i18n="api.effortHigh">普通 high（默认）</option>
+                <option value="medium" data-i18n="api.effortMedium">中档 medium（默认，平衡速度与质量）</option>
+                <option value="high" data-i18n="api.effortHigh">最高 high（最慢，实测单条发言平均等 100s+）</option>
               </select></label>
             <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
               <select id="cfg-fasteffort">
                 <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
-                <option value="high" data-i18n="api.fastEffortHigh">普通 high</option>
+                <option value="medium" data-i18n="api.fastEffortMedium">中档 medium</option>
+                <option value="high" data-i18n="api.fastEffortHigh">最高 high</option>
               </select></label>
           </div>
           <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>

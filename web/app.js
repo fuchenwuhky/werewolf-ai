@@ -48,9 +48,10 @@ async function initSetup() {
   state.cfg = cfg; // 供输入时的通道数预览使用（与磁盘一致的最近一次读数）
   $('#cfg-baseurl').value = cfg.baseUrl || '';
   $('#cfg-model').value = cfg.model || '';
+  $('#cfg-modelfast').value = cfg.modelFast || '';
   $('#cfg-temp').value = cfg.temperature;
   $('#cfg-maxtokens').value = cfg.maxTokens;
-  $('#cfg-effort').value = cfg.reasoningEffort || 'high';
+  $('#cfg-effort').value = cfg.reasoningEffort || 'medium';
   $('#cfg-fasteffort').value = cfg.fastEffort || 'low';
   $('#cfg-budget').value = cfg.contextBudget || 12000;
   $('#cfg-cachecontrol').checked = !!cfg.cacheControl;
@@ -441,6 +442,7 @@ async function saveConfig() {
   const body = {
     baseUrl: $('#cfg-baseurl').value.trim(),
     model: $('#cfg-model').value.trim(),
+    modelFast: $('#cfg-modelfast').value.trim(),
     temperature: Number($('#cfg-temp').value),
     maxTokens: Number($('#cfg-maxtokens').value),
     reasoningEffort: $('#cfg-effort').value,
@@ -988,7 +990,16 @@ async function resumePausedGame() {
 /**
  * "打字中"气泡：把模型 41s 的空白等待变成即时可见的增量文本。
  * 公开发言直接显示；私密决策只显示"正在思考"（不泄露目标），上帝视角可见原始增量与独白。
+ *
+ * 秒表（2026-09 加）：实测发言平均等 103.6s、最长 362s，而普通模式下这段时间屏幕**完全不动**
+ * —— 体感上"卡死"和"在跑"的差别比实际耗时更伤人。这里只加"已 N 秒"和公开发言的字数，
+ * 不泄露任何私密内容（秒数进入 sig，让既有的 1.2s 轮询把秒表走起来）。
  */
+function liveSince(key) {
+  if (!state.liveSince || state.liveSince.key !== key) state.liveSince = { key, at: Date.now() };
+  return state.liveSince.at;
+}
+
 function renderLive(v) {
   const node0 = document.getElementById('live-typing');
   const l = v && v.live;
@@ -999,14 +1010,16 @@ function renderLive(v) {
   if (!l && !vp) {
     if (node0) node0.remove();
     state.liveSig = '';
+    state.liveSince = null; // 下一段直播重新计时，避免沿用上一个人的秒表
     return;
   }
   const text = l ? l.text || '' : '';
   const reasoning = l ? l.reasoning || '' : '';
   const canSeeText = !!l && (!!l.public || !!state.godMode);
-  const secs = vp ? Math.max(0, Math.round((Date.now() - vp.at) / 1000)) : 0;
-  const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${vp ? `${vp.done}/${vp.total}@${secs}` : ''}`;
-  if (node0 && state.liveSig === sig) return; // 1.2s 轮询且文本未增长：不重建 DOM
+  const secs = l ? Math.max(0, Math.round((Date.now() - liveSince(`${l.seat}|${l.task || ''}`)) / 1000))
+    : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
+  const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
+  if (node0 && state.liveSig === sig) return; // 1.2s 轮询且内容未增长：不重建 DOM
   state.liveSig = sig;
   let node = node0;
   if (!node) {
@@ -1015,7 +1028,9 @@ function renderLive(v) {
     $('#stream').appendChild(node);
   }
   const who = l ? seatLabel(l.seat) : '';
-  const counter = vp ? ` <span class="typing-tag">已思考 ${vp.done}/${vp.total} · ${secs}s</span>` : '';
+  const counter = vp
+    ? ` <span class="typing-tag">已思考 ${vp.done}/${vp.total} · ${secs}s</span>`
+    : (l ? ` <span class="typing-tag">已 ${secs}s${canSeeText && text ? ` · ${text.length} 字` : ''}${state.godMode && reasoning ? ` · 思考 ${reasoning.length} 字` : ''}</span>` : '');
   if (!l) {
     let only = '<div class="meta"><span class="typing-tag">… 正在收集投票</span></div>';
     only += `<div class="typing-body muted">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
@@ -1023,7 +1038,7 @@ function renderLive(v) {
     autoScroll();
     return;
   }
-  const tag = canSeeText && text ? '✍ 正在发言' : '… 正在思考';
+  const tag = canSeeText && text ? '✍ 正在发言' : (text ? '… 正在决策' : '… 正在思考');
   let html = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span>${counter}</div>`;
   if (canSeeText && text) html += `<div class="typing-body">${escapeHtml(text)}<span class="caret"></span></div>`;
   else html += '<div class="typing-body muted">正在思考…<span class="caret"></span></div>';

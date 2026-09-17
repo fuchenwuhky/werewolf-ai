@@ -13,7 +13,7 @@ const effort = require('../src/ai/effort');
 const { Game } = require('../src/engine/game');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
-const CFG = { reasoningEffort: 'high', fastEffort: 'low', maxTokens: 16000, fastMaxTokens: 8000, effortPolicy: 'info' };
+const CFG = { reasoningEffort: 'medium', fastEffort: 'low', maxTokens: 8000, fastMaxTokens: 8000, effortPolicy: 'info' };
 
 function makeGame() {
   const board = { wolf: 3, wolfking: 1, seer: 1, witch: 1, hunter: 1, guard: 1, villager: 4 };
@@ -33,7 +33,7 @@ test('策略：结构化决策给极简档（什么都不用想），常规发�
   const routine = effort.planTier('speech', { newEvents: 3, alive: 10, day: 2, speechIndex: 2 });
   assert.strictEqual(routine.tier, 'normal');
   assert.strictEqual(effort.resolveBudget(routine.tier, CFG).effort, 'low');
-  assert.strictEqual(effort.resolveBudget(routine.tier, CFG).maxTokens, 6000);
+  assert.strictEqual(effort.resolveBudget(routine.tier, CFG).maxTokens, 3500);
 });
 
 test('策略：信息越密集 / 越关键，档位越高（但单个信号不足以升档）', () => {
@@ -79,11 +79,11 @@ test('策略：未知任务保守取高（不能因为不认识而削弱）', ()
 test('预算：档位只是语义，最终取值尊重用户配置的 effort 与上限', () => {
   const lowTier = effort.resolveBudget('normal', CFG);
   assert.strictEqual(lowTier.effort, 'low', 'normal 档用 fastEffort');
-  assert.strictEqual(lowTier.maxTokens, 6000);
+  assert.strictEqual(lowTier.maxTokens, 3500);
   const highTier = effort.resolveBudget('critical', CFG);
-  assert.strictEqual(highTier.effort, 'high', 'critical 档用 reasoningEffort');
-  assert.strictEqual(highTier.maxTokens, 16000);
-  assert.strictEqual(highTier.hardCap, 16000, 'hardCap 不得超过用户配的 maxTokens');
+  assert.strictEqual(highTier.effort, 'medium', 'critical 档用 reasoningEffort（默认已降到中档）');
+  assert.strictEqual(highTier.maxTokens, 6500);
+  assert.strictEqual(highTier.hardCap, 8000, 'hardCap 不得超过用户配的 maxTokens');
 
   // 用户把 maxTokens 压到 4000：所有档位都不得超过它
   const tight = effort.resolveBudget('critical', { ...CFG, maxTokens: 4000 });
@@ -91,7 +91,26 @@ test('预算：档位只是语义，最终取值尊重用户配置的 effort 与
   assert.strictEqual(tight.hardCap, 4000);
   // 用户把 fastMaxTokens 调大也不会超过 maxTokens
   const loose = effort.resolveBudget('normal', { ...CFG, fastMaxTokens: 20000 });
-  assert.strictEqual(loose.maxTokens, 6000, '档位自身的上限仍然生效');
+  assert.strictEqual(loose.maxTokens, 3500, '档位自身的上限仍然生效');
+});
+
+test('预算：发言类任何档位都不得突破收紧后的天花板（防"思考失控"回到 12000/16000）', () => {
+  const worst = effort.resolveBudget('critical', { ...CFG, maxTokens: 1000000, fastMaxTokens: 1000000 });
+  assert.strictEqual(worst.maxTokens, 6500, '关键档预算上限 6500（实测 12000 token ≈ 400s 等待）');
+  assert.strictEqual(worst.hardCap, 13000, '截断降档重试也不得把预算翻到上万');
+  const extreme = { decisive: 99, alive: 3, day: 9, speechIndex: 9 };
+  // 三类发言最高可到 critical（reasoningEffort 车道）
+  for (const task of ['speech', 'sheriff_speech', 'pk_speech']) {
+    const t = effort.planTier(task, extreme);
+    const b = effort.resolveBudget(t.tier, CFG);
+    assert.ok(b.maxTokens <= 6500, `${task} 在最高档（${t.tier}）也不得超过 6500，实际 ${b.maxTokens}`);
+    assert.strictEqual(b.effort, 'medium', `${task} 最高档用 reasoningEffort（默认中档）`);
+  }
+  // 遗言被 TIER_CEILING 封顶在 normal（fastEffort 车道）：一次性短内容，不该烧思考
+  const lw = effort.planTier('lastwords', extreme);
+  assert.strictEqual(lw.tier, 'normal');
+  assert.strictEqual(effort.resolveBudget(lw.tier, CFG).effort, 'low', '遗言封顶后走 fastEffort');
+  assert.ok(effort.resolveBudget(lw.tier, CFG).maxTokens <= 3500);
 });
 
 test('预算：hardCap 让 maxTokens 真正生效（否则截断后预算会一路翻到 32768）', () => {
@@ -109,8 +128,8 @@ test('flat 策略：完全保持改动前的按任务名分层（可 A/B、可�
   const g = makeGame();
   const flat = { ...CFG, effortPolicy: 'flat' };
   const speech = effort.planEffort(g, g.player(2), { task: 'speech' }, { cfg: flat, lastSeq: 0 });
-  assert.strictEqual(speech.effort, 'high');
-  assert.strictEqual(speech.maxTokens, 12000);
+  assert.strictEqual(speech.effort, 'medium');
+  assert.strictEqual(speech.maxTokens, 8000);
   assert.strictEqual(speech.tier, 'flat');
   const night = effort.planEffort(g, g.player(2), { task: 'seer_check' }, { cfg: flat, lastSeq: 0 });
   assert.strictEqual(night.effort, 'low');

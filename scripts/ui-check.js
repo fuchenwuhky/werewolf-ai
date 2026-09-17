@@ -220,6 +220,18 @@ class Browser {
     check('规则开关渲染', setup.rules >= 8, `${setup.rules} 个`);
     check('板子模板渲染', setup.boards >= 5, `${setup.boards} 个`);
 
+    // 思考强度必须能选到中档（新默认），快速任务模型可填 —— 这两个是"发言不再等一两分钟"的入口
+    const effortUi = await b.eval(`({
+      efforts: [...document.querySelectorAll('#cfg-effort option')].map(o=>o.value),
+      fasts: [...document.querySelectorAll('#cfg-fasteffort option')].map(o=>o.value),
+      hasModelFast: !!document.getElementById('cfg-modelfast'),
+      selected: document.getElementById('cfg-effort').value,
+    })`);
+    check('发言思考强度含 low/medium/high 三档', ['low', 'medium', 'high'].every((v) => effortUi.efforts.includes(v)), effortUi.efforts.join('/'));
+    check('发言思考强度默认落在中档', effortUi.selected === 'medium', effortUi.selected);
+    check('快速任务强度含 medium', effortUi.fasts.includes('medium'), effortUi.fasts.join('/'));
+    check('快速任务模型输入框存在（分层模型可配）', effortUi.hasModelFast === true);
+
     // 复选/单选：自己画的控件必须"勾上看得出"。
     // 用户报的"点了勾不上"根因是 `background: linear-gradient(...)` 之后又写 `background-image: url(勾)`，
     // 前者被顶掉 → 底色透明 → 深色勾画在暗底上等于看不见（状态其实是翻转的，所以只测 checked 测不出来）。

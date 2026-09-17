@@ -31,15 +31,24 @@ const STRUCTURED_TASKS = new Set([...FAST_TASKS].filter((t) => !SPEECH_TASKS.has
 const PIVOTAL_TASKS = new Set(['sheriff_run', 'sheriff_vote', 'pk_speech', 'pk_vote', 'shoot', 'badge_pass']);
 
 /**
- * 档位表。effort 是"档位语义"，最终取值仍尊重用户在设置页配的 fastEffort/reasoningEffort；
- * hardCap 是"思考耗尽时预算翻倍的上限"——没有它的话 maxTokens 形同虚设（会一路翻到 32768）。
+ * 档位表。
+ * - `effort` 是**车道选择**，不是具体强度：'low' → 用 cfg.fastEffort，'high' → 用 cfg.reasoningEffort。
+ *   所以把 reasoningEffort 设成 medium 时，"high 档"实际发出去的就是 medium。
+ * - `maxTokens` 是本次调用的输出上限（思考模型的 reasoning **计入**输出）。
+ * - `hardCap` 是"思考耗尽时降档重试"的预算上限。
+ *
+ * 2026-09 收紧（依据：6 局真实对局 56 次调用的实测）
+ *   高思考档发言：平均输出 3064 tokens、p90 = 12000（顶格）、单次最长 362s ≈ 撞满 6 分钟硬超时；
+ *   同一局的微决策（刀/验/守）：1.3~8.8s。解码速率仅 30 tokens/s —— 输出量直接等于等待时间。
+ *   因此各档预算整体下调（高/关键档从 12000/16000 降到 5000/6500，hardCap 从 24000/32768 降到
+ *   10000/13000），配合 reasoningEffort 默认中档：思考失控最多烧 6500，而不是 32768。
  */
 const TIERS = {
-  minimal: { effort: 'low', maxTokens: 2000, hardCap: 8000 },
-  low: { effort: 'low', maxTokens: 4000, hardCap: 10000 },
-  normal: { effort: 'low', maxTokens: 6000, hardCap: 14000 },
-  high: { effort: 'high', maxTokens: 12000, hardCap: 24000 },
-  critical: { effort: 'high', maxTokens: 16000, hardCap: 32768 },
+  minimal: { effort: 'low', maxTokens: 1500, hardCap: 4000 },
+  low: { effort: 'low', maxTokens: 2500, hardCap: 6000 },
+  normal: { effort: 'low', maxTokens: 3500, hardCap: 8000 },
+  high: { effort: 'high', maxTokens: 5000, hardCap: 10000 },
+  critical: { effort: 'high', maxTokens: 6500, hardCap: 13000 },
 };
 
 /** 分数 → 档位（按任务族分别映射，读起来就是策略本身） */
