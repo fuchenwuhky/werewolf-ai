@@ -1932,7 +1932,17 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 狼队投票：选择今晚的刀口';
       box.appendChild(targetPicker(p.candidates, { noneLabel: p.allowNone ? '空刀' : null }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('投刀', () => ({ target: p.allowNone ? actionState.target : pickedTarget('刀口') })));
+      // F5 修复（P4 实测缺口）：allowNone 时原先直接提交 actionState.target，
+      // 于是"什么都没选"（null/undefined）与"显式点空刀"（0）无法区分 ——
+      // 玩家点「投刀」既不报错也没有任何提示，只能干瞪眼。
+      // 现在：未选目标 → 抛出可读提示（由 confirmBtn 的 catch 显示到 #pending-hint）；
+      //       显式空刀（0）与正常目标照旧提交，空刀按钮的行为完全不变。
+      btnRow.appendChild(confirmBtn('投刀', () => {
+        if (actionState.target === null || actionState.target === undefined) {
+          throw new Error(p.allowNone ? '请先点一个座位选出刀口（想放弃本夜就点「空刀」）' : '请先点一个座位选出刀口');
+        }
+        return { target: actionState.target };
+      }));
       box.appendChild(btnRow);
       break;
     }
