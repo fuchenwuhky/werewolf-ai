@@ -24,6 +24,8 @@ const state = {
   roleShown: false,
   seatNames: {},
   tags: {},              // 身份标记（仅玩家自己的笔记）：{seat: roleId}
+  lastView: null,        // 最近一次玩家视图：圆桌要从"选目标"里重绘，必须留一份
+  voteTally: {},         // 最近一次亮票的票数（画在圆桌圆心与座位角标上），阶段切换即清空
 };
 
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
@@ -68,12 +70,21 @@ async function initSetup() {
     state.setup.mode = document.querySelector('input[name=mode]:checked').value;
     $('#play-options').classList.toggle('hidden', state.setup.mode !== 'play');
     renderAiNames(true); renderPersonas();
+    renderSetupDigest();
   }));
   $('#my-seat').addEventListener('change', () => {
     state.setup.mySeat = $('#my-seat').value;
     persistSeatChoice(state.setup.mySeat);
     renderAiNames(true); renderPersonas();
   });
+  // 模型 / Mock / 节奏 任一变化都要刷新顶部的"这一局是什么"信息条（它存在的意义就是给人做最后确认）
+  ['#cfg-model', '#use-mock', '#cfg-pace'].forEach((sel) => {
+    const node = $(sel);
+    if (!node) return;
+    node.addEventListener('change', renderSetupDigest);
+    if (node.tagName === 'INPUT') node.addEventListener('input', renderSetupDigest);
+  });
+  renderSetupDigest();
   $('#btn-rand-names').addEventListener('click', () => { renderAiNames(true); renderPersonas(); });
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
@@ -174,6 +185,44 @@ function updateBoardTotal() {
   $('#board-total').textContent = `总人数：${total}（狼 ${wolves} / 好 ${total - wolves}）${msgs.length ? ' ⚠️ ' + msgs.join('；') : ' ✓'}`;
   renderSeatsSelect();
   renderAiNames(false);
+  renderSetupDigest();
+}
+
+/**
+ * 设置页顶部的"这一局是什么"信息条 + 底部操作条上的摘要。
+ *
+ * 为什么值得做：这张设置页有 4 张卡、几十个控件，"我到底要开一局什么"这件事在按下开始之前
+ * 完全看不出来。把 板子 / 人数 / 阵营配比 / 模式 / 模型 / 节奏 收成一行，读一眼就能确认，
+ * 也顺便让"改完忘记保存"这类问题暴露得更早（模型来自服务端返回的已保存配置）。
+ */
+function renderSetupDigest() {
+  const boardSel = $('#board-template');
+  const boardName = boardSel && boardSel.selectedOptions[0] ? boardSel.selectedOptions[0].textContent : '';
+  const total = boardTotal();
+  const wolves = Object.entries(state.setup.boardCounts || {}).filter(([r]) => state.meta && state.meta.roles[r] && state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
+  const mode = document.querySelector('input[name=mode]:checked');
+  const isWatch = mode && mode.value === 'watch';
+  const model = ($('#cfg-model') && $('#cfg-model').value.trim()) || '未配置模型';
+  const paceSel = $('#cfg-pace');
+  const pace = paceSel && paceSel.selectedOptions[0] ? paceSel.selectedOptions[0].textContent : '';
+  const mock = $('#use-mock') && $('#use-mock').checked;
+  const facts = [
+    `<li>板子 <b>${escapeHtml(String(boardName || '自定义').replace(/^[^\u4e00-\u9fa5A-Za-z]*/, '').slice(0, 14))}</b></li>`,
+    `<li><b>${total}</b> 人局 · 狼 <b>${wolves}</b> / 好 <b>${total - wolves}</b></li>`,
+    `<li>${isWatch ? '纯观战（上帝视角）' : '我参战'}</li>`,
+    mock ? '<li>Mock 试玩（不调 API）</li>' : `<li>模型 <b>${escapeHtml(model.replace(/^.*\//, ''))}</b></li>`,
+  ];
+  if (pace) facts.push(`<li>${escapeHtml(pace.replace(/（.*$/, ''))}</li>`);
+  const box = $('#hero-facts');
+  if (box) box.innerHTML = facts.join('');
+  const sum = $('#setup-summary');
+  if (sum) {
+    const paceTxt = pace ? pace.replace(/（.*$/, '') : '';
+    sum.innerHTML = `${isWatch ? '观战' : '参战'} · ${total} 人 · 狼 ${wolves}/好 ${total - wolves}`
+      + `<span class="ss-sep">|</span>${escapeHtml(String(boardName || '自定义板子'))}`
+      + (mock ? '<span class="ss-sep">|</span>Mock 试玩' : `<span class="ss-sep">|</span>${escapeHtml(model)}`)
+      + (paceTxt ? `<span class="ss-sep">|</span>${escapeHtml(paceTxt)}` : '');
+  }
 }
 
 /**
@@ -1064,6 +1113,8 @@ function renderEventNode(e) {
   switch (e.type) {
     case 'phase': {
       const night = (d.title || '').includes('夜');
+      state.voteTally = {}; // 进入新阶段：上一轮的票数不再有意义（否则桌角会挂着过期的票）
+      if (state.lastView) updateSeats(state.lastView);
       return el('div', `banner ${night ? 'night' : ''}`, d.title || '');
     }
     case 'night_step': {
@@ -1096,6 +1147,9 @@ function renderEventNode(e) {
       const tally = Object.entries(d.tally || {}).map(([s, n]) => `${s === '0' ? '弃票' : s + '号'}:${n}票`).join('，');
       const curse = d.curseBonus && Object.keys(d.curseBonus).length
         ? `（🐦 ${Object.keys(d.curseBonus).map((s) => s + '号').join('、')} 受乌鸦诅咒 +0.5）` : '';
+      // 票数同时挂到圆桌上（座位角标 + 圆心合计）：亮票那一下直接"看得见"，不用回滚日志数
+      state.voteTally = Object.assign({}, d.tally || {});
+      if (state.lastView) setTimeout(() => { if (state.lastView) updateSeats(state.lastView); }, 0);
       return el('div', 'msg event', `🗳 亮票：${detail}<br><span class="hint">${tally}${curse}</span>`);
     }
     case 'sheriff_run':
@@ -1208,13 +1262,34 @@ function causeLabel(cause) {
 }
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 
+/** 阶段 → 氛围配色（body[data-phase]）。CSS 据此切换天空/月亮/提示色。
+ *  这是**功能指示**而不只是装饰：白天暖、夜晚冷、投票血红，玩家不必读文字就知道现在是什么阶段。 */
+const PHASE_AMBIENT = {
+  night: 'night', dawn: 'day', day: 'day', vote: 'vote', pk: 'vote',
+  sheriff: 'vote', night_action: 'night', dusk: 'dusk', over: 'dusk',
+};
+
 function updateHeader(v) {
   $('#g-day').textContent = `第${v.day}天`;
   $('#g-phase').textContent = PHASE_LABEL[v.phase] || v.phase;
+  document.body.dataset.phase = PHASE_AMBIENT[v.phase] || 'dusk';
+  // 天数牌下沿的 DAY/NIGHT：与氛围同源，避免"画面是白天、文字说夜晚"的自相矛盾
+  const kick = $('#g-day-kicker');
+  if (kick) {
+    const night = document.body.dataset.phase === 'night';
+    kick.textContent = v.day === 0 ? 'SETUP' : (night ? 'NIGHT' : 'DAY');
+  }
   const me = v.me;
   $('#g-me').innerHTML = me && me.role
     ? `你是 ${me.seat}号 ${escapeHtml(me.name)} · ${roleChipHtml(me.role)}${me.isSheriff ? ' 👑警长' : ''}${me.alive ? '' : ' 💀'}`
     : (state.godMode ? '上帝视角' : '');
+  // 存活计：剩 3 人以下变红闪（那是"要收尾了"的强信号）
+  const meter = $('#g-alive');
+  if (meter && Array.isArray(v.players)) {
+    const alive = v.players.filter((p) => p.alive).length;
+    meter.innerHTML = `存活 <b>${alive}</b> / ${v.players.length}`;
+    meter.classList.toggle('low', alive <= 3);
+  }
 }
 
 function updateSeats(v) {
@@ -1230,17 +1305,69 @@ function updateSeats(v) {
       godSel.appendChild(el('option', null, `${p.seat}号 ${p.name}`)).value = p.seat;
     }
   }
-  box.innerHTML = '';
-  for (const p of v.players) {
-    const s = el('div', `seat ${p.alive ? '' : 'dead'} ${p.seat === mySeat ? 'mine' : ''}`);
-    const roleHtml = p.role ? `<span class="role-chip" style="color:${roleInfo(p.role).color}">${roleInfo(p.role).emoji}${roleInfo(p.role).name}</span>` : '';
-    s.innerHTML = `<span class="snum">${p.seat}</span><span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>${p.isSheriff ? '<span class="badge">👑</span>' : ''}${p.lostVote ? '<span class="badge" title="失去投票权">🚫</span>' : ''}${roleHtml}`;
+  // ---- 圆桌 ----
+  box.innerHTML = '';   // 必须先清空：漏掉这一行会每帧追加一张新桌子，圆心文字叠成一团（踩过）
+  //
+  // 布局：座位按椭圆均分，坐标在 JS 里算好写成 --x/--y（百分比）。
+  // 为什么不用 CSS 的 sin()/cos()：部分 WebView 没有这两个函数，退化后所有座位会叠在圆心
+  // （"看着像只有一个人"这种错最难查）。JS 算一次、CSS 只负责摆，任何环境都是同一张桌子。
+  //
+  // 圆心放"阶段牌"：天数/阶段/轮到谁/亮票票数。视线中心是当前状态，而不是一片空白。
+  state.lastView = v;
+  const liveSeat = v.live && v.live.seat ? Number(v.live.seat) : 0;
+  const tally = state.voteTally || {};
+  const voteChips = Object.entries(tally)
+    .filter(([, k]) => k > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([s, k]) => `<span>${s === '0' ? '弃票' : s + '号'} ${k}</span>`);
+  const ring = el('div', 'ring-stage');
+  ring.appendChild(ringSvg());
+  const core = el('div', 'ring-core');
+  const aliveNow = v.players.filter((p) => p.alive).length;
+  const liveWho = liveSeat ? `${liveSeat}号 ${escapeHtml(String(state.seatNames[liveSeat] || '').trim())} 正在行动…` : '';
+  core.innerHTML = `<div class="rc-phase">第${v.day}天</div>`
+    + `<div class="rc-sub">${escapeHtml(PHASE_LABEL[v.phase] || v.phase || '')} · 存活 ${aliveNow}/${v.players.length}</div>`
+    + (liveWho ? `<div class="rc-live">${liveWho}</div>` : '')
+    + (voteChips.length ? `<div class="rc-vote">${voteChips.join('')}</div>` : '');
+  ring.appendChild(core);
+
+  const n = v.players.length || 1;
+  v.players.forEach((p, i) => {
+    // -90° 起（正上方），顺时针铺开；半径按人数微调（人越多越贴边，避免互相压住）
+    const ang = (-90 + (360 / n) * i) * Math.PI / 180;
+    const rad = n > 10 ? 43 : 40;
+    const s = el('div', 'seat');
+    s.style.setProperty('--x', `${(Math.cos(ang) * rad).toFixed(2)}%`);
+    s.style.setProperty('--y', `${(Math.sin(ang) * rad).toFixed(2)}%`);
+    s.dataset.seat = p.seat;
+    if (!p.alive) s.classList.add('dead');
+    if (p.seat === mySeat) s.classList.add('mine');
+    if (p.isSheriff) s.classList.add('sheriff');
+    // 当前正在行动/发言的人：让"轮到谁"一眼可见（这一条替代了原来那行"等待 5 号思考"的文字）
+    if (liveSeat && liveSeat === p.seat) s.classList.add('speaking');
+    // 选目标状态：可选的人给虚线环 + 手型；已选的给血红实环
+    const canPick = actionState.needTarget && actionState.candidates.includes(p.seat);
+    if (canPick) s.classList.add('targetable');
+    if (canPick && actionState.target === p.seat) s.classList.add('picked');
+    // 已知身份：头像右下角一枚小徽记（整块文字 chip 会把每个座位撑高 18px，12 人局直接撞成一团），
+    // 同时把头像一个圆染色成阵营色 —— 一眼分阵营、细节靠悬停看名字。
+    const info = p.role ? roleInfo(p.role) : null;
+    const roleHtml = info
+      ? `<span class="role-chip" style="color:${info.color}" title="${info.emoji}${info.name}">${info.emoji}</span>` : '';
+    const badges = `${p.isSheriff ? '<span class="badge" title="警长">👑</span>' : ''}${p.lostVote ? '<span class="badge" title="失去投票权">🚫</span>' : ''}`;
+    const votes = tally[p.seat];
+    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}>${p.seat}${badges}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
+      + `<span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>${roleHtml}`;
+    s.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
+    // 点座位 = 选目标（与手机端同一套交互：目标类任务时座位本身就是按钮）
+    if (canPick) s.addEventListener('click', () => selectTarget(p.seat));
     // 身份标记（玩家视角：存活、未翻牌、非自己）
     const taggable = v.me && !state.godMode && p.alive && !p.revealed && p.seat !== v.me.seat;
     if (taggable) {
       const btn = el('button', 'btn small ghost tag-btn', '🏷');
       btn.title = '标记 TA 的可疑身份（仅自己可见）';
-      btn.addEventListener('click', () => openTagModal(p.seat));
+      btn.addEventListener('click', (ev) => { ev.stopPropagation(); openTagModal(p.seat); });
       s.appendChild(btn);
     }
     const tag = state.tags[p.seat];
@@ -1249,17 +1376,58 @@ function updateSeats(v) {
       chip.style.color = roleInfo(tag).color;
       s.appendChild(chip);
     }
-    box.appendChild(s);
+    ring.appendChild(s);
+  });
+  box.appendChild(ring);
+}
+
+/** 桌沿内侧的刻度盘（纯装饰）。
+ *  半径必须落在**圆心牌之外、座位之内**：座位圆心在 43%，圆心牌约占 23%，
+ *  所以刻度取 30~33%。早先画在 42~44.5% 时，72 根刻线正好穿过每个头像和名字，整张桌子很脏。 */
+function ringSvg() {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'ring-line');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('aria-hidden', 'true');
+  for (let i = 0; i < 72; i++) {
+    const a = (i * 5) * Math.PI / 180;
+    const r1 = 33, r2 = i % 6 === 0 ? 30.5 : 32; // 每 30° 一根长刻线，其余短刻线
+    const ln = document.createElementNS(NS, 'line');
+    ln.setAttribute('x1', (50 + Math.cos(a) * r1).toFixed(2));
+    ln.setAttribute('y1', (50 + Math.sin(a) * r1).toFixed(2));
+    ln.setAttribute('x2', (50 + Math.cos(a) * r2).toFixed(2));
+    ln.setAttribute('y2', (50 + Math.sin(a) * r2).toFixed(2));
+    ln.setAttribute('stroke', i % 6 === 0 ? 'rgba(216,178,95,.3)' : 'rgba(146,174,235,.12)');
+    ln.setAttribute('stroke-width', i % 6 === 0 ? '0.45' : '0.26');
+    svg.appendChild(ln);
   }
+  return svg;
+}
+
+/** 点圆桌选目标。必须先校验候选范围 —— 越界的座位会提交非法目标（与手机端 onSeatTap 同一约定）。 */
+function selectTarget(seat) {
+  if (!actionState.needTarget || !actionState.candidates.includes(seat)) return;
+  actionState.target = seat;
+  if (state.lastView) updateSeats(state.lastView);
+  // 同步底部胶囊的高亮：两处选择器必须永远一致，否则会出现"桌上选了 5 号、底下还亮着 3 号"
+  document.querySelectorAll('#action-controls .chip').forEach((c) => {
+    c.classList.toggle('sel', Number(c.dataset.seat) === seat);
+  });
 }
 
 // ---------------- 操作区 ----------------
-let actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0 };
+// needTarget/candidates：让圆桌上的座位也能当目标按钮用（与底部胶囊共享同一份候选范围）
+let actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
 
 function updateActionbar(v) {
   const hint = $('#pending-hint');
   const box = $('#action-controls');
   const p = v.pending;
+  // 每一帧先撤销"可点目标"状态：真正带目标的控件会在 targetPicker 里重新置上。
+  // 不清会导致上一轮的目标（比如"守护 3 号"）残留在这一轮，圆桌上出现一堆不该点亮的虚线环。
+  actionState.needTarget = false;
+  actionState.candidates = [];
   if (!p && v.wolfTalk && v.wolfTalk.active) {
     // 狼队讨论进行中：常驻插话栏（不因轮询重建，保护正在输入的文字）
     const sig = `wt:${v.wolfTalk.round}/${v.wolfTalk.rounds}`;
@@ -1306,7 +1474,7 @@ function updateActionbar(v) {
   hint.className = 'pending-hint';
   hint.textContent = '⏳ 轮到你了（无时间限制，想好再发）';
   if (box.dataset.task === p.task + JSON.stringify(p.candidates || '') + String(p.extra ? p.extra.killTarget : '')) return;
-  actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0 };
+  actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
   box.innerHTML = '';
   box.dataset.task = p.task + JSON.stringify(p.candidates || '') + String(p.extra ? p.extra.killTarget : '');
   buildActionUI(v, p, box);
@@ -1456,10 +1624,12 @@ function chipSeat(seat, extraCls) {
   const nm = state.seatNames[seat] || '';
   const label = nm && nm !== `${seat}号` ? `${seat}<small>${escapeHtml(nm)}</small>` : `${seat}号`;
   const c = el('button', `chip ${extraCls || ''}`, label);
+  c.dataset.seat = seat;
   c.addEventListener('click', () => {
     actionState.target = seat;
     [...c.parentElement.children].forEach((x) => x.classList.remove('sel'));
     c.classList.add('sel');
+    if (state.lastView) updateSeats(state.lastView); // 圆桌同步点亮（见 selectTarget）
   });
   return c;
 }
@@ -1474,9 +1644,14 @@ function targetPicker(candidates, opts = {}) {
       actionState.target = 0;
       [...wrap.children].forEach((x) => x.classList.remove('sel'));
       none.classList.add('sel');
+      if (state.lastView) updateSeats(state.lastView);
     });
     wrap.appendChild(none);
   }
+  // 候选范围上交给 actionState：圆桌上的座位据此变成可点目标（两处入口，一份状态）
+  actionState.needTarget = true;
+  actionState.candidates = (candidates || []).slice();
+  if (state.lastView) updateSeats(state.lastView);
   return wrap;
 }
 
@@ -1872,13 +2047,20 @@ function toggleGod() {
 function renderCoach(v) {
   const box = $('#coach-panel');
   if (!box) return;
-  if (!v || !v.finished) { box.classList.add('hidden'); box.innerHTML = ''; state.coachSig = null; return; }
+  // 复盘面板占一列：布局由 #screen-game.has-coach 决定（CSS 里就两条 grid 定义，不靠 JS 算宽）
+  const screen = document.getElementById('screen-game');
+  if (!v || !v.finished) {
+    box.classList.add('hidden'); box.innerHTML = ''; state.coachSig = null;
+    if (screen) screen.classList.remove('has-coach');
+    return;
+  }
   const r = v.review || null;
   // 签名：内容没变就不重绘，否则每次视图更新都会把用户正在读的文本重建一遍
   const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}`;
   if (sig === state.coachSig) return;
   state.coachSig = sig;
   box.classList.remove('hidden');
+  if (screen) screen.classList.add('has-coach'); // 复盘面板出现时让出第三列
   box.innerHTML = '';
 
   const head = el('div', 'coach-head');

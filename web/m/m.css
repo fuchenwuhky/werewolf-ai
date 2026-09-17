@@ -1,15 +1,17 @@
-/* AI 狼人杀 APP 端 — 哥特暗黑（与桌面版同主题） */
+/* AI 狼人杀 APP 端 — 月夜集会（与桌面版同一套 token 与氛围） */
 @import url('../style.css');
 
 html, body { height: 100%; overscroll-behavior: none; }
-#m-app { height: 100%; display: flex; flex-direction: column; }
+/* position/z-index 是给氛围层让位的：.atmosphere 是 position:fixed + z-index:0，
+   静态的 #m-app 在层叠顺序上会被它盖住（桌面版 #app 一直带着 z-index:1 才没出问题）。 */
+#m-app { height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1; }
 .m-screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .m-screen.hidden { display: none !important; }
 
 .m-head {
   padding: calc(env(safe-area-inset-top, 0px) + var(--sp-3)) var(--sp-4) var(--sp-3);
   border-bottom: 1px solid var(--gold-dim);
-  background: linear-gradient(180deg, #17121f, #100d18);
+  background: linear-gradient(180deg, #0b1120, #070b16);
   display: flex; align-items: center; gap: var(--sp-3);
 }
 /* 顶栏标题：和桌面版一样收掉大半径金色发光（中文字形上会糊） */
@@ -26,12 +28,12 @@ html, body { height: 100%; overscroll-behavior: none; }
   display: flex; align-items: center; gap: var(--sp-2); flex: none;
   padding: calc(env(safe-area-inset-top, 0px) + var(--sp-2)) var(--sp-2) var(--sp-2);
   border-bottom: 1px solid var(--gold-dim);
-  background: linear-gradient(180deg, #17121f, #100d18);
+  background: linear-gradient(180deg, #0b1120, #070b16);
 }
 /* 顶栏只有两个按钮（设置 / 规则书），都很小：整条 44px 高，别抢牌桌的竖向空间 */
 .m-gear {
   flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
-  background: linear-gradient(180deg, #241c36, #140f20);
+  background: linear-gradient(180deg, #18223c, #0d1425);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
   font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
@@ -42,7 +44,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 顶栏右上角：规则书（用户指定放这边，正好利用空位） */
 .m-bar-btn {
   flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
-  background: linear-gradient(180deg, #241c36, #140f20);
+  background: linear-gradient(180deg, #18223c, #0d1425);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
   font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
@@ -56,7 +58,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 
 .m-scroll { flex: 1; overflow: auto; padding: var(--sp-4); }
 .m-summary {
-  background: linear-gradient(180deg, var(--card), #141020);
+  background: linear-gradient(180deg, var(--card), #0d1425);
   border: 1px solid var(--line-dim); border-radius: var(--r-md);
   box-shadow: var(--el-2), inset 0 0 0 1px rgba(201,162,39,.13);
   padding: var(--sp-3) var(--sp-4); font-size: var(--fs-md); line-height: 1.8; margin-bottom: var(--sp-4);
@@ -69,7 +71,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-grid { flex: 1; overflow: auto; padding: var(--sp-4); display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); align-content: start; }
 .m-board-card {
   position: relative; min-height: 118px; border-radius: var(--r-md); cursor: pointer; padding: var(--sp-3);
-  background: linear-gradient(165deg, #241c36 0%, #110d1b 75%);
+  background: linear-gradient(165deg, #18223c 0%, #110d1b 75%);
   border: 1px solid var(--line-dim);
   box-shadow: var(--el-2), inset 0 0 0 1px rgba(201,162,39,.13);
   transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
@@ -85,7 +87,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-foot {
   display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
   padding: var(--sp-3) var(--sp-4) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3));
-  border-top: 1px solid var(--gold-dim); background: linear-gradient(180deg, #17121f, #0e0b15);
+  border-top: 1px solid var(--gold-dim); background: linear-gradient(180deg, #0b1120, #060a14);
 }
 .m-foot .btn { min-height: var(--h-ctl-lg); }
 .m-custom-row {
@@ -148,7 +150,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-flow .msg .meta { font-size: 10px; margin-bottom: 2px; gap: 5px; }
 .m-flow .msg .meta .who { font-weight: 600; }
 .m-flow .msg.mine {
-  background: linear-gradient(180deg, #2b2237, #1f1929);
+  background: linear-gradient(180deg, #1c2740, #141d33);
   border-left: 3px solid var(--gold);
 }
 .m-flow .msg.mine .meta .who { color: var(--gold-bright); }
@@ -177,7 +179,7 @@ html, body { height: 100%; overscroll-behavior: none; }
   display: flex; align-items: center; justify-content: center;
   font-family: var(--font-goth); font-size: var(--fs-md); font-weight: 700;
   color: var(--gold-dim);
-  background: radial-gradient(circle at 35% 28%, #30254a, #191226 72%);
+  background: radial-gradient(circle at 35% 28%, #26355c, #101728 72%);
   border: 1px solid rgba(201,162,39,.3);
   box-shadow: inset 0 0 9px rgba(0,0,0,.8);
   transition: border-color .15s ease, box-shadow .15s ease, background .15s ease, transform .1s ease;
@@ -190,10 +192,10 @@ html, body { height: 100%; overscroll-behavior: none; }
 .srow:active .num { transform: scale(.92); }
 .srow.mine .num { color: var(--gold); border-color: var(--gold); box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 10px rgba(201,162,39,.35); }
 .srow.mine .nm { color: var(--text); }
-.srow.speaking .num { color: #fff5d6; border-color: #f4e3a0; animation: seatPulse 1.6s ease-in-out infinite; }
+.srow.speaking .num { color: #fff5d6; border-color: #f4de9f; animation: seatPulse 1.6s ease-in-out infinite; }
 @keyframes seatPulse {
   0%, 100% { box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 0 1px rgba(201,162,39,.4), 0 0 7px rgba(201,162,39,.3); }
-  50% { box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 0 2px #f4e3a0, 0 0 16px rgba(201,162,39,.8); }
+  50% { box-shadow: inset 0 0 9px rgba(0,0,0,.8), 0 0 0 2px #f4de9f, 0 0 16px rgba(201,162,39,.8); }
 }
 .srow.dead { filter: grayscale(.85) brightness(.58); }
 .srow.dead .num::after {
@@ -209,7 +211,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 .srow.pickable .num { border-style: dashed; border-color: rgba(201,162,39,.7); }
 .srow.picked .num {
   color: #fff; border: 2px solid var(--accent);
-  background: radial-gradient(circle at 35% 28%, #6d1f2b, #34101a 75%);
+  background: radial-gradient(circle at 35% 28%, #5c1a24, #2a0d14 75%);
   box-shadow: inset 0 0 9px rgba(0,0,0,.7), 0 0 14px rgba(179,46,62,.6);
 }
 .srow.picked .nm { color: #ffd7dd; }
@@ -222,7 +224,7 @@ html, body { height: 100%; overscroll-behavior: none; }
   margin-top: var(--sp-2); min-height: 142px;
   padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));
   border-top: 1px solid var(--gold-dim);
-  background: linear-gradient(180deg, #17121f, #0e0b15);
+  background: linear-gradient(180deg, #0b1120, #060a14);
   box-shadow: 0 -8px 24px rgba(0,0,0,.5);
 }
 /* 身份牌：常驻可见（旧版要点顶部 🎴 才看得到），点击开检视大卡。
@@ -285,7 +287,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 不可用：灰红（去饱和 + 压暗），并且 disabled 真的点不动 */
 .key.off {
   color: #8d6c72; border-color: #4a3238;
-  background: linear-gradient(180deg, #2e2429, #241b20);
+  background: linear-gradient(180deg, #1a1f2e, #12161f);
   cursor: not-allowed; box-shadow: none;
 }
 /* 次要但可用（不上警 / 空过 / 弃票 / 撕毁）：暗红描边，明确区别于"不可用" */
@@ -372,18 +374,18 @@ html, body { height: 100%; overscroll-behavior: none; }
 #offline-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
   padding: var(--sp-2) 14px; text-align: center; font-size: var(--fs-md);
-  background: #4a1118; color: #ffd9b0; border-bottom: 1px solid #c9a227;
+  background: #4a1118; color: #ffd9b0; border-bottom: 1px solid #d8b25f;
 }
 #offline-banner[hidden] { display: none; }
 #sw-update { position: fixed; right: 12px; bottom: 12px; z-index: 9999; }
 #sw-update button {
   padding: 10px var(--sp-4); border-radius: var(--r-pill); cursor: pointer; font-size: var(--fs-base);
-  border: 1px solid #c9a227; background: #1a1526; color: #e2c979;
+  border: 1px solid #d8b25f; background: #0f1626; color: #e2c979;
 }
-:focus-visible { outline: 2px solid #c9a227; outline-offset: 2px; }
+:focus-visible { outline: 2px solid #d8b25f; outline-offset: 2px; }
 .skip-link {
   position: absolute; left: -9999px; top: 0; z-index: 10000;
-  padding: 10px var(--sp-4); background: #c9a227; color: #14101d; font-weight: 700;
+  padding: 10px var(--sp-4); background: #d8b25f; color: #14101d; font-weight: 700;
 }
 .skip-link:focus { left: 0; }
 .sr-only {

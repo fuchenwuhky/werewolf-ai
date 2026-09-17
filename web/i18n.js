@@ -16,7 +16,8 @@
 (function (root) {
   const DICT = {
     'zh-CN': {
-      'app.title': '🐺 AI 狼人杀',
+      'app.kicker': '月夜集会 · 村人闭眼，狼人睁眼',
+  'app.title': '🐺 AI 狼人杀',
       'app.sub': '本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口',
       'skip.toMain': '跳到主内容',
       'common.save': '保存配置',
@@ -24,7 +25,7 @@
       'common.refresh': '刷新',
       'common.close': '关闭',
 
-      'api.title': '① API 配置',
+      'api.title': 'API 配置',
       'api.baseUrl': '接口地址 base_url',
       'api.model': '模型 model',
       'api.key': 'API Key',
@@ -43,13 +44,13 @@
       'api.keepAlive': '复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可',
       'api.langSwitch': '切换界面语言',
 
-      'board.title': '② 板子',
+      'board.title': '板子',
       'board.template': '模板',
-      'rules.title': '③ 规则开关',
+      'rules.title': '规则开关',
       'rules.defaultHint': '默认 = 网易12人守卫局',
       'rules.nightOrder': '夜晚行动顺序',
       'rules.nightOrderHint': '（默认按官方流程，通常不用改；展开可调整先后）',
-      'players.title': '④ 玩家',
+      'players.title': '玩家',
       'players.modePlay': '我当玩家（其余全是 AI）',
       'players.modeWatch': '纯观战（上帝视角看 AI 互杀）',
       'players.seat': '我的座位',
@@ -107,7 +108,8 @@
       'offline.retry': '重试',
     },
     en: {
-      'app.title': '🐺 AI Werewolf',
+      'app.kicker': 'Moonlit gathering · villagers sleep, wolves wake',
+  'app.title': '🐺 AI Werewolf',
       'app.sub': 'Local web build · 1 human + AI players · OpenAI-compatible API',
       'skip.toMain': 'Skip to main content',
       'common.save': 'Save',
@@ -115,7 +117,7 @@
       'common.refresh': 'Refresh',
       'common.close': 'Close',
 
-      'api.title': '① API',
+      'api.title': 'API',
       'api.baseUrl': 'Base URL',
       'api.model': 'Model',
       'api.key': 'API key',
@@ -134,13 +136,13 @@
       'api.keepAlive': 'Reuse HTTP connections (on by default; saves a TCP+TLS handshake, ~90ms per call). If the log keeps showing ECONNRESET, a firewall or proxy is closing idle connections — turn it off.',
       'api.langSwitch': 'Switch interface language',
 
-      'board.title': '② Board',
+      'board.title': 'Board',
       'board.template': 'Template',
-      'rules.title': '③ Rule switches',
+      'rules.title': 'Rule switches',
       'rules.defaultHint': 'default = NetEase 12-player guard board',
       'rules.nightOrder': 'Night action order',
       'rules.nightOrderHint': '(official order by default; expand to reorder)',
-      'players.title': '④ Players',
+      'players.title': 'Players',
       'players.modePlay': 'I play (everyone else is AI)',
       'players.modeWatch': 'Spectate (god view, AI vs AI)',
       'players.seat': 'My seat',

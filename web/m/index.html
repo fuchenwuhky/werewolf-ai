@@ -32,6 +32,15 @@
 })();
 </script>
 <a class="skip-link" href="#m-app" data-i18n="skip.toMain">跳到主内容</a>
+<!-- 氛围层：与桌面版同一套（天空 / 群星 / 月亮 / 颗粒 / 暗角）。
+     手机端不放村舍剪影 —— 小屏上那点细节只会变成噪点。CSS 见 style.css 的「氛围层」一节。 -->
+<div class="atmosphere" aria-hidden="true">
+  <div class="atmo-sky"></div>
+  <div class="atmo-stars"></div>
+  <div class="atmo-moon"><span class="moon-halo"></span><span class="moon-disc"></span></div>
+  <div class="atmo-grain"></div>
+  <div class="atmo-vignette"></div>
+</div>
 <div id="m-app" role="main" tabindex="-1">
 
   <!-- 屏1：选择板子 -->

@@ -3,20 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#0b0a10">
+<meta name="theme-color" content="#06090f">
 <title>离线 · AI 狼人杀</title>
-<!-- 样式内联：这个页面必须在"任何外部资源都取不到"时仍然能看 -->
+<!-- 样式内联：这个页面必须在"任何外部资源都取不到"时仍然能看。
+     取值与 style.css 的 token 一致（墨蓝夜色 + 鎏金），只是内联了一份最小副本。 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #0b0a10; color: #e8e3d6;
+  html, body { margin: 0; height: 100%; background: #06090f; color: #ebe4d7;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
   .wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; gap: 14px; }
-  .ring { width: 120px; height: 120px; border-radius: 50%; border: 6px solid #6b5416; box-shadow: inset 0 0 0 4px #c9a227; background: #8a1c2b; display: flex; align-items: center; justify-content: center; font-size: 48px; }
+  .ring { width: 120px; height: 120px; border-radius: 50%; border: 6px solid #8a6b23; box-shadow: inset 0 0 0 4px #d8b25f; background: #7d1c27; display: flex; align-items: center; justify-content: center; font-size: 48px; }
   h1 { font-size: 20px; margin: 6px 0 0; letter-spacing: 1px; }
-  p { margin: 0; color: #a99f8a; line-height: 1.7; font-size: 14px; max-width: 30em; }
-  .hint { color: #c9a227; }
-  button { margin-top: 8px; padding: 10px 22px; border-radius: 999px; border: 1px solid #c9a227;
-    background: transparent; color: #e2c979; font-size: 15px; cursor: pointer; }
-  button:hover { background: rgba(201,162,39,.12); }
+  p { margin: 0; color: #8d96b7; line-height: 1.7; font-size: 14px; max-width: 30em; }
+  .hint { color: #d8b25f; }
+  button { margin-top: 8px; padding: 10px 22px; border-radius: 999px; border: 1px solid #d8b25f;
+    background: transparent; color: #f4de9f; font-size: 15px; cursor: pointer; }
+  button:hover { background: rgba(216,178,95,.12); }
 </style>
 </head>
 <body>

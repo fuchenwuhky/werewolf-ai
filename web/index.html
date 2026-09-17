@@ -4,14 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI 狼人杀</title>
-<meta name="theme-color" content="#0b0a10">
-<meta name="description" content="与 AI 玩家同桌的哥特暗黑风狼人杀（1 名人类 + AI）">
+<meta name="theme-color" content="#05070f">
+<meta name="description" content="与 AI 玩家同桌的月夜狼人杀（1 名人类 + AI）">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-phase="dusk">
 <script>
 /* 初始化守卫（必须是最先执行的脚本）：app.js 还在下载/解析时，按钮虽然点得到但事件还没绑上，
    点了毫无反应 —— 冷启动慢的设备上会让人以为界面坏了。这里在捕获阶段统一给一句说明。
@@ -29,106 +29,174 @@
   }, true);
 })();
 </script>
+
+<!-- ============ 氛围层（纯装饰，不进可访问性树） ============
+     月夜村庄：夜空渐变 + 群星 + 月亮 + 村舍剪影 + 颗粒 + 暗角。
+     它同时是**功能指示**：body[data-phase] 切换昼夜，白天暖、夜晚冷，
+     玩家不必读文字也能感到"现在是什么阶段"。 -->
+<div class="atmosphere" aria-hidden="true">
+  <div class="atmo-sky"></div>
+  <div class="atmo-stars"></div>
+  <div class="atmo-moon"><span class="moon-halo"></span><span class="moon-disc"></span></div>
+
+  <div class="atmo-grain"></div>
+  <div class="atmo-vignette"></div>
+</div>
+
 <a class="skip-link" href="#app" data-i18n="skip.toMain">跳到主内容</a>
 <div id="app" role="main" tabindex="-1">
 
   <!-- ============ 设置页 ============ -->
   <section id="screen-setup" class="screen">
-    <header class="topbar">
-      <h1 data-i18n="app.title">🐺 AI 狼人杀</h1>
-      <span class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</span>
-      <button class="btn ghost small" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
+    <header class="hero">
+    <!-- 村舍剪影放在 hero 里（而不是固定层）：固定层会被设置页的卡片整片盖住，
+         放在 hero 底部才真的看得见，也才有"从窗口望见村庄"的意味。 -->
+    <svg class="hero-scene" viewBox="0 0 1440 200" preserveAspectRatio="none" aria-hidden="true">
+      <defs>
+        <!-- 远山受月光，比天空略亮；近处村舍压成剪影。纵深靠明度差，不靠描边 -->
+        <linearGradient id="vilG1" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#17233f"/><stop offset="1" stop-color="#0a1122"/>
+        </linearGradient>
+        <linearGradient id="vilG2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#05080f"/><stop offset="1" stop-color="#04060b"/>
+        </linearGradient>
+      </defs>
+      <path class="vil-far" fill="url(#vilG1)" d="M0 150 L90 112 L170 136 L280 88 L390 130 L470 104 L560 142 L660 96 L760 138 L860 106 L980 144 L1080 102 L1180 136 L1290 100 L1380 130 L1440 116 L1440 200 L0 200 Z"/>
+      <path class="vil-near" fill="url(#vilG2)" d="M0 180 L60 160 L110 178 L180 146 L250 176 L320 152 L380 178 L450 156 L520 180 L590 154 L660 182 L730 158 L800 180 L870 152 L940 178 L1010 154 L1080 180 L1150 156 L1220 178 L1300 150 L1370 178 L1440 160 L1440 200 L0 200 Z"/>
+      <g class="vil-lights">
+        <circle cx="196" cy="164" r="2.2"/><circle cx="330" cy="166" r="1.8"/><circle cx="612" cy="168" r="2"/>
+        <circle cx="884" cy="164" r="2.1"/><circle cx="1166" cy="166" r="1.9"/>
+      </g>
+    </svg>
+      <div class="hero-inner">
+        <div class="hero-mark" aria-hidden="true">
+          <!-- 狼首纹章：几何化处理，避免"贴图感" -->
+          <svg viewBox="0 0 120 120">
+            <defs>
+              <linearGradient id="wolfFur" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0" stop-color="#2b3557"/><stop offset="1" stop-color="#121a33"/>
+              </linearGradient>
+              <linearGradient id="wolfEye" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#ffd98a"/><stop offset="1" stop-color="#e0a33a"/>
+              </linearGradient>
+            </defs>
+            <circle cx="60" cy="60" r="56" class="mark-ring"/>
+            <circle cx="60" cy="60" r="48" class="mark-ring2"/>
+            <path class="mark-fur" fill="url(#wolfFur)" d="M60 24 L84 34 L78 20 L96 44 L88 52 C88 76 76 92 60 98 C44 92 32 76 32 52 L24 44 L42 20 L36 34 Z"/>
+            <ellipse class="mark-eye" cx="47" cy="55" rx="7" ry="5" fill="url(#wolfEye)"/>
+            <ellipse class="mark-eye" cx="73" cy="55" rx="7" ry="5" fill="url(#wolfEye)"/>
+            <path class="mark-snout" d="M60 68 L54 80 L60 86 L66 80 Z"/>
+          </svg>
+        </div>
+        <div class="hero-text">
+          <p class="hero-kicker" data-i18n="app.kicker">月夜集会 · 村人闭眼，狼人睁眼</p>
+          <h1 id="app-title" data-i18n="app.title">🐺 AI 狼人杀</h1>
+          <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
+          <ul class="hero-facts" id="hero-facts"></ul>
+        </div>
+        <button class="btn ghost small hero-lang" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
+      </div>
     </header>
 
-    <div class="setup-grid">
-      <!-- 左列：① API 配置 + ② 板子 -->
-      <div class="setup-col">
-      <!-- API 配置 -->
-      <div class="card" id="card-api">
-        <h2 data-i18n="api.title">① API 配置</h2>
-        <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
-        <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
-        <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
-        <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
-        <div class="hint" id="cfg-channels"></div>
-        <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
-        <button class="btn ghost small" id="btn-probe" type="button">探测并发额度</button>
-        <div class="row2">
-          <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
-          <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
-        </div>
-        <label><span data-i18n="api.pace">节奏档位（一次设定思考强度 / 反思频率 / 上下文预算）</span>
-          <select id="cfg-pace"></select></label>
-        <div class="hint" id="cfg-pace-hint"></div>
-        <div class="row2">
-          <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
-            <select id="cfg-effort">
-              <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
-              <option value="high" data-i18n="api.effortHigh">普通 high（默认）</option>
-            </select></label>
-          <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
-            <select id="cfg-fasteffort">
-              <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
-              <option value="high" data-i18n="api.fastEffortHigh">普通 high</option>
-            </select></label>
-        </div>
-        <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>
-          <input id="cfg-budget" type="number" step="1000" min="3000"></label>
-        <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> <span data-i18n="api.cacheControl">给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</span></label>
-        <label class="checkline"><input id="cfg-keepalive" type="checkbox"> <span data-i18n="api.keepAlive">复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可</span></label>
-        <div class="btnrow">
-          <button class="btn" id="btn-save-config" data-i18n="common.save">保存配置</button>
-          <button class="btn ghost" id="btn-test-config" data-i18n="common.test">测试连接</button>
-          <span id="cfg-test-result" class="hint"></span>
-        </div>
-      </div>
-
-      <!-- 板子 -->
-      <div class="card" id="card-board">
-        <h2 data-i18n="board.title">② 板子</h2>
-        <label><span data-i18n="board.template">模板</span>
-          <select id="board-template"></select>
-        </label>
-        <div id="board-editor" class="board-editor"></div>
-        <div class="hint" id="board-total"></div>
-      </div>
-      </div><!-- /左列 -->
-
-      <!-- 右列：③ 规则开关 + ④ 玩家 -->
-      <div class="setup-col">
-      <!-- 规则开关 -->
-      <div class="card" id="card-rules">
-        <h2><span data-i18n="rules.title">③ 规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
-        <div id="rules-editor"></div>
-      </div>
-
-      <!-- 玩家 -->
-      <div class="card" id="card-players">
-        <h2 data-i18n="players.title">④ 玩家</h2>
-        <label class="checkline"><input type="radio" name="mode" value="play" checked> <span data-i18n="players.modePlay">我当玩家（其余全是 AI）</span></label>
-        <label class="checkline"><input type="radio" name="mode" value="watch"> <span data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</span></label>
-        <div id="play-options">
-          <div class="row2">
-            <label><span data-i18n="players.seat">我的座位</span>
-              <select id="my-seat"></select>
-            </label>
-            <label><span data-i18n="players.name">我的昵称</span><input id="my-name" value="我" maxlength="12"></label>
+    <div class="setup-scroll">
+      <div class="setup-grid">
+        <!-- 左列：① API 配置 + ② 板子 -->
+        <div class="setup-col">
+        <!-- API 配置 -->
+        <div class="card" id="card-api">
+          <!-- 编号走 CSS 的 attr(data-no) 伪元素：data-i18n 会整块替换 textContent，写子元素会被抹掉 -->
+          <h2 data-no="①" data-i18n="api.title">API 配置</h2>
+          <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
+          <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
+          <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
+          <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
+          <div class="hint" id="cfg-channels"></div>
+          <div class="btnrow">
+            <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
+            <button class="btn ghost small" id="btn-probe" type="button">探测并发额度</button>
           </div>
-          <div class="hint" id="seat-hint"></div>
+          <div class="row2">
+            <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
+            <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
+          </div>
+          <label><span data-i18n="api.pace">节奏档位（一次设定思考强度 / 反思频率 / 上下文预算）</span>
+            <select id="cfg-pace"></select></label>
+          <div class="hint" id="cfg-pace-hint"></div>
+          <div class="row2">
+            <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
+              <select id="cfg-effort">
+                <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
+                <option value="high" data-i18n="api.effortHigh">普通 high（默认）</option>
+              </select></label>
+            <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
+              <select id="cfg-fasteffort">
+                <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
+                <option value="high" data-i18n="api.fastEffortHigh">普通 high</option>
+              </select></label>
+          </div>
+          <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>
+            <input id="cfg-budget" type="number" step="1000" min="3000"></label>
+          <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> <span data-i18n="api.cacheControl">给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</span></label>
+          <label class="checkline"><input id="cfg-keepalive" type="checkbox"> <span data-i18n="api.keepAlive">复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可</span></label>
+          <div class="btnrow">
+            <button class="btn" id="btn-save-config" data-i18n="common.save">保存配置</button>
+            <button class="btn ghost" id="btn-test-config" data-i18n="common.test">测试连接</button>
+            <span id="cfg-test-result" class="hint"></span>
+          </div>
         </div>
-        <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
-        <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
-        <div id="ai-names" class="ai-names"></div>
-        <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button></div>
-        <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
-        <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
+
+        <!-- 板子 -->
+        <div class="card" id="card-board">
+          <h2 data-no="②" data-i18n="board.title">板子</h2>
+          <label><span data-i18n="board.template">模板</span>
+            <select id="board-template"></select>
+          </label>
+          <div id="board-editor" class="board-editor"></div>
+          <div class="hint" id="board-total"></div>
+        </div>
+        </div><!-- /左列 -->
+
+        <!-- 右列：③ 规则开关 + ④ 玩家 -->
+        <div class="setup-col">
+        <!-- 规则开关 -->
+        <div class="card" id="card-rules">
+          <h2 data-no="③"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
+          <div id="rules-editor"></div>
+        </div>
+
+        <!-- 玩家 -->
+        <div class="card" id="card-players">
+          <h2 data-no="④" data-i18n="players.title">玩家</h2>
+          <div class="mode-picker">
+            <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
+            <label class="mode-card"><input type="radio" name="mode" value="watch"> <span class="mode-body"><b data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</b></span></label>
+          </div>
+          <div id="play-options">
+            <div class="row2">
+              <label><span data-i18n="players.seat">我的座位</span>
+                <select id="my-seat"></select>
+              </label>
+              <label><span data-i18n="players.name">我的昵称</span><input id="my-name" value="我" maxlength="12"></label>
+            </div>
+            <div class="hint" id="seat-hint"></div>
+          </div>
+          <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
+          <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
+          <div id="ai-names" class="ai-names"></div>
+          <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button></div>
+          <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
+          <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
+        </div>
+        </div><!-- /右列 -->
       </div>
-      </div><!-- /右列 -->
     </div>
 
     <div class="setup-actions">
-      <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
-      <span class="hint" id="setup-error"></span>
+      <div class="setup-actions-inner">
+        <div class="setup-summary" id="setup-summary"></div>
+        <span class="hint" id="setup-error"></span>
+        <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
+      </div>
     </div>
     <div id="resume-box" class="hidden card">
       <h2 data-i18n="resume.title">发现进行中的对局</h2>
@@ -141,12 +209,16 @@
   <section id="screen-game" class="screen hidden">
     <header class="topbar game-top">
       <div class="game-status">
-        <strong id="g-day">第0天</strong>
+        <div class="day-plate">
+          <span class="day-num" id="g-day">第0天</span>
+          <span class="day-kicker" id="g-day-kicker">DAY</span>
+        </div>
         <span id="g-phase" class="phase-chip">开局</span>
         <span id="g-me" class="me-chip"></span>
         <span id="g-memory" class="me-chip hidden"></span>
       </div>
       <div class="top-actions">
+        <span class="alive-meter" id="g-alive" title="存活人数"></span>
         <button class="btn ghost" id="btn-gear" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置">⚙</button>
       </div>
     </header>

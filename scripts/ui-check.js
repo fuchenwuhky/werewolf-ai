@@ -212,7 +212,9 @@ class Browser {
     log('\n=== 中英文切换 ===');
     await b.click('#btn-lang');
     await sleep(500);
-    const en = await b.eval(`({ lang: document.documentElement.lang, title: document.querySelector('.topbar h1')?.textContent, save: document.getElementById('btn-save-config')?.textContent })`);
+    // 标题取 #app-title（设置页 hero 里的 h1）：用稳定的 id 而不是 .topbar h1，
+  // 后者是"对局页顶栏"的位置类名，界面重构一改标题就不在这里了（本轮就撞过一次）。
+  const en = await b.eval(`({ lang: document.documentElement.lang, title: (document.getElementById('app-title') || document.querySelector('.topbar h1'))?.textContent, save: document.getElementById('btn-save-config')?.textContent })`);
     check('切英文后 <html lang>=en 且文案变化', en.lang === 'en' && /Werewolf/.test(en.title || '') && en.save === 'Save', JSON.stringify(en));
     await b.shot(path.join(SHOTS, '03-english.png'));
     await b.click('#btn-lang');
