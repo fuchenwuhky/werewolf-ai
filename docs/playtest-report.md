@@ -255,14 +255,21 @@
 两局都是 `finished: true` **自然结束**；提交往返 p50 5–7ms；0 次被拒。
 **第二个数据点**：第 2 局自然结束后，3211 实例仍然 **0 个 `game-*.log`**（见 §3.12）。
 
-### 日志问题的代码级调查（未收敛，需运行时探测）
-`src/log.js` 的三条事实与现象矛盾：
-- L17 `this.dir = opts.dir || path.join(process.cwd(), 'logs')` → 目录隔离是生效的（`server.log` 确实被建在了临时目录）
-- L16 `this.level = ... || process.env.LOG_LEVEL || 'debug'` → 默认 debug，**不会过滤掉 info/debug**
-- L25 `fs.createWriteStream(.../server.log)` → 流一定会创建（文件被创建即为证）
+### 日志问题的代码级调查（**已缩小范围，含一处更正**）
+**运行时探测（3214 实例，显式 `LOG_LEVEL=debug`，打一局 mock）**：
+```
+logs\game-gmu5jshxh2oo.log (0 bytes)
+logs\server.log            (0 bytes)
+```
+- **更正**：对局日志文件**会被创建**（我此前说"0 个"是 3211 那个实例的现象，不是普遍规律）。
+  真正的病灶是"**文件建了但写出被吞**"。
+- **关键对照组**：P1 用 `scripts/playtest-fault.js` 起的假 LLM 实例，日志有 **634 KB**（能读能聚合）。
+- 两者差异因此收敛到**启动方式/env**：P1 跑器用 `spawn` 传**整份父环境**
+  （`{ ...process.env, PORT, NO_OPEN, WW_DATA_DIR, WW_CONFIG }`），我手工用 `Start-Process` 只传了少数变量。
+- `src/log.js` 的代码事实：`L17` 目录 `opts.dir || cwd/logs`、`L16` 级别默认 `debug`、`L25` 流一定创建 —— 三者都正常。
+- **下一步**：用与跑器**完全相同**的 spawn+env 方式起实例打一局，若日志正常 → 结论是"手工启动方式导致的写入异常"，
+  与用户日常使用无关；若仍为 0 字节 → 是真缺陷，继续查 `log()` 的写出路径。
 
-即"目录对、级别不过滤、流已建，却一个字节都没写"。**代码层面解释不通**，
-下一步做运行时探测（显式 `LOG_LEVEL=debug` 起实例，看是否立刻有输出），而不是继续猜。
 
 
 `node scripts/playtest.js --port=3211 --board=quick10 --seed=1401`（真实 API，我扮演 1 号座）：
