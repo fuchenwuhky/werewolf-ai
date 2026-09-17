@@ -359,6 +359,13 @@ P1 那场"打 10 天不结束"的真正症状是**对局没有终点**，而不�
 4. P6 的**实测口径**：日志写出已确认正常（§3.12 撤回误报），所以只要用**跑器同款启动**的实例
    （`spawn` + 整份父环境，见 `scripts/playtest-fault.js` 的方式）打一局**真实**对局，
    再用 `bench:pace` / `playtest:report` 读它的 `logs/game-*.log`，就能把"投影"换成实测数字。
+   **确切命令**（两个工具都能指向外部目录，**不必污染仓库 `logs/`**）：
+   ```
+   node scripts/serve-test.js --port=3216 --dir=<临时数据目录>     # 跑器同款启动，日志才写得出来
+   # 在它上面打完一局真实 quick10 之后：
+   $env:WW_LOG_DIR = '<临时数据目录>\logs'; npm run bench:pace     # pace-bench.js:28 读 WW_LOG_DIR
+   npm run playtest:report -- --dir=<临时数据目录>\logs
+   ```
    成本很低：quick10 实测一局 5.5–11.7 分钟、约 50–160 次调用，比 adv12 划算得多。
 5. 全程仍不打包 APK/exe、不碰 `saves/` 与正式 `config.json`；真局每局先报消耗。
 
