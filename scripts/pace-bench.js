@@ -119,7 +119,7 @@ function buildCalls(games) {
 // ---------- 2. 秩保持分位映射：把记录耗时换算到目标 effort ----------
 function makeProjector(calls) {
   const pool = { low: [], high: [] };
-  for (const c of calls) pool[c.recordedEffort].push(c.ms);
+  for (const c of calls) (pool[c.recordedEffort] || (pool[c.recordedEffort] = [])).push(c.ms);
   pool.low.sort((a, b) => a - b);
   pool.high.sort((a, b) => a - b);
   const quantileOf = (sorted, v) => {
@@ -128,10 +128,20 @@ function makeProjector(calls) {
     return sorted.length ? i / sorted.length : 0;
   };
   const atQuantile = (sorted, q) => sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(q * sorted.length)))];
-  return (ms, from, to) => {
-    if (from === to || !pool[from].length || !pool[to].length) return ms;
-    return atQuantile(pool[to], quantileOf(pool[from], ms));
+  const fn = (ms, from, to) => {
+    const a = pool[from];
+    const b = pool[to];
+    // 目标档位的 effort 可能**在日志里没有任何样本**（例如后来引入的 medium）：
+    // 原来直接读 pool[to].length 会抛 TypeError 把整个工具崩掉（实测就崩在这）。
+    // 做不了秩映射时原样返回记录耗时，并把"未投影"次数暴露给上层，让表格如实标注而不是假装投影过。
+    if (from === to || !a || !a.length || !b || !b.length) {
+      if (from !== to) fn.missCount++;
+      return ms;
+    }
+    return atQuantile(b, quantileOf(a, ms));
   };
+  fn.missCount = 0;
+  return fn;
 }
 
 /** 某档位下每次调用的目标 effort（走真实的 effort.planEffort 分支，不另抄一份规则） */
@@ -178,12 +188,19 @@ function main() {
   console.log('  档位'.padEnd(12) + '全部总耗时'.padStart(12) + '发言 p50'.padStart(11) + '发言 p90'.padStart(11) + '>60s 占比'.padStart(11));
   const byPace = {};
   for (const pace of ['fast', 'standard', 'deep']) {
-    const ms = calls.map((c) => project(c.ms, c.recordedEffort, targetEffort(pace, c)));
+    let unprojected = 0;
+    const ms = calls.map((c) => {
+      const before = project.missCount;
+      const v = project(c.ms, c.recordedEffort, targetEffort(pace, c));
+      if (project.missCount > before) unprojected++;
+      return v;
+    });
     const sp = calls.map((c, i) => (speechTasks.test(c.task) ? ms[i] : null)).filter((x) => x != null);
     byPace[pace] = ms;
     const slow = (100 * sp.filter((x) => x > 60000).length) / sp.length;
+    const note = unprojected ? `   ⚠ ${unprojected} 次未能投影（该档 effort 在本批日志里无样本，已原样计入）` : '';
     console.log(
-      `  ${(PACES[pace].label + '（' + pace + '）').padEnd(18)}${fmt(sum(ms)).padStart(10)}${fmt(pct(sp, 50)).padStart(11)}${fmt(pct(sp, 90)).padStart(11)}${slow.toFixed(1).padStart(10)}%`
+      `  ${(PACES[pace].label + '（' + pace + '）').padEnd(18)}${fmt(sum(ms)).padStart(10)}${fmt(pct(sp, 50)).padStart(11)}${fmt(pct(sp, 90)).padStart(11)}${slow.toFixed(1).padStart(10)}%${note}`
     );
   }
   const spNow = calls.map((c, i) => (speechTasks.test(c.task) ? byPace.standard[i] : null)).filter((x) => x != null);
