@@ -601,6 +601,12 @@ class Browser {
         await b.eval(`localStorage.setItem('ww_current', ${JSON.stringify(JSON.stringify(g))})`);
         await b.goto(base + '/', 2200);
       };
+      // 服务端事件计数：用来判断"这一次点击到底提交出去没有"——只看界面提示是不够的
+      // （面板会随推送重绘并重置提示，而且面板可能预选了目标，那样"空刀"根本不空）。
+      const countKnifeEvents = async (gid, tk) => {
+        const v = (await api('GET', `/api/games/${gid}/view?token=${tk}&after=0`)).body || {};
+        return (v.events || []).filter((e) => String(e.type || '').includes('wolf_kill')).length;
+      };
 
       // (D) P3-a 恢复卡片必须显示人数/天数/试玩还是真局
       log('\n=== P4-1 恢复卡片详情 ===');
@@ -716,6 +722,11 @@ class Browser {
             window.__f5.push(String((e.reason && e.reason.message) || e.reason || 'unknown'));
             e.preventDefault();
           });`);
+          // 关键前提：面板可能**预选**了目标，那样"空刀点击"其实是一次正常提交 →
+          // 上一轮我就是在这里得出过错误结论。先读出并清掉预选，再用服务端事件计数做证据。
+          const preTarget = await b.eval(`typeof actionState === 'undefined' ? 'unavailable' : actionState.target`);
+          await b.eval(`if (typeof actionState !== 'undefined') actionState.target = null;`);
+          const votesBefore = await countKnifeEvents(g3.gameId, g3.godToken);
           const emptyClick = await b.eval(`(() => {
             const hint = document.getElementById('pending-hint');
             const before = hint.textContent;
@@ -724,12 +735,15 @@ class Browser {
             submit.click();
             return { before, after: hint.textContent, used: submit.textContent.trim() };
           })()`);
-          // 已知缺口 F5（本用例暴露，未擅自改规则/交互）：狼队投票面板的提交键不走 confirmBtn，
-          // 空目标时抛未捕获异常 → **护栏有效（空刀提交不出去）但没有可读提示**。按项目约定先记录，
-          // 不伪装成通过、也不计入 fails；见 docs/playtest-report.md 的 F5。
           const stillPending = await b.eval(`document.getElementById('action-controls')?.dataset.task || ''`);
-          log(`  · 空刀提示：${/请先点一个座位/.test(emptyClick.after) ? '✓ 有可读提示' : `✗ 无可读提示（已知缺口 F5）提示=${emptyClick.after}`}`);
-          check('空刀不得提交（护栏有效）', stillPending.startsWith('wolf_kill'), `dom=${stillPending}`);
+          const votesAfter = await countKnifeEvents(g3.gameId, g3.godToken);
+          const noFeedback = !/请先点一个座位/.test(emptyClick.after);
+          log(`  · 空刀点击：按钮="${picked.used}"（候选 ${picked.labels}）预选目标=${preTarget} 投刀事件 ${votesBefore}→${votesAfter} 提示变化=${emptyClick.before === emptyClick.after ? '无' : '有'}`);
+          // 服务端证据：没有新增投刀事件 = 护栏真的挡住了空提交
+          check('空刀点击没有产生新的投刀事件（护栏有效）', votesAfter === votesBefore, `事件数 ${votesBefore} → ${votesAfter}｜点击后面板=${stillPending}`);
+          // 已知缺口 F5（待用户确认）：被拒时没有可读提示，玩家不知道自己为什么没投出去。
+          // 按项目约定先记录、不伪装成通过；它的定性依赖上面这条服务端证据。
+          if (noFeedback) log(`  · 已知缺口 F5：空刀被拒时无可读提示（提示仍为"${emptyClick.after}"），但未提交（证据如上）`);
           // 空刀点击已在页面里触发未捕获拒绝（F5）：先等它落地、把本段新增的异常条目清掉，再继续取图与读取；
           // 否则 Browser 会在下一次调用时因"页面抛错"直接中断整个验收（实测就是这样被打断的）。
           await sleep(900);
