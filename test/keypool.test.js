@@ -15,7 +15,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { LlmScheduler, PRIORITY } = require('../src/ai/scheduler');
-const { parseApiKeys, resolveChannels, DEFAULT_CONFIG } = require('../src/config');
+const { parseApiKeys, resolveChannels, perKeyChannels, canFanOut, DEFAULT_CONFIG } = require('../src/config');
 const { Game } = require('../src/engine/game');
 const { makeMockAgentFactory } = require('../scripts/mock-agent');
 const { _internals } = require('../src/engine/flow');
@@ -95,30 +95,81 @@ test('坏 Key 隔离：某通道致命失败后被临时摘除，其余通道继
   assert.match(snap.slots[disabledSlot].lastError, /配额/, '摘除原因要留档');
 });
 
-test('单 Key 时引擎不扇出（否则"正在思考"提示会显示错人）；多 Key 才开', () => {
+test('引擎扇出开关：只要"可能跑出 >1 并发"就开（含单 Key + 自适应）', () => {
   const board = { wolf: 1, seer: 1, villager: 4 };
   const players = [];
   for (let i = 0; i < 6; i++) players.push({ name: `P${i + 1}` });
   const mk = (parallelLlm) => new Game({ id: 'kp', board, players, agentFactory: makeMockAgentFactory(Math.random), stepPauseMs: 0, logger: { debug() {}, info() {}, warn() {}, error() {} }, parallelLlm });
-  assert.strictEqual(mk(false).parallelLlm, false, '默认（单 Key）必须是 false');
-  assert.strictEqual(mk(undefined).parallelLlm, false, '不传也必须是 false');
-  assert.strictEqual(mk(true).parallelLlm, true, '多 Key 时才置 true');
+  assert.strictEqual(mk(true).parallelLlm, true, '显式开：扇出');
+  assert.strictEqual(mk(false).parallelLlm, false, '显式关：不扇出（严格串行的回滚开关）');
+  // 真正的并发度由调度器按住每把 Key 的实时额度决定，引擎只表达"这些调用互不依赖"。
+  // 所以单 Key + 自适应开着时也要扇出 —— 否则调度器把额度探到 3 条也白搭。
+  assert.strictEqual(canFanOut({ apiKey: 'a' }), true, '单 Key + 默认自适应 → 允许扇出');
+  assert.strictEqual(canFanOut({ apiKey: 'a', adaptiveConcurrency: false }), false, '单 Key + 关自适应 → 严格串行');
+  assert.strictEqual(canFanOut({ apiKey: 'a,b' }), true, '多 Key → 允许扇出');
+  assert.strictEqual(canFanOut({ apiKey: 'a,b', adaptiveConcurrency: false }), true, '多 Key 关自适应仍有多条泳道');
+  assert.strictEqual(canFanOut({ apiKey: 'a', llmChannels: 3 }), true, '显式总并发 → 允许扇出');
 });
 
-test('目录一致性：默认配置必须是单通道（不能悄悄改变所有人的计费/限流行为）', () => {
-  assert.deepStrictEqual(parseApiKeys(DEFAULT_CONFIG), [], '出厂默认没有 Key → 单通道');
-  assert.strictEqual(resolveChannels(DEFAULT_CONFIG), 1, '默认通道数 1');
+test('目录一致性：默认配置起手仍是单泳道（不能悄悄改变所有人的计费/限流行为）', () => {
+  assert.deepStrictEqual(parseApiKeys(DEFAULT_CONFIG), [], '出厂默认没有 Key → 单泳道');
+  assert.strictEqual(resolveChannels(DEFAULT_CONFIG), 1, '默认起始通道数 1');
+  assert.strictEqual(perKeyChannels(DEFAULT_CONFIG, 1), 1, '默认每把 Key 起始 1 条泳道');
+  assert.strictEqual(DEFAULT_CONFIG.adaptiveConcurrency, true, '自适应默认开（否则单 Key 用户拿不到任何并发收益）');
   const s = new LlmScheduler();
-  assert.strictEqual(s.channels, 1, '调度器默认 1 条通道');
+  assert.strictEqual(s.channels, 1, '调度器默认 1 条泳道');
+  assert.strictEqual(s.maxPerKey, DEFAULT_CONFIG.maxChannelsPerKey, '调度器默认上限与配置一致');
 });
 
-test('resolveChannels：通道数只有一个来源（否则会出现"配了没生效"）', () => {
+test('每把 Key 的起始泳道数：llmChannels 平均摊到各 Key；自适应则从 1 起', () => {
+  assert.strictEqual(perKeyChannels({ llmChannels: 0 }, 1), 1, '自适应：从最保守的 1 起');
+  assert.strictEqual(perKeyChannels({ llmChannels: 0 }, 3), 1, '三把 Key 也是每把 1 起');
+  assert.strictEqual(perKeyChannels({ llmChannels: 4 }, 1), 4, '显式 4 → 单 Key 4 条泳道');
+  assert.strictEqual(perKeyChannels({ llmChannels: 4 }, 2), 2, '显式 4 → 两把 Key 各 2 条');
+  assert.strictEqual(perKeyChannels({ llmChannels: 2 }, 3), 1, '显式 2 分给 3 把 Key 也不能是 0');
+});
+
+test('resolveChannels：起始通道数只有一个来源（否则会出现"配了没生效"）', () => {
   assert.strictEqual(resolveChannels({ apiKey: 'a' }), 1);
-  assert.strictEqual(resolveChannels({ apiKey: 'a,b,c' }), 3, 'Key 数 = 通道数');
+  assert.strictEqual(resolveChannels({ apiKey: 'a,b,c' }), 3, 'Key 数 = 起始通道数');
   assert.strictEqual(resolveChannels({ apiKey: 'a', apiKeys: ['b'] }), 2);
   assert.strictEqual(resolveChannels({ apiKey: 'a,b', llmChannels: 4 }), 4, '显式指定优先');
   assert.strictEqual(resolveChannels({ apiKey: 'a,b,c', llmChannels: 1 }), 1, '显式指定也能强制串行（回滚开关）');
   assert.strictEqual(resolveChannels({}), 1, '什么都没配也是 1，不能算出 0 条通道');
+});
+
+test('探测并发额度：逐档加并发，撞限流立即停在上一档', async () => {
+  const { probeKey } = require('../src/ai/probe');
+  const seen = [];
+  const oneCall = async ({ tag }) => {
+    const n = Number(String(tag).split('-')[0].slice(1));
+    seen.push(n);
+    // 服务商允许 2 并发：第 3 档返回 429
+    return n >= 3 ? { ok: false, status: 429, ms: 5, body: '{"error":{"code":1302,"message":"触发限流"}}' } : { ok: true, status: 200, ms: 10, body: '{}' };
+  };
+  const r = await probeKey({ baseUrl: 'http://x', apiKey: 'k', model: 'm', max: 5, oneCall });
+  assert.strictEqual(r.limit, 2, '已知能跑通的最高并发是 2');
+  assert.match(r.reason, /限流/);
+  assert.strictEqual(r.fatal, true, '限流是额度边界，应标记为"到此为止"');
+  assert.deepStrictEqual([...new Set(seen)].sort(), [1, 2, 3], '探到 3 撞限流就该停，不许继续加档');
+  assert.strictEqual(r.results.filter((x) => x.ok).length, 2, '成功档数 = limit');
+});
+
+test('探测并发额度：全部档都成功时报"探到上限"，而不是谎称服务商只允许这么多', async () => {
+  const { probeKey } = require('../src/ai/probe');
+  const oneCall = async () => ({ ok: true, status: 200, ms: 8, body: '{}' });
+  const r = await probeKey({ baseUrl: 'http://x', apiKey: 'k', model: 'm', max: 3, oneCall });
+  assert.strictEqual(r.limit, 3);
+  assert.strictEqual(r.fatal, false);
+  assert.match(r.reason, /可能还能更高/, '不能把"我没探更高"说成"服务商就这么点额度"');
+});
+
+test('探测并发额度：缺配置时不发请求就返回 1（避免无意义地打服务商）', async () => {
+  const { probeKey } = require('../src/ai/probe');
+  let called = 0;
+  const r = await probeKey({ baseUrl: '', apiKey: '', model: '', oneCall: async () => { called++; return { ok: true }; } });
+  assert.strictEqual(r.limit, 1);
+  assert.strictEqual(called, 0);
 });
 
 // ---------- 夜晚扇出（keypool P3 的第二块收益） ----------

@@ -78,7 +78,8 @@ class Game {
     this.finished = false;
     this.paused = null;      // 因配额/套餐等外部原因暂停 {kind, code, message, nextFlushTime, at, seat, task}
     this.pendingDeaths = []; // 已结算未公布 [{seat, cause}]
-    this.live = null;        // 流式直播缓冲（半成品文本，不进 events，见 beginLive/liveFor）
+    this.live = null;        // 最近一路流式直播缓冲（兼容旧读取方；真实存储见 lives）
+    this.lives = new Map();  // seat → 直播条目。并发（多 Key）时可能同时有好几路在打字
     this.memory = null;      // 日切反思进度 {day, total, done}（前端"AI 正在整理记忆…"）
     this.night = null;       // 当夜临时状态 {guardTargets, lastProtect, wolfKill, saved, poisonTargets...}
     this.badgeSwallowed = false;
@@ -251,33 +252,55 @@ class Game {
    * 它只作为 /view 的一个瞬时字段下发，决策结束（成功/失败/暂停）立即清空。
    */
   beginLive(info = {}) {
-    this.live = {
-      seat: info.seat, task: info.task, public: !!info.public,
+    // 并发下可能同时有好几路（多 Key 时几个 AI 一起打字），所以内部按座位存 Map；
+    // `this.live` 仍指向"最近开始的那一路" —— 既有读取方（SSE、测试）行为不变。
+    const key = info.seat != null ? `s${info.seat}` : 'game';
+    const entry = {
+      key, seat: info.seat, task: info.task, public: !!info.public,
       text: '', reasoning: '', startedAt: Date.now(), updatedAt: Date.now(),
     };
+    this.lives.set(key, entry);
+    this.live = entry;
+    return entry;
   }
 
-  updateLive(delta) {
-    if (!this.live || !delta) return;
-    if (delta.content) this.live.text += delta.content;
-    if (delta.reasoning) this.live.reasoning += delta.reasoning;
-    this.live.updatedAt = Date.now();
+  /**
+   * 兼容两种调用：
+   *   updateLive(delta)          —— 更新"最近开始的那一路"（旧签名）
+   *   updateLive(entry, delta)   —— 精确更新某一路（并发下必须用这个，否则会把增量混进别人的缓冲）
+   */
+  updateLive(a, b) {
+    const entry = b === undefined ? this.live : a;
+    const delta = b === undefined ? a : b;
+    if (!entry || !delta) return;
+    if (delta.content) entry.text += delta.content;
+    if (delta.reasoning) entry.reasoning += delta.reasoning;
+    entry.updatedAt = Date.now();
   }
 
-  endLive() { this.live = null; }
+  /** endLive() 结束最近一路；endLive(entry) 精确结束；endLive(null) 是空操作（该次调用没开过直播） */
+  endLive(entry) {
+    const e = entry === undefined ? this.live : entry;
+    if (!e || !e.key) return;
+    this.lives.delete(e.key);
+    if (this.live === e) {
+      this.live = [...this.lives.values()].sort((x, y) => y.startedAt - x.startedAt)[0] || null;
+    }
+  }
 
   /**
    * 谁能看到这段直播：上帝看全部（含内心独白）；公开发言所有人可见；其余仅发言者本人。
    * 非上帝视角一律剥掉 reasoning——内心独白只属于上帝面板。
+   * 并发（多 Key）时可能同时有多路在打字：取"最近有更新的、且该视角能看的那一路"。
    */
   liveFor(viewer) {
-    const l = this.live;
-    if (!l) return null;
+    const all = [...this.lives.values()];
+    if (!all.length) return null;
+    const visible = all.filter((l) => viewer === 'god' || l.seat === Number(viewer) || l.public);
+    if (!visible.length) return null;
+    const l = visible.reduce((best, x) => (x.updatedAt > best.updatedAt ? x : best));
     if (viewer === 'god') return l;
-    if (l.seat === Number(viewer) || l.public) {
-      return { seat: l.seat, task: l.task, public: l.public, text: l.text, startedAt: l.startedAt, updatedAt: l.updatedAt };
-    }
-    return null;
+    return { seat: l.seat, task: l.task, public: l.public, text: l.text, startedAt: l.startedAt, updatedAt: l.updatedAt };
   }
 
   agentFor(seat) {

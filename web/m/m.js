@@ -192,6 +192,21 @@ function renderBoardGrid() {
   $('#m-next').disabled = false;
 }
 
+/**
+ * 并发提示：报的是调度器**实时**允许的容量，而不是 Key 数。
+ * 每把 Key 实际允许几并发只有服务商知道，调度器会按实测反馈自己加减；
+ * 拿 Key 数反推会在"自适应已涨上去"或"撞限流被砍半"时谎报。
+ */
+function poolHint(cfg) {
+  const pool = cfg && cfg.pool;
+  const live = (pool && pool.channels) || (cfg && cfg.channels) || 1;
+  const limits = pool && pool.slots ? pool.slots.map((s) => s.limit) : null;
+  const detail = pool && pool.adaptive === false
+    ? '自适应已关'
+    : pool && pool.ramps > 0 ? `已按实测自动加档 ${pool.ramps} 次` : '会按实测自动加减';
+  return `当前并发容量 ${live} 条${limits && limits.length > 1 ? `（每把 ${limits.join('/')} 条）` : ''}；${detail}。上限约 -23%，不是减半。`;
+}
+
 function wireSettings() {
   $('#m-settings-btn').addEventListener('click', async () => {
     const cfg = await api('GET', '/api/config').catch(() => ({}));
@@ -211,7 +226,8 @@ function wireSettings() {
       <label>API Key<input id="ms-key" type="password" placeholder="${cfg.hasKey ? '已保存（' + cfg.apiKeyMasked + '），留空不改' : 'sk-...'}"></label>
       <label>更多 API Key（可选，一行一个；多一把多一条并发通道）
         <textarea id="ms-keys" rows="2" placeholder="${cfg.extraKeys > 0 ? '已保存 ' + cfg.extraKeys + ' 把，留空不改' : '留空则只用上面那一把'}"></textarea></label>
-      <div class="hint">当前 ${cfg.channels || 1} 条并发通道${(cfg.channels || 1) > 1 ? '（多 Key 上限约 -23%，不是减半）' : '（单 Key：AI 之间严格串行，最稳）'}</div>
+      <div class="hint">${poolHint(cfg)}</div>
+      <button class="btn ghost small" id="ms-probe" type="button">探测并发额度</button>
       <label>节奏档位（一次设定思考强度/反思频率/上下文）
         <select id="ms-pace">${paceOpts}</select></label>
       <div class="hint" id="ms-pace-hint"></div>
@@ -275,7 +291,7 @@ function wireSettings() {
         $('#ms-key').value = '';
         $('#ms-keys').value = '';
         $('#ms-key').placeholder = `已保存（${r.apiKeyMasked}）`;
-        $('#ms-result').textContent = `✓ 已保存（${r.channels || 1} 条并发通道）`;
+        $('#ms-result').textContent = `✓ 已保存（${r.pool ? r.pool.channels : r.channels || 1} 条并发通道）`;
         const after = await api('GET', '/api/config').catch(() => null); // 按服务端反查结果回显，避免界面与磁盘不一致
         if (after) {
           const id = paces.some((p) => p.id === after.pace) ? after.pace : 'custom';
@@ -284,8 +300,19 @@ function wireSettings() {
         }
       } catch (e) { $('#ms-result').textContent = `✗ ${e.message}`; }
     });
-    $('#ms-test').addEventListener('click', async () => {
-      $('#ms-result').textContent = '测试中…';
+    // 主动探测每把 Key 的实际并发额度（会花几次极短请求，必须由用户点出来）
+    $('#ms-probe').addEventListener('click', async () => {
+      const btn = $('#ms-probe');
+      btn.disabled = true; btn.textContent = '探测中…';
+      $('#ms-result').textContent = '正在逐档试并发（每档几个极短请求）…';
+      try {
+        const r = await api('POST', '/api/config/probe', { max: 4 });
+        const lines = (r.results || []).map((x) => `Key${x.index + 1}→${x.limit} 并发`).join('，');
+        $('#ms-result').textContent = `✓ 探测完成：${lines}；当前容量 ${r.pool ? r.pool.channels : '?'} 条`;
+      } catch (e) { $('#ms-result').textContent = `✗ 探测失败：${e.message}`; }
+      finally { btn.disabled = false; btn.textContent = '探测并发额度'; }
+    });
+    $('#ms-test').addEventListener('click', async () => {      $('#ms-result').textContent = '测试中…';
       await $('#ms-save').click();
       try {
         const r = await api('POST', '/api/config/test');
@@ -380,8 +407,7 @@ async function startGame() {
     const wolves = Object.entries(counts).filter(([r]) => state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
     if (total < 4 || wolves < 1 || wolves >= total - wolves) { $('#m-err').textContent = '⚠ 板子配置不合法'; return; }
     const useMock = !!state.mock;
-    const cfg = await api('GET', '/api/config');
-    if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在 ⚙ 设置 里填写 API Key（或勾选 Mock 试玩）'; return; }
+    const cfg = await api('GET', '/api/config');    if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在 ⚙ 设置 里填写 API Key（或勾选 Mock 试玩）'; return; }
     const seatChoice = String($('#m-my-seat').value || 'random');
     const randomSeat = seatChoice === 'random';
     const mySeat = randomSeat ? 0 : Number(seatChoice);

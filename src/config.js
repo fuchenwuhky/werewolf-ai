@@ -9,13 +9,18 @@ const DEFAULT_CONFIG = {
   baseUrl: 'https://open.deepseek.com/v1',
   apiKey: '',
   // 多 Key（keypool）：填了这个就用它，允许逗号/空格/换行分隔多个 Key。
-  // 通道数 = Key 数（每 Key 一条通道、通道内严格串行），见 src/ai/scheduler.js。
-  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -23%，不是"减半"，
-  // 而且会牺牲服务商侧的 prompt 缓存亲和性 —— 除非你本来就有多个 Key，否则不必为此付费。
+  // 池里有几把 Key 就有几条起始泳道；每把 Key 的泳道数会按**实际可用额度**自适应（见下）。
+  // 注意实测结论（docs/fluency-plan.md §1.4）：并发的收益天花板约 -23%，不是"减半"。
   apiKeys: [],
-  // 并发通道数：0 = 跟随 Key 数（推荐）；>0 = 强制这么多条通道（同一把 Key 也想试并发时用它，
-  // 先用 `npm run probe:concurrency` 确认服务商允许，否则只是自己撞限流）。
+  // 并发泳道数：0 = 自适应（推荐）。此时起始泳道数 = Key 数，之后由调度器按每把 Key 的实际额度自动加减。
+  // >0 = 强制总并发上限（同一把 Key 也想试并发时用它，先用 `npm run probe:concurrency` 确认服务商允许）。
   llmChannels: 0,
+  // 每把 Key 允许自适应到几条泳道（上限）。被限流会自动砍半 —— 一次 429 至少要赔一次重试延迟，
+  // 所以别设太大；4 足以覆盖绝大多数套餐。
+  maxChannelsPerKey: 4,
+  // 自适应并发（AIMD）：默认开。撞限流就砍半、连续"满载成功"就 +1 ——
+  // "这把 Key 到底允许几并发"只有服务商知道，靠实测收敛比靠猜准。关掉则固定成起始泳道数。
+  adaptiveConcurrency: true,
   model: 'deepseek-chat',
   // 分层模型（A2）：快速任务（夜晚行动/投票/警竞等结构化微决策）换用更小更快的模型。
   // 留空 = 全部用 model。实测快速任务占调用次数的一大半，但决策空间很小 ——
@@ -148,6 +153,32 @@ function resolveChannels(cfg) {
   return Math.max(1, parseApiKeys(cfg).length);
 }
 
+/**
+ * 每把 Key 的**起始**泳道数。
+ *   · `llmChannels = 0`（默认）→ 1：先按最保守的跑，然后由调度器按实际额度自适应加档。
+ *   · `llmChannels > 0` → 把它摊到每把 Key 上（用户强制指定总并发时用）。
+ * 起始值刻意保守：宁可让自适应多花几次成功去发现额度，也不要一上来就撞 429。
+ */
+function perKeyChannels(cfg, keyCount) {
+  const explicit = Number(cfg && cfg.llmChannels);
+  const n = Math.max(1, Math.floor(Number(keyCount)) || 1);
+  if (explicit > 0) return Math.max(1, Math.floor(explicit / n));
+  return 1;
+}
+
+/**
+ * 引擎"能不能扇出互不依赖的调用"。
+ *
+ * 与旧版 `resolveChannels(cfg) > 1` 的区别：现在**一把 Key 也可能自适应到多条泳道**，
+ * 所以只看起始通道数会漏判（单 Key 用户永远不扇出，自适应学到 4 条也用不上）。
+ * 因此：起始通道 > 1，或自适应开着（可能涨上去），就允许引擎并发提交 ——
+ * 真正的并发度始终由调度器按每把 Key 的实时额度决定，引擎只负责表达"这些调用互不依赖"。
+ */
+function canFanOut(cfg) {
+  if (resolveChannels(cfg) > 1) return true;
+  return !(cfg && cfg.adaptiveConcurrency === false);
+}
+
 function migrateConfig(data) {
   if (LEGACY_MAX_TOKENS.has(Number(data.maxTokens))) data.maxTokens = DEFAULT_CONFIG.maxTokens;
   if (LEGACY_TIMEOUT_MS.has(Number(data.timeoutMs))) data.timeoutMs = DEFAULT_CONFIG.timeoutMs;
@@ -219,4 +250,4 @@ function createConfig(file) {
   };
 }
 
-module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig, parseApiKeys, resolveChannels };
+module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig, parseApiKeys, resolveChannels, perKeyChannels, canFanOut };

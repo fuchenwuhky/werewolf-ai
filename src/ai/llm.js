@@ -9,7 +9,7 @@
 'use strict';
 const { scheduler: defaultScheduler, PRIORITY } = require('./scheduler');
 const { LlmFatalError } = require('../errors');
-const { parseApiKeys, resolveChannels } = require('../config');
+const { parseApiKeys, perKeyChannels } = require('../config');
 
 function buildEndpoint(baseUrl) {
   let u = String(baseUrl || '').trim().replace(/\/+$/, '');
@@ -139,7 +139,7 @@ function classifyFailure(status, text, headers) {
   }
   if (TRANSIENT_BIZ_CODES.has(code)) {
     return {
-      retryable: true, fatal: false, code,
+      retryable: true, fatal: false, code, rateLimited: true,
       message: biz.message || `触发速率限制（业务码 ${code}）`,
       retryAfterMs: parseRetryAfter(headers),
     };
@@ -154,6 +154,8 @@ function classifyFailure(status, text, headers) {
   }
   return {
     retryable: status === 429 || status >= 500, fatal: false, code,
+    // 429 是"并发/速率超额"的明确信号 → 交给调度器做乘性回退（把该 Key 的泳道数砍半）
+    rateLimited: status === 429,
     message: biz.message || `HTTP ${status}`,
     retryAfterMs: parseRetryAfter(headers),
   };
@@ -259,7 +261,7 @@ async function consumeSse(res, onDelta, startedAt) {
  *     cfg.structuredOutput 与进程级自适应级别决定
  * @returns {content, reasoning, usage, latencyMs, ttftMs, attempts, streamed}
  */
-async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, model, timeoutMs: callTimeoutMs, signal, priority, scheduler: sched, onDelta, stream, hardCap, responseFormat } = {}) {
+async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, model, timeoutMs: callTimeoutMs, signal, priority, scheduler: sched, onDelta, onStart, stream, hardCap, responseFormat } = {}) {
   const endpoint = buildEndpoint(cfg.baseUrl);
   // 分层模型（A2）：调用方可为快速任务指定更小的模型，缺省回落 cfg.model
   const useModel = model || cfg.model;
@@ -295,23 +297,32 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
   const structEnabled = structPolicy !== 'off' && !!responseFormat;
   const lane = sched || defaultScheduler;
   const label = meta.label || 'chat';
-  // Key 池（keypool）：调度器给每个在途任务分配一个槽位，槽位 i 固定绑定第 i 个 Key ——
-  // 同一条通道的连续请求打同一个 Key，服务商侧的 prompt 缓存才不会因为换 Key 而全部落空。
+  // Key 池（keypool）：调度器给每个在途任务分配一把 Key（slot = Key 序号），
+  // 同一把 Key 的连续请求打同一个账号，服务商侧的 prompt 缓存才不会因为换 Key 而全部落空。
   const apiKeys = parseApiKeys(cfg);
-  // 通道数 = 显式 llmChannels，否则 = Key 数（自动跟随配置，允许运行中改）：
-  // 单 Key 且未强制时恒为 1，行为与旧版一致。
+  // 池大小与每把 Key 的初始泳道数都来自配置（自动跟随，允许运行中改）：
+  // 单 Key 且未显式指定时 = 1 条泳道 = 与从前的严格串行完全一致；之后由调度器按**实际可用额度**自适应。
   // 放在这里而不是启动时同步，是为了避免"配置从哪条路径进来"的时序问题（设置页/环境变量/存档恢复）。
   if (lane === defaultScheduler) {
-    const want = resolveChannels(cfg);
-    if (lane.channels !== want) lane.setChannels(want);
+    const keys = Math.max(1, apiKeys.length);
+    lane.setPool({
+      keys,
+      perKey: perKeyChannels(cfg, keys),
+      maxPerKey: cfg.maxChannelsPerKey,
+      adaptive: cfg.adaptiveConcurrency !== false,
+    });
   }
   let usageEstimatedWarned = false;
 
-  // 整段"重试 + 退避"都在通道内执行：单并发下退避期间也不该放别的请求出去，
+  // 整段"重试 + 退避"都在泳道内执行：退避期间也不该放别的请求出去，
   // 否则等于自己在服务商侧制造并发。
   const job = async (slot = 0) => {
-    // 槽位 ↦ Key：单 Key（默认）时恒等于 cfg.apiKey，多 Key 时每个通道打自己的 Key。
-    const apiKey = apiKeys.length > 1 ? apiKeys[slot % apiKeys.length] : (apiKeys[0] || cfg.apiKey);
+    // 泳道 ↦ Key：单 Key（默认）时恒等于 cfg.apiKey，多 Key 时每把 Key 打自己的账号。
+    const apiKey = apiKeys.length ? apiKeys[Math.min(slot, apiKeys.length - 1)] : cfg.apiKey;
+    // 请求真正开始时才通知上层（直播缓冲放在这一刻开始，才不会出现"还没轮到就已经在打字"的错位）
+    if (typeof onStart === 'function') {
+      try { onStart(slot); } catch (_) { /* 直播面板的问题不该影响对局 */ }
+    }
     if (signal && signal.aborted) {
       const err = new Error('对局已终止，请求取消');
       err.aborted = true;
@@ -414,6 +425,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           err.retryable = cls.retryable;
           err.status = res.status;
           err.retryAfterMs = cls.retryAfterMs;
+          err.rateLimited = !!cls.rateLimited; // 让 catch 里能通知调度器"这把 Key 的泳道开多了"
           throw err;
         }
 
@@ -441,6 +453,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
             const err = new Error(`LLM 流式错误（${cls.code}）：${cls.message.slice(0, 300)}`);
             err.retryable = cls.retryable;
             err.retryAfterMs = cls.retryAfterMs;
+            err.rateLimited = !!cls.rateLimited;
             throw err;
           }
           content = s.content;
@@ -460,6 +473,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
             const err = new Error(`LLM 响应体错误（HTTP ${res.status} ${cls.code}）：${cls.message.slice(0, 300)}`);
             err.retryable = cls.retryable;
             err.retryAfterMs = cls.retryAfterMs;
+            err.rateLimited = !!cls.rateLimited;
             throw err;
           }
           const choice = data.choices && data.choices[0];
@@ -535,6 +549,8 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
             model: useModel, task: meta.task, seat: meta.seat,
           });
         }
+        // 成功反馈给调度器：只有"该 Key 泳道跑满时连续成功"才会加档（见 scheduler.noteSuccess）
+        lane.noteSuccess(slot);
         return out;
       } catch (err) {
         clearTimeout(timer);
@@ -543,6 +559,9 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         const externalAbort = !!(signal && signal.aborted); // 外部终止 ≠ 超时：立即退出不重试
         const timedOut = !externalAbort && err.name === 'AbortError';
         if (timedOut) err.timedOut = true; // 让上层能区分"超时"与"服务端报错"
+        // 限流反馈给调度器：乘性回退该 Key 的泳道数（"这把 Key 实际允许几并发"只有服务商知道，
+        // 撞到限流就是最直接的证据）。降档重试与退避照旧，两者互补：泳道数治源头，退避治当下。
+        if (!externalAbort && err.rateLimited) lane.noteRateLimited(slot);
         // 超时先降档（A3）：原样重试大概率再等一个软超时，把 p99 拖成两三倍；压到 minimal 往往能过。
         if (timedOut && !downgraded && attempts <= maxRetries) {
           downgraded = true;

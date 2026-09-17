@@ -305,8 +305,9 @@ class Agent {
     const messages = [this.messages[0], { role: 'user', content: built.text }];
     const plan = effort.planEffort(g, this.player, request, { cfg: this.llmCfg, lastSeq: this.lastSeq });
     this.lastPlan = plan; // 上帝面板可见：这次为什么给了这个档位
-    // 流式增量只进"直播缓冲"（不进 events）：前端据此显示"打字中"，把 41s 的空白等待变成即时反馈
-    g.beginLive({ seat, task: request.task, public: PUBLIC_LIVE_TASKS.has(request.task) });
+    // 直播缓冲在**请求真的开始跑**时才建（onStart）：扇出提交时不会出现"还没轮到就已经在打字"，
+    // 也不会几路增量混进同一个缓冲（多 Key 下确实会同时有好几路）。
+    let liveEntry = null;
     let out;
     try {
       out = await llm.chatCompletion(this.llmCfg, messages, {
@@ -321,12 +322,13 @@ class Agent {
         signal: g.abortSignal, // 终止对局时立即中断在途调用
         priority: PRIORITY.decision, // 玩家可见决策：最高优先级
         meta: { label: `${seat}号`, task: request.task, seat },
-        onDelta: (d) => g.updateLive(d),
+        onStart: () => { liveEntry = g.beginLive({ seat, task: request.task, public: PUBLIC_LIVE_TASKS.has(request.task) }); },
+        onDelta: (d) => g.updateLive(liveEntry, d),
         // 结构化输出：target 用候选座位枚举约束，模型在结构上无法吐出非法座位
         responseFormat: schemas.schemaFor(request.task, request, { aliveSeats: g.aliveSeats(), seat }),
       });
     } finally {
-      g.endLive(); // 成功/失败/暂停都必须清掉缓冲，避免残留半成品被反复下发
+      g.endLive(liveEntry); // 成功/失败/暂停都必须清掉缓冲，避免残留半成品被反复下发
     }
     // 3. 更新"新事件"游标（本次调用时点之前的都算已读）
     this.lastSeq = g.visibleEvents(seat, 0).reduce((m, e) => Math.max(m, e.seq), 0);

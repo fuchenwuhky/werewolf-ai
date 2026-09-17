@@ -44,7 +44,19 @@ const { makeMockAgentFactory } = require('../scripts/mock-agent');
 const { testConnection } = require('./ai/llm');
 const { maskKey, makeGameLogger } = require('./log');
 const { ALL: NAME_POOL } = require('./names');
-const { PACES, detectPace, parseApiKeys, resolveChannels } = require('./config');
+const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require('./config');
+const { probeKeys } = require('./ai/probe');
+const { scheduler: defaultScheduler } = require('./ai/scheduler');
+
+/** 调度器的 Key 池快照（"实际可用并发数"的唯一可信来源，见 /api/config 的 pool 字段） */
+function poolSnapshot() {
+  const s = defaultScheduler.snapshot();
+  return {
+    channels: s.channels, keys: s.keys, maxPerKey: s.maxPerKey, adaptive: s.adaptive,
+    rateLimited: s.rateLimited, ramps: s.ramps,
+    slots: s.slots.map((x) => ({ slot: x.slot, limit: x.limit, inFlight: x.inFlight, disabled: x.disabled, rateLimited: x.rateLimited })),
+  };
+}
 const { reviewFacts, humanSeatOf } = require('./engine/review');
 const { generateCoachReview, ruleReview } = require('./ai/coach');
 const { extractLiveText } = require('./ai/stream');
@@ -350,6 +362,9 @@ class Api {
           apiKeyMasked: maskKey(c.apiKey), hasKey: !!c.apiKey,
           extraKeys: (c.apiKeys || []).length,
           channels: resolveChannels(c),
+          // 调度器**实时**状态：每把 Key 当前被允许几条泳道（自适应学到/探测到的结果）。
+          // 这是"实际可用并发数"的唯一可信来源 —— 不要再用 resolveChannels 反推。
+          pool: poolSnapshot(),
         });
       }
       if (pathname === '/api/config' && method === 'PUT') {
@@ -365,6 +380,7 @@ class Api {
           ok: true, apiKeyMasked: maskKey(saved.apiKey),
           extraKeys: (saved.apiKeys || []).length,
           channels,
+          pool: poolSnapshot(),
         });
       }
       if (pathname === '/api/config/test' && method === 'POST') {
@@ -372,6 +388,28 @@ class Api {
         if (!c.apiKey) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
         const r = await testConnection(c, this.logger);
         return this.json(res, r.ok ? 200 : 502, r);
+      }
+      /**
+       * 探测每把 Key 的**实际**并发额度，并直接写进调度器。
+       * 为什么需要：自适应（撞限流砍半、有人排队就加档）最终会收敛，但收敛要赔上几次 429；
+       * 主动探一次能直接把起始值放对。代价是每档 n 个 max_tokens=8 的极短请求 —— 必须由用户点击触发。
+       */
+      if (pathname === '/api/config/probe' && method === 'POST') {
+        const c = this.config.get();
+        const keys = parseApiKeys(c);
+        if (!keys.length) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
+        const body = await this.readBody(req).catch(() => ({}));
+        const max = Math.max(1, Math.min(Number(body && body.max) || 4, 8));
+        this.logger.warn('api', `开始探测并发额度（最多 ${max} 档 × ${keys.length} 把 Key 的极短请求）`);
+        const results = await probeKeys(c, { max, keys });
+        for (const r of results) defaultScheduler.setKeyLimit(r.index, r.limit, 'probe');
+        const snap = poolSnapshot();
+        this.logger.info('api', `探测完成：每把 Key 的并发额度 ${results.map((r) => r.limit).join('/')} → 当前容量 ${snap.channels}`);
+        return this.json(res, 200, {
+          ok: true, max,
+          results: results.map((r) => ({ index: r.index, key: r.key, limit: r.limit, reason: r.reason })),
+          pool: snap,
+        });
       }
 
       const gameMatch = pathname.match(/^\/api\/games\/([^/]+)(\/.*)?$/);
@@ -467,9 +505,10 @@ class Api {
     }
 
     applyPersonalities(players, seedRng);
-    // 多 Key（或显式 llmChannels）才开启"互不依赖调用扇出"（keypool P3）：
-    // 单通道下扇出没有收益，还会让在途提示的区间重叠 —— 所以这里按**通道数**决定，而不是无条件并行。
-    const parallelLlm = resolveChannels(this.config.get()) > 1;
+    // 引擎是否扇出互不依赖的调用：只要**可能**跑出 >1 并发就开（单 Key + 自适应也算 ——
+    // 调度器可能已经把这把 Key 的额度探到 3 条）。真正的并发度始终由调度器决定，
+    // 引擎只负责表达"这些调用互不依赖"。直播缓冲已支持多路，所以扇出不会再显示错人。
+    const parallelLlm = canFanOut(this.config.get());
     const game = new Game({ id: gameId, board, rules, players, agentFactory, logger, seed, parallelLlm });
     const entry = {
       game, running: false, error: null,

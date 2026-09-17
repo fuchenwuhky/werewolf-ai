@@ -100,6 +100,9 @@ async function initSetup() {
   });
   const keysBox = $('#cfg-keys');
   if (keysBox) keysBox.addEventListener('input', () => renderKeyChannels(state.cfg || {}));
+  // 主动探测每把 Key 的实际并发额度（会花几次极短请求，所以必须是用户点出来的）
+  const probeBtn = $('#btn-probe');
+  if (probeBtn) probeBtn.addEventListener('click', probeChannels);
   $('#btn-god-close').addEventListener('click', toggleGod);
   $('#board-template').addEventListener('change', (e) => {
     state.setup.boardId = e.target.value;
@@ -405,27 +408,61 @@ async function saveConfig() {
 }
 
 /**
- * 多 Key 通道数提示。
+ * 并发通道提示：既报"池里有几把 Key"，也报**调度器实时允许几条泳道**。
  *
- * 为什么要显示这个：通道数是"每多一把 Key 就多一条并发通道"，但它**不是**线性的提速 ——
- * 实测（docs/fluency-plan.md §1.4）天花板约 -23%，因为语义串行的发言链占 73%。
- * 界面必须如实说清，否则用户会以为"加 Key = 快一倍"，然后觉得功能没用。
+ * 为什么要显示实时值：每把 Key 实际允许几并发只有服务商知道，调度器会按实测反馈
+ * 自己加减（撞限流砍半、忙时有排队就加档），设置页那个按钮则是主动探一次。
+ * 所以"当前 N 条"必须来自调度器（cfg.pool），不能拿 Key 数反推 —— 否则用户改了配置
+ * 却发现并发没变，或者自适应已经涨上去了却仍显示 1，都会让人以为功能没生效。
  */
 function renderKeyChannels(cfg) {
   const box = $('#cfg-keys');
   const hint = $('#cfg-channels');
   if (!box || !hint) return;
   const extra = (cfg && cfg.extraKeys) || 0;
-  const channels = (cfg && cfg.channels) || 1;
+  const pool = (cfg && cfg.pool) || null;
+  const keys = (pool && pool.keys) || extra + 1;
+  const live = (pool && pool.channels) || (cfg && cfg.channels) || 1;
+  const limits = pool && pool.slots ? pool.slots.map((s) => s.limit) : null;
   box.placeholder = extra > 0
     ? `已保存 ${extra} 把额外 Key（留空则不修改）`
     : 'sk-...（可选：一行一个，或用逗号分隔）';
   const local = box.value.split(/[\s,;、]+/).filter((s) => s.trim()).length;
-  // 输入框里贴了新 Key 时，预览"保存后会变成几条"；否则显示服务端当前生效的通道数
-  const now = local ? local + 1 : channels;
-  hint.textContent = local
-    ? `保存后共 ${now} 条并发通道（当前 ${channels} 条）。注意：通道数不是线性提速 —— 发言必须按顺序听，实测多 Key 上限约 -23%。`
-    : `当前 ${channels} 条并发通道（${extra > 0 ? `1 把主 Key + ${extra} 把额外 Key` : '单 Key'}）。多一把 Key 多一条通道；上限约 -23%，不是减半。`;
+  const afterKeys = local ? local + 1 : keys;
+  const parts = [];
+  if (local) parts.push(`保存后共 ${afterKeys} 把 Key`);
+  else parts.push(`${keys} 把 Key`);
+  parts.push(`当前并发容量 ${live} 条${limits && limits.length > 1 ? `（每把 ${limits.join('/')} 条）` : ''}`);
+  let detail = '';
+  if (pool && pool.adaptive) {
+    detail = pool.ramps > 0
+      ? `已按实测自动加档 ${pool.ramps} 次${pool.rateLimited ? `、撞限流回退 ${pool.rateLimited} 次` : ''}。`
+      : '自适应已开：忙时有排队就加档、撞限流就回退，无需手动调。';
+  } else if (pool) {
+    detail = '自适应已关：并发固定为上面的值。';
+  }
+  hint.textContent = `${parts.join('；')}。${detail}并发不是线性提速 —— 发言必须按顺序听，实测上限约 -23%，不是减半。`;
+}
+
+/** 主动探测每把 Key 的实际并发额度，并直接写进运行中的调度器 */
+async function probeChannels() {
+  const btn = $('#btn-probe');
+  const hint = $('#cfg-channels');
+  if (btn) { btn.disabled = true; btn.textContent = '探测中…'; }
+  const was = hint ? hint.textContent : '';
+  if (hint) hint.textContent = '正在逐档试并发（每档几个极短请求）…';
+  try {
+    const r = await api('POST', '/api/config/probe', { max: 4 });
+    const lines = (r.results || []).map((x) => `Key${x.index + 1} → ${x.limit} 并发`).join('，');
+    if (state.cfg) state.cfg.pool = r.pool;
+    renderKeyChannels(state.cfg || {});
+    if (hint) hint.textContent = `✓ 探测完成：${lines}；当前容量 ${r.pool ? r.pool.channels : '?'} 条。${hint.textContent}`;
+  } catch (e) {
+    if (hint) hint.textContent = `✗ 探测失败：${e.message}`;
+    else if (was) hint.textContent = was;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '探测并发额度'; }
+  }
 }
 
 async function testConfig() {

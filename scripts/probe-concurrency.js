@@ -1,25 +1,27 @@
 /**
- * probe-concurrency.js — A1：探测"单个 Key 到底允许多少并发"
+ * probe-concurrency.js — 实测"每把 Key 到底允许多少并发"
  *
  * 为什么要有这个工具：
- *   项目现在假定"1 Key = 1 并发"，所有请求严格串行 —— 这个假定是**保守**的，
- *   但没人验证过服务商真正的额度。如果它其实允许 2~4 并发，我们白白损失了大量墙钟时间；
- *   如果不允许，多开一条就是自找 429。这件事必须**实测**，不能猜。
+ *   项目默认每把 Key 起手 1 条泳道，之后靠自适应慢慢收敛；但收敛过程要赔上几次 429。
+ *   主动探一次，就能直接把起始值放到正确的位置。运行中的服务端也可以用设置页的
+ *   「探测并发额度」按钮做同一件事（共用 src/ai/probe.js）。
  *
- * 用法（会真实消耗少量额度：每档 n 个极短请求，共约 30 次微型调用）：
- *   node scripts/probe-concurrency.js            # 探测 1/2/3/4 并发
+ * 用法（会真实消耗少量额度：每档 n 个极短请求）：
+ *   node scripts/probe-concurrency.js            # 每把 Key 探 1..4
  *   node scripts/probe-concurrency.js --max=6    # 探到 6
- *   node scripts/probe-concurrency.js --dry      # 只打印将要发的请求，不真发
+ *   node scripts/probe-concurrency.js --dry      # 只说明将要发的请求，不真发
  *
  * 安全约束（与项目硬约束一致）：
- *   · 只读 config.json 里的 baseUrl/model/apiKey，不改任何配置；
- *   · 每档只发 n 个 `max_tokens: 8` 的极短请求（不写提示词工程，不占用思考预算）；
- *   · 一旦出现限流/配额错误立即停止，不再往上加档（不硬撞限流）；
- *   · **不写任何缓存/配置**：结论打给你看，由你决定要不要填第二个 Key。
+ *   · 只读 config.json 里的 baseUrl/model/apiKey(s)，不改任何配置；
+ *   · 每档只发 n 个 `max_tokens: 8` 的极短请求；
+ *   · 一旦出现限流/配额错误立即停止加档（不硬撞限流）；
+ *   · **不写任何缓存/配置**：结论打给你看，要应用到运行中的服务请用设置页按钮。
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { probeKeys } = require('../src/ai/probe');
+const { parseApiKeys } = require('../src/config');
 
 const args = process.argv.slice(2);
 const DRY = args.includes('--dry');
@@ -35,75 +37,32 @@ function loadCfg() {
   }
 }
 
-async function oneCall(cfg, tag) {
-  const t0 = Date.now();
-  const res = await fetch(`${String(cfg.baseUrl).replace(/\/+$/, '')}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: [{ role: 'user', content: 'ping' }],
-      max_tokens: 8,
-      temperature: 0,
-    }),
-  });
-  const text = await res.text();
-  return { ok: res.ok, status: res.status, ms: Date.now() - t0, body: text.slice(0, 200), tag };
-}
-
-/** 429 / 限流业务码 / 配额：都算"这一档过不去" */
-function isRateLimited(r) {
-  if (r.status === 429) return true;
-  return /1302|429|rate|限流|too many|quota|配额/i.test(r.body);
-}
-
 async function main() {
   const cfg = loadCfg();
-  if (!cfg || !cfg.apiKey || !cfg.baseUrl || !cfg.model) {
+  const keys = cfg ? parseApiKeys(cfg) : [];
+  if (!cfg || !keys.length || !cfg.baseUrl || !cfg.model) {
     console.log('未找到可用的 config.json（需要 baseUrl/model/apiKey）。请在网页版设置里配置后再运行。');
     process.exit(2);
   }
-  console.log(`目标：${cfg.baseUrl}  模型：${cfg.model}`);
-  console.log(`将探测 1..${MAX} 并发；每档发 n 个 max_tokens=8 的极短请求（总计约 ${(MAX * (MAX + 1)) / 2} 次）。`);
+  console.log(`目标：${cfg.baseUrl}  模型：${cfg.model}  待测 Key：${keys.length} 把`);
+  console.log(`将逐把探测 1..${MAX} 并发；每档发 n 个 max_tokens=8 的极短请求（每把约 ${(MAX * (MAX + 1)) / 2} 次）。`);
   if (DRY) {
-    console.log('[dry] 只演练调度，不真发请求。');
-  }
-  const results = [];
-  for (let n = 1; n <= MAX; n++) {
-    if (DRY) {
-      results.push({ n, ok: true, wallMs: 0, note: '(dry)' });
-      continue;
-    }
-    const t0 = Date.now();
-    let out;
-    try {
-      out = await Promise.all(Array.from({ length: n }, (_, i) => oneCall(cfg, `n${n}-${i}`)));
-    } catch (e) {
-      console.log(`并发 ${n}：请求异常（${e.message}）→ 判定为"不支持"，停止加档`);
-      results.push({ n, ok: false, wallMs: Date.now() - t0, note: e.message });
-      break;
-    }
-    const bad = out.filter((r) => !r.ok);
-    const wall = Date.now() - t0;
-    results.push({ n, ok: bad.length === 0, wallMs: wall, note: bad.length ? `HTTP ${bad[0].status}` : '' });
-    if (bad.length) {
-      const rl = bad.some(isRateLimited);
-      console.log(`并发 ${n}：失败（${bad[0].status} ${bad[0].body.slice(0, 80)}）→ ${rl ? '触发限流' : '服务端错误'}，停止加档`);
-      break;
-    }
-    const per = out.map((r) => r.ms);
-    console.log(`并发 ${n}：全部成功  墙钟 ${wall}ms  单次 p50 ${per.sort((a, b) => a - b)[Math.floor(n / 2)]}ms`);
-  }
-  console.log('\n结论：');
-  if (DRY) {
-    console.log('  演练模式：没有真发请求，因此**没有**结论。去掉 --dry 再跑一次。');
+    console.log('[dry] 只演练，不真发请求。');
     return;
   }
-  const ok = results.filter((r) => r.ok).map((r) => r.n);
-  const top = ok.length ? Math.max(...ok) : 0;
-  if (!ok.length) console.log('  未能完成任何一档（检查网络/Key）。');
-  else if (top <= 1) console.log('  单 Key 只支持 1 并发 —— 现状（严格串行）就是最优，不需要多 Key。');
-  else console.log(`  单 Key 实测可并发 ${top} —— 可以用 config.json 的 apiKeys 填入 ${top} 个 Key 换取约 20%~25% 的墙钟收益（不是减半，见 docs/fluency-plan.md §1.4）。`);
+  const results = await probeKeys(cfg, { max: MAX, keys });
+  console.log('\n逐把 Key 结论：');
+  for (const r of results) {
+    console.log(`  Key ${r.index}（${r.key}）：已知可并发 ${r.limit} —— ${r.reason}`);
+    for (const t of r.results) {
+      console.log(`      ${t.n} 并发：${t.ok ? `全部成功  墙钟 ${t.wallMs}ms  单次 p50 ${t.p50}ms` : `失败（${t.rateLimited ? '限流' : `HTTP ${t.status}`}）`}`);
+    }
+  }
+  const total = results.reduce((a, r) => a + r.limit, 0);
+  console.log('\n结论：');
+  console.log(`  建议总并发：${total}（每把 Key 的实测额度之和）`);
+  console.log('  应用到运行中的服务：设置页 →「探测并发额度」按钮（它会直接写进调度器）。');
+  console.log('  也可以什么都不做：调度器会按同样的证据自动收敛，只是要多花几次重试。');
   console.log('  注意：并发额度可能随时间/套餐变化，结论只代表本次实测。');
 }
 
