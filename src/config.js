@@ -10,9 +10,12 @@ const DEFAULT_CONFIG = {
   apiKey: '',
   // 多 Key（keypool）：填了这个就用它，允许逗号/空格/换行分隔多个 Key。
   // 通道数 = Key 数（每 Key 一条通道、通道内严格串行），见 src/ai/scheduler.js。
-  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -23%，不是"减半"，
+  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -19%，不是"减半"，
   // 而且会牺牲服务商侧的 prompt 缓存亲和性 —— 除非你本来就有多个 Key，否则不必为此付费。
   apiKeys: [],
+  // 并发通道数：0 = 跟随 Key 数（推荐）；>0 = 强制这么多条通道（同一把 Key 也想试并发时用它，
+  // 先用 `npm run probe:concurrency` 确认服务商允许，否则只是自己撞限流）。
+  llmChannels: 0,
   model: 'deepseek-chat',
   // 分层模型（A2）：快速任务（夜晚行动/投票/警竞等结构化微决策）换用更小更快的模型。
   // 留空 = 全部用 model。实测快速任务占调用次数的一大半，但决策空间很小 ——
@@ -132,6 +135,19 @@ function parseApiKeys(cfg) {
   return [...new Set(out)];
 }
 
+/**
+ * 实际并发通道数：显式 `llmChannels` 优先（>0），否则跟随 Key 数（至少 1）。
+ *
+ * 这是**唯一**的通道数来源：调度器按它开通道，引擎按它决定"互不依赖的调用要不要扇出"
+ * （`game.parallelLlm`）。两处不能各算一套，否则会出现"调度器有 4 条通道、引擎却还串行"
+ * 这种"配了没生效"的静默失效 —— 本项目踩过同一个坑（keepAlive 复选框谎报）。
+ */
+function resolveChannels(cfg) {
+  const explicit = Number(cfg && cfg.llmChannels);
+  if (explicit > 0) return Math.floor(explicit);
+  return Math.max(1, parseApiKeys(cfg).length);
+}
+
 function migrateConfig(data) {
   if (LEGACY_MAX_TOKENS.has(Number(data.maxTokens))) data.maxTokens = DEFAULT_CONFIG.maxTokens;
   if (LEGACY_TIMEOUT_MS.has(Number(data.timeoutMs))) data.timeoutMs = DEFAULT_CONFIG.timeoutMs;
@@ -177,6 +193,15 @@ function createConfig(file) {
         if (partial[k] === undefined || partial[k] === null) continue;
         if (k === 'apiKey' && String(partial[k]).includes('****')) continue;
         explicit.add(k);
+        // 凭据字段必须清洗：apiKeys 只接受"字符串数组"，去空、去重、去脱敏占位。
+        // 前端可能发来换行文本或带空格的粘贴结果；不做这一步就会把 "sk-a\nsk-b" 当成一把 Key 存下去。
+        if (k === 'apiKeys') {
+          const arr = (Array.isArray(partial[k]) ? partial[k] : [partial[k]])
+            .map((v) => String(v == null ? '' : v).trim())
+            .filter((v) => v && !v.includes('****'));
+          this.data[k] = [...new Set(arr)];
+          continue;
+        }
         this.data[k] = partial[k];
       }
       // 节奏档位（P2-6）：只有请求里**明确带了 pace** 才展开档位参数。
@@ -194,4 +219,4 @@ function createConfig(file) {
   };
 }
 
-module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig, parseApiKeys };
+module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig, parseApiKeys, resolveChannels };

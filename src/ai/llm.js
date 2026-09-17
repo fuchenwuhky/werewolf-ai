@@ -9,7 +9,7 @@
 'use strict';
 const { scheduler: defaultScheduler, PRIORITY } = require('./scheduler');
 const { LlmFatalError } = require('../errors');
-const { parseApiKeys } = require('../config');
+const { parseApiKeys, resolveChannels } = require('../config');
 
 function buildEndpoint(baseUrl) {
   let u = String(baseUrl || '').trim().replace(/\/+$/, '');
@@ -298,10 +298,11 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
   // Key 池（keypool）：调度器给每个在途任务分配一个槽位，槽位 i 固定绑定第 i 个 Key ——
   // 同一条通道的连续请求打同一个 Key，服务商侧的 prompt 缓存才不会因为换 Key 而全部落空。
   const apiKeys = parseApiKeys(cfg);
-  // 通道数 = Key 数（自动跟随配置，允许运行中改）：单 Key 时恒为 1，行为与旧版一致。
+  // 通道数 = 显式 llmChannels，否则 = Key 数（自动跟随配置，允许运行中改）：
+  // 单 Key 且未强制时恒为 1，行为与旧版一致。
   // 放在这里而不是启动时同步，是为了避免"配置从哪条路径进来"的时序问题（设置页/环境变量/存档恢复）。
   if (lane === defaultScheduler) {
-    const want = Math.max(1, apiKeys.length);
+    const want = resolveChannels(cfg);
     if (lane.channels !== want) lane.setChannels(want);
   }
   let usageEstimatedWarned = false;

@@ -44,7 +44,7 @@ const { makeMockAgentFactory } = require('../scripts/mock-agent');
 const { testConnection } = require('./ai/llm');
 const { maskKey, makeGameLogger } = require('./log');
 const { ALL: NAME_POOL } = require('./names');
-const { PACES, detectPace, parseApiKeys } = require('./config');
+const { PACES, detectPace, parseApiKeys, resolveChannels } = require('./config');
 const { reviewFacts, humanSeatOf } = require('./engine/review');
 const { generateCoachReview, ruleReview } = require('./ai/coach');
 const { extractLiveText } = require('./ai/stream');
@@ -340,18 +340,32 @@ class Api {
         // 从 DEFAULT_CONFIG 派生后，新增配置项不会再出现"只能写、读不回来"。
         const cfg = { ...c };
         delete cfg.apiKey;
+        // 多出来的 Key（apiKeys）同样是密钥：只回"有几把"，绝不回内容。
+        // 不回数量也不行 —— 前端就无从判断"留空"到底是"不修改"还是"清空"。
+        delete cfg.apiKeys;
         return this.json(res, 200, {
           ...cfg,
           // 档位是**派生**的：按当前参数反查属于哪一档，都不匹配则 'custom'（前端显示"自定义"，不谎报）
           pace: detectPace(c),
           apiKeyMasked: maskKey(c.apiKey), hasKey: !!c.apiKey,
+          extraKeys: (c.apiKeys || []).length,
+          channels: resolveChannels(c),
         });
       }
       if (pathname === '/api/config' && method === 'PUT') {
         const body = await this.readBody(req);
         const saved = this.config.save(body);
-        this.logger.info('api', 'API 配置已更新', { baseUrl: saved.baseUrl, model: saved.model, key: maskKey(saved.apiKey) });
-        return this.json(res, 200, { ok: true, apiKeyMasked: maskKey(saved.apiKey) });
+        // 通道数变了要对所有在跑的调度器生效：llm.js 每次调用都会校对，这里只记一条日志便于自查
+        const channels = resolveChannels(saved);
+        this.logger.info('api', 'API 配置已更新', {
+          baseUrl: saved.baseUrl, model: saved.model, key: maskKey(saved.apiKey),
+          keys: parseApiKeys(saved).length, channels,
+        });
+        return this.json(res, 200, {
+          ok: true, apiKeyMasked: maskKey(saved.apiKey),
+          extraKeys: (saved.apiKeys || []).length,
+          channels,
+        });
       }
       if (pathname === '/api/config/test' && method === 'POST') {
         const c = this.config.get();
@@ -453,9 +467,9 @@ class Api {
     }
 
     applyPersonalities(players, seedRng);
-    // 多 Key 才开启"互不依赖调用扇出"（keypool P3）：单 Key 下扇出没有收益，
-    // 还会让在途提示的区间重叠 —— 所以这里按 Key 数决定，而不是无条件并行。
-    const parallelLlm = parseApiKeys(this.config.get()).length > 1;
+    // 多 Key（或显式 llmChannels）才开启"互不依赖调用扇出"（keypool P3）：
+    // 单通道下扇出没有收益，还会让在途提示的区间重叠 —— 所以这里按**通道数**决定，而不是无条件并行。
+    const parallelLlm = resolveChannels(this.config.get()) > 1;
     const game = new Game({ id: gameId, board, rules, players, agentFactory, logger, seed, parallelLlm });
     const entry = {
       game, running: false, error: null,

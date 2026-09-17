@@ -34,14 +34,17 @@ const RE_LLM = /ok (\d+)pt\(缓存(\d+)\)\/(\d+)ct (\d+)ms 尝试(\d+)/;
 const SERIAL_TASKS = new Set([
   'speech', 'sheriff_speech', 'pk_speech', 'lastwords',   // 发言链：必须听到前面所有人
   'wolf_chat', 'wolf_propose', 'wolf_say',                // 狼队讨论：队内顺序发言
-  'witch',                                                // 女巫必须等狼刀结果
+  'witch',                                                // 女巫必须等狼刀结果（引擎里唯一一条夜内依赖）
   'explode_check', 'duel_check', 'direction',             // 嵌在发言链里的即时询问
   'badge_pass', 'shoot',                                  // 单人一次性裁决
+  // 上警报名虽然"同时决定"，但引擎里是**顺序**询问的：后报名的人能看到前面的 sheriff_run 事件。
+  // 扇出它会改变每个 AI 看到的信息（等于改了游戏语义），所以刻意不做 —— 这里如实标成串行，
+  // 让"天花板"是**可实现**的数字，而不是纸面数字。
+  'sheriff_run',
 ]);
-/** 语义上互不依赖、只因单 Key 被迫串行的调用（keypool-plan 的并行对象） */
+/** 语义上互不依赖、只因单 Key 被迫串行的调用（引擎已按同一张依赖图扇出） */
 const PARALLEL_TASKS = new Set([
   'vote', 'pk_vote', 'sheriff_vote',                      // 票互相保密且互不依赖
-  'sheriff_run',                                          // 上警同时决定
   'night_guard', 'seer_check', 'night_dream', 'crow_curse',
   'wolfbeauty_charm', 'wolf_kill', 'admirer_crush',       // 夜晚各步：选完才统一结算
 ]);

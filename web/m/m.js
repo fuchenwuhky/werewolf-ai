@@ -209,6 +209,9 @@ function wireSettings() {
       <label>接口地址 base_url<input id="ms-baseurl" value="${escapeHtml(cfg.baseUrl || '')}"></label>
       <label>模型 model<input id="ms-model" value="${escapeHtml(cfg.model || '')}"></label>
       <label>API Key<input id="ms-key" type="password" placeholder="${cfg.hasKey ? '已保存（' + cfg.apiKeyMasked + '），留空不改' : 'sk-...'}"></label>
+      <label>更多 API Key（可选，一行一个；多一把多一条并发通道）
+        <textarea id="ms-keys" rows="2" placeholder="${cfg.extraKeys > 0 ? '已保存 ' + cfg.extraKeys + ' 把，留空不改' : '留空则只用上面那一把'}"></textarea></label>
+      <div class="hint">当前 ${cfg.channels || 1} 条并发通道${(cfg.channels || 1) > 1 ? '（多 Key 上限约 -19%，不是减半）' : '（单 Key：AI 之间严格串行，最稳）'}</div>
       <label>节奏档位（一次设定思考强度/反思频率/上下文）
         <select id="ms-pace">${paceOpts}</select></label>
       <div class="hint" id="ms-pace-hint"></div>
@@ -264,11 +267,15 @@ function wireSettings() {
       if (pace && pace !== 'custom') b.pace = pace; // custom = 保留用户自己调出来的参数
       const key = $('#ms-key').value.trim();
       if (key) b.apiKey = key;
+      // 额外 Key：留空 = 不修改（与 apiKey 同一约定）；要清空请用下面的按钮
+      const extraKeys = ($('#ms-keys').value || '').split(/[\s,;、]+/).map((s) => s.trim()).filter(Boolean);
+      if (extraKeys.length) b.apiKeys = extraKeys;
       try {
         const r = await api('PUT', '/api/config', b);
         $('#ms-key').value = '';
+        $('#ms-keys').value = '';
         $('#ms-key').placeholder = `已保存（${r.apiKeyMasked}）`;
-        $('#ms-result').textContent = '✓ 已保存';
+        $('#ms-result').textContent = `✓ 已保存（${r.channels || 1} 条并发通道）`;
         const after = await api('GET', '/api/config').catch(() => null); // 按服务端反查结果回显，避免界面与磁盘不一致
         if (after) {
           const id = paces.some((p) => p.id === after.pace) ? after.pace : 'custom';

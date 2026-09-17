@@ -463,6 +463,45 @@ async function processShots(game) {
 }
 
 // ---------- 夜晚 ----------
+/**
+ * 夜晚步骤依赖图：**只有女巫必须等狼刀**（她要看到"今晚谁被刀"才能决定救不救）。
+ *
+ * 其余步骤彼此独立，可以并发 —— 因为它们的产物全是**私密事件**（`visibleTo: [自己]`），
+ * 只有自己读得到，所以并发不会改变任何 AI 看到的信息（与白天发言链不同，那条链是真的串行）。
+ * 这是多 Key 场景下仅次于投票的一块收益（夜晚步骤占调用数的两成左右）。
+ */
+const NIGHT_DEPS = { witch: ['wolf'] };
+
+/** 跑单个夜晚步骤：无人可行动时补固定停顿（避免用时长反推"这个角色还活着吗"） */
+async function runNightStep(game, step) {
+  const cap = NIGHT_STEPS[step];
+  await cap.run(game);
+  // 该角色已全员出局时步骤会"秒过"，加固定停顿避免时长推断
+  if (!cap.actors(game).length) await sleep(game.stepPauseMs != null ? game.stepPauseMs : 2000);
+}
+
+/**
+ * 夜晚并发的分波执行：依赖已满足的步骤同一波开跑。
+ * 步骤的**播报顺序与序号仍按 nightOrder**，所以玩家看到的"守卫行动 → 狼人行动 → …"完全不变。
+ */
+async function runNightWaves(game, steps) {
+  const total = steps.length;
+  const done = new Set();
+  const rest = [...steps];
+  while (rest.length) {
+    const ready = rest.filter((s) => (NIGHT_DEPS[s] || []).every((d) => done.has(d) || !steps.includes(d)));
+    const wave = ready.length ? ready : [rest[0]]; // 依赖成环时退化为顺序执行（正常板子不会发生）
+    for (const s of wave) {
+      game.emit('night_step', { data: { step: s, label: NIGHT_STEPS[s].label, index: steps.indexOf(s) + 1, total } });
+    }
+    await Promise.all(wave.map((s) => runNightStep(game, s)));
+    for (const s of wave) {
+      done.add(s);
+      rest.splice(rest.indexOf(s), 1);
+    }
+  }
+}
+
 async function nightPhase(game) {
   if (typeof game.markAnchor === 'function') game.markAnchor('night'); // 断点恢复锚点：夜晚可安全重放（夜事件全程私密）
   game.day++;
@@ -475,15 +514,19 @@ async function nightPhase(game) {
   if (game.day > 1 && typeof game.scheduleReflection === 'function') game.scheduleReflection(game.day - 1);
   // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播；暗恋者仅首夜行动
   const activeSteps = game.rules.nightOrder.filter((s) => NIGHT_STEPS[s] && NIGHT_STEPS[s].present(game));
-  let idx = 0;
-  for (const step of game.rules.nightOrder) {
-    const cap = NIGHT_STEPS[step];
-    if (!cap || !activeSteps.includes(step)) continue;
-    idx++;
-    game.emit('night_step', { data: { step, label: cap.label, index: idx, total: activeSteps.length } });
-    await cap.run(game);
-    // 该角色已全员出局时步骤会"秒过"，加固定停顿避免时长推断
-    if (!cap.actors(game).length) await sleep(game.stepPauseMs != null ? game.stepPauseMs : 2000);
+  if (game.parallelLlm && activeSteps.length > 1) {
+    // 多 Key：独立步骤并发（只有女巫等狼刀），总时长明显下降
+    await runNightWaves(game, activeSteps);
+  } else {
+    // 单 Key（默认）：逐步骤串行 —— 与旧版逐字节一致
+    let idx = 0;
+    for (const step of game.rules.nightOrder) {
+      const cap = NIGHT_STEPS[step];
+      if (!cap || !activeSteps.includes(step)) continue;
+      idx++;
+      game.emit('night_step', { data: { step, label: cap.label, index: idx, total: activeSteps.length } });
+      await runNightStep(game, step);
+    }
   }
   resolveNightDeaths(game);
 }
@@ -925,7 +968,7 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
     // 多 Key（keypool P3）：互不依赖的投票可以扇出。**提交顺序仍是座位顺序**，
     // 每条分支最终都排进同一个调度器（槽位 ↦ Key），所以：
     //   · 单 Key 时这个分支根本不会走到（parallelLlm=false），行为与旧版逐字节一致；
-    //   · 多 Key 时按通道并行（实测 4 通道约 -23%）；
+    //   · 多 Key 时按通道并行（实测 4 通道约 -19%）；
     //   · 无论哪种，票型归集都按座位顺序（见下方 votes 循环），亮票顺序与结果不受影响。
     let done = 0;
     await Promise.all(aiVoters.map(async (p) => {

@@ -49,6 +49,9 @@
         <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
         <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
         <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
+        <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每多一把 Key 就多一条并发通道）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
+        <div class="hint" id="cfg-channels"></div>
+        <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
         <div class="row2">
           <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
           <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>

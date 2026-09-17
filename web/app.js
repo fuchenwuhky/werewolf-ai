@@ -43,6 +43,7 @@ async function api(method, url, body) {
 async function initSetup() {
   state.meta = await api('GET', '/api/meta');
   const cfg = await api('GET', '/api/config');
+  state.cfg = cfg; // 供输入时的通道数预览使用（与磁盘一致的最近一次读数）
   $('#cfg-baseurl').value = cfg.baseUrl || '';
   $('#cfg-model').value = cfg.model || '';
   $('#cfg-temp').value = cfg.temperature;
@@ -54,6 +55,7 @@ async function initSetup() {
   $('#cfg-keepalive').checked = cfg.keepAlive !== false; // 默认开
   renderPaceSelect(cfg.pace);
   if (cfg.hasKey) $('#cfg-key').placeholder = `已保存（${cfg.apiKeyMasked}），留空则不修改`;
+  renderKeyChannels(cfg);
 
   state.setup.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
   state.setup.mySeat = savedSeatChoice(); // 恢复上次的座位偏好（含 'random'），默认随机
@@ -85,6 +87,19 @@ async function initSetup() {
 
   $('#btn-save-config').addEventListener('click', saveConfig);
   $('#btn-test-config').addEventListener('click', testConfig);
+  // 清空额外 Key 必须是显式动作：输入框留空的语义是"不修改"（否则改个温度就把多 Key 清空了）
+  const clearKeys = $('#btn-clear-keys');
+  if (clearKeys) clearKeys.addEventListener('click', async () => {
+    if (!confirm('确定清空所有额外 API Key？清空后会退回单通道（这些 Key 不会出现在任何日志里）。')) return;
+    try {
+      const r = await api('PUT', '/api/config', { apiKeys: [] });
+      $('#cfg-test-result').textContent = `✓ 已清空额外 Key（当前 ${r.channels || 1} 条并发通道）`;
+      const after = await api('GET', '/api/config').catch(() => null);
+      if (after) { state.cfg = after; renderKeyChannels(after); }
+    } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
+  });
+  const keysBox = $('#cfg-keys');
+  if (keysBox) keysBox.addEventListener('input', () => renderKeyChannels(state.cfg || {}));
   $('#btn-god-close').addEventListener('click', toggleGod);
   $('#board-template').addEventListener('change', (e) => {
     state.setup.boardId = e.target.value;
@@ -373,15 +388,44 @@ async function saveConfig() {
   if (pace && pace !== 'custom') body.pace = pace;
   const key = $('#cfg-key').value.trim();
   if (key) body.apiKey = key;
+  // 额外 Key：留空 = 不修改（与服务端 apiKey 同一约定），避免"改个温度就把多 Key 清空"。
+  // 想清空请用旁边的「清空额外 Key」按钮 —— 显式操作，不靠猜。
+  const extra = ($('#cfg-keys').value || '').split(/[\s,;、]+/).map((s) => s.trim()).filter(Boolean);
+  if (extra.length) body.apiKeys = extra;
   try {
     const r = await api('PUT', '/api/config', body);
     $('#cfg-key').value = '';
+    $('#cfg-keys').value = '';
     $('#cfg-key').placeholder = `已保存（${r.apiKeyMasked}），留空则不修改`;
-    $('#cfg-test-result').textContent = '✓ 已保存';
+    $('#cfg-test-result').textContent = `✓ 已保存（${r.channels || 1} 条并发通道）`;
     // 保存后按服务端反查结果回显档位：不以客户端的想法为准，避免"界面显示 A、磁盘是 B"
     const after = await api('GET', '/api/config').catch(() => null);
-    if (after) renderPaceSelect(after.pace);
+    if (after) { state.cfg = after; renderPaceSelect(after.pace); renderKeyChannels(after); }
   } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
+}
+
+/**
+ * 多 Key 通道数提示。
+ *
+ * 为什么要显示这个：通道数是"每多一把 Key 就多一条并发通道"，但它**不是**线性的提速 ——
+ * 实测（docs/fluency-plan.md §1.4）天花板约 -19%，因为语义串行的发言链占 73%。
+ * 界面必须如实说清，否则用户会以为"加 Key = 快一倍"，然后觉得功能没用。
+ */
+function renderKeyChannels(cfg) {
+  const box = $('#cfg-keys');
+  const hint = $('#cfg-channels');
+  if (!box || !hint) return;
+  const extra = (cfg && cfg.extraKeys) || 0;
+  const channels = (cfg && cfg.channels) || 1;
+  box.placeholder = extra > 0
+    ? `已保存 ${extra} 把额外 Key（留空则不修改）`
+    : 'sk-...（可选：一行一个，或用逗号分隔）';
+  const local = box.value.split(/[\s,;、]+/).filter((s) => s.trim()).length;
+  // 输入框里贴了新 Key 时，预览"保存后会变成几条"；否则显示服务端当前生效的通道数
+  const now = local ? local + 1 : channels;
+  hint.textContent = local
+    ? `保存后共 ${now} 条并发通道（当前 ${channels} 条）。注意：通道数不是线性提速 —— 发言必须按顺序听，实测多 Key 上限约 -19%。`
+    : `当前 ${channels} 条并发通道（${extra > 0 ? `1 把主 Key + ${extra} 把额外 Key` : '单 Key'}）。多一把 Key 多一条通道；上限约 -19%，不是减半。`;
 }
 
 async function testConfig() {

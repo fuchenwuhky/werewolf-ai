@@ -1,7 +1,7 @@
 /**
  * keypool.test.js — 多 Key 通道池（keypool P1/P2/P3）
  *
- * 先说结论（实测，见 docs/fluency-plan.md §1.4）：多 Key 的天花板约 **-23%**，不是"减半"，
+ * 先说结论（实测，见 docs/fluency-plan.md §1.4）：多 Key 的天花板约 **-19%**，不是"减半"，
  * 因为语义串行的发言链占了 73% 的耗时。所以这一层的定位是"**本来就有多个 Key 时别浪费**"，
  * 不是"买 Key 提速"。默认仍然是单通道。
  *
@@ -15,9 +15,10 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { LlmScheduler, PRIORITY } = require('../src/ai/scheduler');
-const { parseApiKeys, DEFAULT_CONFIG } = require('../src/config');
+const { parseApiKeys, resolveChannels, DEFAULT_CONFIG } = require('../src/config');
 const { Game } = require('../src/engine/game');
 const { makeMockAgentFactory } = require('../scripts/mock-agent');
+const { _internals } = require('../src/engine/flow');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -106,6 +107,121 @@ test('单 Key 时引擎不扇出（否则"正在思考"提示会显示错人）�
 
 test('目录一致性：默认配置必须是单通道（不能悄悄改变所有人的计费/限流行为）', () => {
   assert.deepStrictEqual(parseApiKeys(DEFAULT_CONFIG), [], '出厂默认没有 Key → 单通道');
+  assert.strictEqual(resolveChannels(DEFAULT_CONFIG), 1, '默认通道数 1');
   const s = new LlmScheduler();
   assert.strictEqual(s.channels, 1, '调度器默认 1 条通道');
+});
+
+test('resolveChannels：通道数只有一个来源（否则会出现"配了没生效"）', () => {
+  assert.strictEqual(resolveChannels({ apiKey: 'a' }), 1);
+  assert.strictEqual(resolveChannels({ apiKey: 'a,b,c' }), 3, 'Key 数 = 通道数');
+  assert.strictEqual(resolveChannels({ apiKey: 'a', apiKeys: ['b'] }), 2);
+  assert.strictEqual(resolveChannels({ apiKey: 'a,b', llmChannels: 4 }), 4, '显式指定优先');
+  assert.strictEqual(resolveChannels({ apiKey: 'a,b,c', llmChannels: 1 }), 1, '显式指定也能强制串行（回滚开关）');
+  assert.strictEqual(resolveChannels({}), 1, '什么都没配也是 1，不能算出 0 条通道');
+});
+
+// ---------- 夜晚扇出（keypool P3 的第二块收益） ----------
+
+/**
+ * 按 **LLM 调用**观察并发（而不是按步骤函数）：给每次 game.ask 加一个 4ms 的在途窗口，
+ * 没有并发时永远不会有两次调用同时在飞 —— 这比"看函数进出"更贴近我们真正关心的东西。
+ */
+function instrumentAsks(game) {
+  const log = [];
+  let open = 0;
+  let peak = 0;
+  const orig = game.ask.bind(game);
+  game.ask = async (seat, req) => {
+    open++;
+    if (open > peak) peak = open;
+    log.push({ task: req.task, seat, at: 'start' });
+    try {
+      await sleep(4);
+      return await orig(seat, req);
+    } finally {
+      open--;
+      log.push({ task: req.task, seat, at: 'end' });
+    }
+  };
+  return { log, peak: () => peak };
+}
+
+const NIGHT_BOARD = { wolf: 2, seer: 1, witch: 1, guard: 1, dreamer: 1, villager: 2 };
+/**
+ * 夜晚测试局必须**完全确定**：固定 seed（发牌确定）+ 恒定 rnd（mock 决策确定）。
+ * 否则"串行 vs 并发"比较的其实是两局不同的牌 —— 第一版就踩了这个坑：
+ * 用 Math.random 时两种路径的事件类型当然会不同，于是用例偶发失败（假警报）。
+ */
+function makeNightGame(parallelLlm) {
+  const players = [];
+  for (let i = 0; i < 8; i++) players.push({ name: `P${i + 1}` });
+  const g = new Game({
+    id: 'night', board: NIGHT_BOARD, players, parallelLlm, stepPauseMs: 0, seed: 4242,
+    agentFactory: makeMockAgentFactory(() => 0.5),
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  g.deal(); // 必须发牌：夜晚步骤的 present()/actors() 都看真实身份
+  return g;
+}
+
+test('夜晚并发：单通道下夜晚调用严格串行（峰值在途恒为 1）', async () => {
+  const g = makeNightGame(false);
+  const probe = instrumentAsks(g);
+  await _internals.nightPhase(g);
+  const tasks = probe.log.filter((e) => e.at === 'start').map((e) => e.task);
+  assert.ok(tasks.includes('wolf_kill') || tasks.includes('wolf_chat'), `狼人步骤必须跑过（实际调用：${tasks}）`);
+  assert.ok(tasks.includes('witch'), `女巫步骤必须跑过（实际调用：${tasks}）`);
+  assert.strictEqual(probe.peak(), 1, '单通道下任何时刻至多 1 个在途调用 —— 这是单 Key 用户的既有行为');
+});
+
+test('夜晚并发：多通道下独立步骤重叠，但女巫永远在狼刀之后', async () => {
+  const g = makeNightGame(true);
+  const probe = instrumentAsks(g);
+  await _internals.nightPhase(g);
+  const endOf = (t) => probe.log.map((e) => e.task).lastIndexOf(t) >= 0
+    ? probe.log.filter((e) => e.task === t).slice(-1)[0] : null;
+  const startOf = (t) => probe.log.find((e) => e.task === t && e.at === 'start');
+  const wolfEnd = probe.log.filter((e) => (e.task === 'wolf_kill' || e.task === 'wolf_chat') && e.at === 'end').length;
+  assert.ok(wolfEnd > 0, '狼队必须有调用');
+  const wolfLastEnd = probe.log.map((e, i) => (e.task === 'wolf_kill' && e.at === 'end' ? i : -1)).filter((i) => i >= 0).pop();
+  const witchStart = probe.log.findIndex((e) => e.task === 'witch' && e.at === 'start');
+  assert.ok(witchStart > wolfLastEnd, `女巫必须等狼刀结束（witch@${witchStart} vs wolf_kill end@${wolfLastEnd}）`);
+  assert.ok(probe.peak() >= 2, `多通道下应当出现并发在途（峰值 ${probe.peak()}）`);
+  void endOf; void startOf;
+  // 步骤播报顺序不受并发影响：仍按 nightOrder，序号 1..N
+  const announced = g.events.filter((e) => e.type === 'night_step').map((e) => e.data.step);
+  const idx = g.events.filter((e) => e.type === 'night_step').map((e) => e.data.index);
+  assert.deepStrictEqual(idx, announced.map((_, i) => i + 1), '序号必须是 1..N');
+  assert.ok(announced.length >= 4, `夜晚步骤数应为板子里存在的角色数（实际 ${announced})`);
+});
+
+test('夜晚并发：两种路径的事件类型与结算结果一致（并发不改变游戏语义）', async () => {
+  const run = async (parallelLlm) => {
+    const g = makeNightGame(parallelLlm);
+    await _internals.nightPhase(g);
+    return g;
+  };
+  // 固定 seed + 恒定 rnd ⇒ 两局除了"并发与否"之外完全同构，任何差异都来自并发本身
+  const a = await run(false);
+  const b = await run(true);
+  const types = (g) => [...new Set(g.events.map((e) => e.type))].sort();
+  assert.deepStrictEqual(types(b), types(a), '并发路径不得引入/遗漏任何事件类型');
+  assert.deepStrictEqual(b.night.guardActions, a.night.guardActions, '守卫行动一致');
+  assert.deepStrictEqual(b.night.dreamActions, a.night.dreamActions, '摄梦行动一致');
+  assert.deepStrictEqual(b.night.charmActions, a.night.charmActions, '魅惑行动一致');
+  assert.deepStrictEqual(b.night.poisonTargets, a.night.poisonTargets, '毒杀一致');
+  assert.strictEqual(b.night.wolfKill, a.night.wolfKill, '刀口一致');
+  assert.strictEqual(b.night.saved, a.night.saved, '是否用解药一致');
+  assert.deepStrictEqual(
+    b.events.filter((e) => e.type === 'night_step').map((e) => e.data.step),
+    a.events.filter((e) => e.type === 'night_step').map((e) => e.data.step),
+    '步骤播报序列必须完全一致',
+  );
+  // 私密性：夜事件仍然只给当事人（并发绝不能把别人的行动漏给第三方）
+  for (const e of b.events) {
+    if (['night_guard', 'night_dream', 'seer_check', 'witch_info', 'witch_action', 'crow_curse'].includes(e.type)) {
+      assert.deepStrictEqual(e.visibleTo, [e.actor], `${e.type} 必须只对 ${e.actor} 可见`);
+    }
+  }
 });

@@ -105,15 +105,21 @@ test('/api/config：GET 必须能读回全部配置项（除密钥），PUT 的�
     logger: silentLogger,
   });
 
-  // ① GET：DEFAULT_CONFIG 的每个键都必须出现（apiKey 例外，只能出掩码）
+  // ① GET：DEFAULT_CONFIG 的每个键都必须出现，**凭据字段除外**
+  //    apiKey / apiKeys 都是密钥，只能出掩码或"有几把"的数量；连数量都不给也不行 ——
+  //    前端就无从判断"额外 Key 输入框留空"到底是"不修改"还是"清空"。
+  const SECRET_KEYS = ['apiKey', 'apiKeys'];
   const get = capture();
   await api.handle({ method: 'GET', headers: {} }, get.res, '/api/config', new URLSearchParams());
   assert.strictEqual(get.code, 200);
-  const missing = Object.keys(DEFAULT_CONFIG).filter((k) => k !== 'apiKey' && !(k in get.body));
+  const missing = Object.keys(DEFAULT_CONFIG).filter((k) => !SECRET_KEYS.includes(k) && !(k in get.body));
   assert.deepStrictEqual(missing, [], `GET /api/config 漏了这些配置项（前端会读成 undefined）：${missing.join(', ')}`);
   assert.strictEqual(get.body.apiKey, undefined, '密钥绝不能下发');
+  assert.strictEqual(get.body.apiKeys, undefined, '成批的密钥更不能下发');
   assert.ok(get.body.apiKeyMasked && get.body.apiKeyMasked.includes('****'), '密钥应给掩码');
   assert.strictEqual(get.body.hasKey, true);
+  assert.strictEqual(get.body.extraKeys, 0, '要如实告知"有几把额外 Key"');
+  assert.strictEqual(get.body.channels, 1, '要如实告知并发通道数（前端据此说明"加 Key 能提速多少"）');
 
   // ② PUT → GET：布尔开关必须能读回真值（这是 keepAlive 复选框谎报的根因）
   //    假请求要实现 readBody 依赖的事件协议（data/end），否则请求体永远等不到
