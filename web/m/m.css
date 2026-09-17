@@ -399,3 +399,54 @@ html, body { height: 100%; overscroll-behavior: none; }
     transition-duration: .001ms !important;
   }
 }
+
+/* ==================== 角色图鉴（手机） ====================
+   渲染逻辑在共享模块 ../codex.js，基础外观来自 ../style.css 的 .cdx-* 一节。
+   这里只处理小屏差异：整屏自己滚、牌两列、筛选条横滑不换行、细节弹层收紧。 */
+#m-codex { overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom, 0); }
+#m-codex .m-head { position: sticky; top: 0; z-index: 5; background: rgba(8, 12, 22, .94); backdrop-filter: blur(6px); }
+#m-codex .m-head h2 { flex: 1 1 auto; }
+#m-codex .m-head .btn.small.ghost { flex: none; font-size: var(--fs-xs); padding: 0 10px; }
+#m-codex .cdx-sub { margin: 6px var(--sp-4) 0; font-size: var(--fs-xs); }
+#m-codex #cdx-search { width: auto; margin: 8px var(--sp-4); height: 38px; }
+/* 筛选条：一行横滑。换行会把三行筛选按钮堆到牌上面，占掉半屏 */
+#m-codex .cdx-filters {
+  padding: 0 var(--sp-4) var(--sp-3); border-bottom: none;
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+}
+#m-codex .cdx-filters::-webkit-scrollbar { display: none; }
+#m-codex .cdx-filters button { flex: none; padding: 6px 12px; font-size: var(--fs-sm); }
+#m-codex .cdx-grid { height: auto; overflow: visible; padding: 0 var(--sp-4) var(--sp-5); }
+#m-codex .cdx-sec h2 { font-size: var(--fs-md); }
+#m-codex .cdx-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-3); }
+#m-codex .cdx-card { -webkit-tap-highlight-color: transparent; }
+#m-codex .cdx-card .cdx-name { font-size: var(--fs-sm); }
+
+/* 细节弹层：与设置弹窗同一套 .modal 骨架，内容比设置项长得多 */
+.cdx-sheet { text-align: left; }
+.cdx-sheet .cdx-big { width: min(180px, 55%); margin: 0 auto var(--sp-3); }
+.cdx-sheet .cdx-dname { text-align: center; font-family: var(--font-cn-title); font-size: var(--fs-xl); letter-spacing: 3px; }
+.cdx-sheet .cdx-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: var(--sp-3) 0; }
+.cdx-sheet .cdx-chips span {
+  padding: 3px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs);
+  border: 1px solid var(--line); background: rgba(146, 174, 235, .07); color: var(--text-dim);
+}
+.cdx-sheet .cdx-chips span.hot { border-color: var(--gold-dim); background: rgba(216, 178, 95, .12); color: var(--gold-bright); }
+.cdx-sheet .cdx-short { font-size: var(--fs-md); color: var(--gold-bright); line-height: 1.7; }
+.cdx-sheet .cdx-desc { font-size: var(--fs-sm); color: var(--text-dim); line-height: 1.8; }
+.cdx-sheet .cdx-note {
+  padding: 9px var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.75;
+  color: var(--gold-bright); border: 1px solid var(--gold-dim); border-left-width: 3px; background: rgba(216, 178, 95, .1);
+}
+.cdx-sheet h4 {
+  margin: var(--sp-3) 0 var(--sp-2); padding-bottom: 5px; font-size: var(--fs-sm); color: var(--muted);
+  letter-spacing: 1px; border-bottom: 1px solid var(--line-dim);
+}
+.cdx-sheet .cdx-strat { display: flex; flex-direction: column; gap: 6px; }
+.cdx-sheet .cdx-strat div {
+  padding: 7px var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.7;
+  border-left: 2px solid var(--gold-dim); background: rgba(6, 10, 20, .5); color: var(--text-dim);
+}
+.cdx-sheet .cdx-strat b { color: var(--moon); font-weight: 600; }
+.cdx-sheet .cdx-actions { display: flex; gap: var(--sp-2); }
+.cdx-sheet .cdx-actions .btn { flex: 1 1 0; }

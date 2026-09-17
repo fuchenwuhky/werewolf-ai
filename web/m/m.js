@@ -42,6 +42,8 @@ async function init() {
   $('#m-back').addEventListener('click', () => showScreen('m-boards'));
   $('#m-start').addEventListener('click', startGame);
   $('#m-gear').addEventListener('click', openGear);
+  $('#m-codex-btn').addEventListener('click', openCodex);
+  $('#m-codex-back').addEventListener('click', closeCodex);
   $('#m-rulebook-btn').addEventListener('click', openRulebook);
   $('#m-mycard').addEventListener('click', showMyCard);
   $('#m-to-bottom').addEventListener('click', () => { scrollFlow(true); });
@@ -70,7 +72,9 @@ function openGear() {
     rows.push(['🎴 查看我的身份牌', () => openInspect(v.me.role)]);
   }
   // 规则书已挪到顶栏右上角的专用按钮，齿轮里不再重复列一项
-  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
+  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);
+  rows.push([I18N.t('codex.entry'), () => openCodex()]);
+  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
   if (inGame && !over) {
     rows.push(['⏹ 结束本局', () => askTerminate()]);
   } else {
@@ -132,6 +136,8 @@ function openSettingsModal() {
 function toggleLang() {
   const next = I18N.getLang() === 'en' ? 'zh-CN' : 'en';
   I18N.setLang(next);
+  // 图鉴内容是 JS 拼的（分区标题、徽记、AI 打法），不跟着 data-i18n 自动重刷
+  if (!$('#m-codex').classList.contains('hidden')) window.Codex.render();
   flash(next === 'en' ? 'Language: English' : '界面语言：中文');
 }
 
@@ -322,9 +328,50 @@ function wireSettings() {
   });
 }
 
-// ---------------- 屏2：规则确认 ----------------
+// ---------------- 屏2：角色图鉴 ----------------
+/** 挂载共享图鉴（web/codex.js）。手机端用 sheet 模式：点牌不挤右侧栏，而是弹层看细节。 */
+function openCodex() {
+  state.codexFrom = ['m-boards', 'm-rules', 'm-game'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  showScreen('m-codex');
+  window.Codex.mount({
+    meta: state.meta,
+    mode: 'sheet',
+    artBase: '../assets/roles/', // 手机端在 /m/ 下，立绘要上一层（写死相对路径会 404 成一排碎图）
+    // 本局在场：选中的板子里有几张（开局前也能看到，进对局后 view.board 更准）
+    counts: () => (state.view && state.view.board && state.view.board.roles) || state.boardCounts || {},
+    onPick: showCodexDetail,
+    onInspect: (rid) => { if (rid) openInspect(rid); },
+    onRulebook: openRulebook,
+  });
+}
+
+function closeCodex() { showScreen(state.codexFrom || 'm-boards'); }
+
+/** 细节弹层：内容与桌面版右侧栏同源（Codex.detailHtml），只是换个容器。
+ *  两个坑：① openModal 只把**无类名容器**的孩子提升到 .modal 下，给它一个 .modal 类会变成
+ *  ".modal 套 .modal"，内层是 position:fixed，外层高度塌成 0（实测只剩一条 4px 的线）；
+ *  ② 正文必须包一层 .mbody，否则 82vh 的 flex 约束传不进去，长内容滚不动。 */
+function showCodexDetail(rid) {
+  const src = el('div'); // 无类名 —— 交给 openModal 提升
+  src.innerHTML = window.Codex.detailHtml(rid);
+  const body = el('div', 'mbody');
+  while (src.firstChild) body.appendChild(src.firstChild);
+  const wrap = el('div'); // 同样无类名
+  wrap.appendChild(body);
+  const close = el('button', 'btn ghost', '关闭');
+  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  wrap.appendChild(close);
+  // 监听挂在**具体按钮**上：wrap 本身不会被挂进 DOM，挂它上面的委托永远不会触发
+  const ins = body.querySelector('.cdx-act-inspect');
+  if (ins) ins.addEventListener('click', () => openInspect(rid));
+  const rb = body.querySelector('.cdx-act-rule');
+  if (rb) rb.addEventListener('click', openRulebook);
+  openModal(wrap);
+}
+
+// ---------------- 屏3：规则确认 ----------------
 function showScreen(id) {
-  ['m-boards', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  ['m-boards', 'm-codex', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
 }
 
 function gotoRules() {

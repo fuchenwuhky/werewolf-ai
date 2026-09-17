@@ -52,15 +52,30 @@
     <div id="m-board-grid" class="m-grid"></div>
     <div class="m-foot">
       <button class="btn" id="m-settings-btn" data-i18n="m.settings">⚙ 设置</button>
+      <button class="btn" id="m-codex-btn" data-i18n="codex.entry">📖 角色图鉴</button>
       <button class="btn" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
       <span class="hint" id="m-hint"></span>
       <button class="btn primary" id="m-next" disabled data-i18n="m.next">下一步 →</button>
     </div>
   </section>
 
-  <!-- 屏2：规则确认 -->
-  <section id="m-rules" class="m-screen hidden">
+  <!-- 屏2：角色图鉴（渲染在共享模块 ../codex.js 里，与桌面版同一份逻辑）
+       与小屏的分工：牌用两列网格（132px 起），点牌不再挤右侧栏，而是弹层看细节——
+       手机宽度放不下"左翻牌 + 右细节"的并排布局。 -->
+  <section id="m-codex" class="m-screen hidden">
     <header class="m-head">
+      <button class="btn small" id="m-codex-back" data-i18n-title="codex.back" title="返回">←</button>
+      <h2 data-i18n="codex.title">角色图鉴</h2>
+      <button class="btn small ghost" id="cdx-rulebook" data-i18n="codex.rulebook">📖 完整规则书</button>
+    </header>
+    <p class="cdx-sub" id="cdx-sub"></p>
+    <input id="cdx-search" type="search" data-i18n-placeholder="codex.search" placeholder="搜索身份…" data-i18n-aria="codex.search" aria-label="搜索身份">
+    <div class="cdx-filters" id="cdx-filters"></div>
+    <div class="cdx-grid" id="cdx-grid"></div>
+  </section>
+
+  <!-- 屏3：规则确认 -->
+  <section id="m-rules" class="m-screen hidden">    <header class="m-head">
       <button class="btn small" id="m-back" data-i18n-title="m.back" title="返回">←</button>
       <h2 id="m-rules-title" data-i18n="m.rulesTitle">对局规则</h2>
     </header>
@@ -81,7 +96,7 @@
     </div>
   </section>
 
-  <!-- 屏3：对局（左右座位 + 中间流程 + 底部身份/技能/对话框） -->
+  <!-- 屏4：对局（左右座位 + 中间流程 + 底部身份/技能/对话框） -->
   <section id="m-game" class="m-screen hidden">
     <header class="m-bar">
       <button class="m-gear" id="m-gear" title="设置" aria-label="设置" data-i18n-title="m.gearTitle">⚙</button>
@@ -137,6 +152,7 @@
 </div>
 <script src="../i18n.js"></script>
 <script src="../card-frame.js"></script>
+<script src="../codex.js"></script>
 <script src="../rulebook.js"></script>
 <script src="../pwa.js"></script>
 <script src="m.js"></script>

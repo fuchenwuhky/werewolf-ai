@@ -323,6 +323,43 @@ class Browser {
     check('手机版进入规则页且规则/座位渲染', m2.shown.includes('m-rules') && m2.rules >= 5 && m2.seats >= 4, JSON.stringify(m2));
     await b.shot(path.join(SHOTS, '06-mobile-rules.png'));
 
+    // 手机版图鉴：与桌面版同一份渲染（web/codex.js），只是细节走弹层而不是右侧栏
+    await b.click('#m-back');
+    await sleep(400);
+    await b.click('#m-codex-btn');
+    await sleep(900);
+    const mc = await b.eval(`({
+      shown: [...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id),
+      cards: document.querySelectorAll('#cdx-grid .cdx-card').length,
+      secs: [...document.querySelectorAll('#cdx-grid .cdx-sec h2')].map((h) => h.textContent.trim()),
+      art: document.querySelectorAll('#cdx-grid img.role-art').length,
+      detail: !!document.querySelector('#m-codex #cdx-detail'),
+    })`);
+    check('手机版图鉴：独立成屏并列出全部身份', mc.shown.includes('m-codex') && mc.cards >= 15 && mc.art === mc.cards, JSON.stringify({ shown: mc.shown, cards: mc.cards, art: mc.art }));
+    check('手机版图鉴：评论区按卡框阵营分四区（含第三方）', mc.secs.length === 4 && mc.secs.some((s) => /第三方/.test(s)), JSON.stringify(mc.secs));
+    check('手机版图鉴：小屏不放右侧细节栏（走弹层）', mc.detail === false);
+    await b.shot(path.join(SHOTS, '06b-mobile-codex.png'));
+    await b.eval(`document.querySelectorAll('#cdx-grid .cdx-card')[0].click()`);
+    await sleep(600);
+    const ms = await b.eval(`(() => {
+      const box = document.querySelector('#m-modal .modal');
+      return {
+        sheet: !!document.querySelector('#m-modal .mbody .cdx-dname'),
+        // 高度必须量：曾经因为 ".modal 套 .modal" 把弹层压成一条 4px 的线，内容在、就是看不见
+        h: box ? Math.round(box.getBoundingClientRect().height) : 0,
+        name: (document.querySelector('#m-modal .cdx-dname') || {}).textContent || '',
+        chips: document.querySelectorAll('#m-modal .cdx-chips span').length,
+        strat: document.querySelectorAll('#m-modal .cdx-strat div').length,
+      };
+    })()`);
+    check('手机版图鉴：点牌弹出细节层（含徽记与 AI 打法）', ms.sheet && ms.h > 200 && ms.name.length > 0 && ms.chips >= 3 && ms.strat >= 2, JSON.stringify(ms));
+    await b.shot(path.join(SHOTS, '06c-mobile-codex-detail.png'));
+    await b.eval(`document.querySelector('#m-modal .modal .btn.ghost')?.click()`);
+    await sleep(300);
+    await b.click('#m-codex-back');
+    await sleep(400);
+    check('手机版图鉴：返回回到板子页', await b.eval(`[...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id).join(',')`) === 'm-boards');
+
     // ---- 7. 完整对局（观战 + Mock，无需人类作答）----
     if (FULL) {
       log('\n=== 观战 Mock 局跑到终局（--full）===');
