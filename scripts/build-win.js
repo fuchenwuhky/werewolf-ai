@@ -48,6 +48,12 @@ function copyRecursive(src, dest) {
 
 function main() {
   console.log(`── 打包电脑版 ${VERSION} ──`);
+  // 上次踩过：直接把 release 目录删干净，会把用户自己填的 config.json 和存档一起删掉
+  const keep = {};
+  for (const name of ['config.json', 'saves', 'logs']) {
+    const p = path.join(OUT, name);
+    if (fs.existsSync(p)) keep[name] = p;
+  }
   fs.rmSync(OUT, { recursive: true, force: true });
   fs.mkdirSync(OUT, { recursive: true });
 
@@ -69,10 +75,16 @@ function main() {
   if (fs.existsSync(nodeLicense)) fs.copyFileSync(nodeLicense, path.join(OUT, 'LICENSE.node.txt'));
   console.log(`  已内置 ${path.basename(nodeExe)}（${process.version}）`);
 
-  // 3) 启动器
-  fs.writeFileSync(path.join(OUT, '启动 AI 狼人杀.cmd'), LAUNCHER, 'utf8');
-  // 4) 说明
-  fs.writeFileSync(path.join(OUT, '使用说明.txt'), readme(), 'utf8');
+  // 3) 启动器（必须纯 ASCII）+ 4) 说明
+  writeBatch(path.join(OUT, '启动 AI 狼人杀.cmd'), LAUNCHER);
+  // 说明书写 UTF-8 **带 BOM**：中文 Windows 的记事本对无 BOM 的 UTF-8 会当 ANSI 打开而乱码
+  fs.writeFileSync(path.join(OUT, '使用说明.txt'), '\uFEFF' + readme(), 'utf8');
+
+  // 还原被保留的用户数据
+  for (const [name, p] of Object.entries(keep)) {
+    copyRecursive(p, path.join(OUT, name));
+    console.log(`  保留原有的 ${name}`);
+  }
 
   // 5) 压缩（用 PowerShell 的 Compress-Archive，避免引入 zip 依赖）
   const zip = path.join(RELEASE, `${NAME}.zip`);
@@ -87,6 +99,25 @@ function main() {
   console.log('  分发这个 zip：解压到任意可写目录（桌面 / D 盘都行），双击"启动 AI 狼人杀.cmd"');
 }
 
+/** 启动器必须是**纯 ASCII**，并且构建时断言这一点。
+ *
+ *  踩坑记录（两次都栽在编码上）：
+ *  ① 写成 UTF-8：cmd.exe 在中文 Windows 上用自己的 ANSI 代码页(936)解析批处理文件，
+ *     中文行被读成乱码，行内字节还被当作命令分隔符 → 实测报
+ *     `'鑷姩鎵撳紑' 不是内部或外部命令`（「自动打开」的 UTF-8 字节）。
+ *  ② 改写成 GBK：在控制台被设成 UTF-8(65001) 的环境里又反过来被误读成
+ *     `'鍚姩' is not recognized...`。而且 .cmd 内的 chcp **不影响**当前文件后续行的解析代码页，
+ *     所以"文件里先 chcp 再写中文"救不了。
+ *  ⇒ 只有当文件全部是 ASCII 时才与代码页无关：936 和 65001 下 ASCII 都是合法子集。
+ *     中文提示改由服务端自己的日志给出（Node 输出 UTF-8，启动器先 chcp 65001 就能正确显示），
+ *     以及同目录的《使用说明.txt》（UTF-8 with BOM）。
+ */
+function writeBatch(file, text) {
+  const bad = [...text].find((ch) => ch.charCodeAt(0) > 0x7f);
+  if (bad) throw new Error(`启动器含非 ASCII 字符 ${JSON.stringify(bad)} —— 会在中文 Windows 上解析失败`);
+  fs.writeFileSync(file, text, 'ascii');
+}
+
 function sizeOf(dir) {
   let n = 0;
   for (const name of fs.readdirSync(dir)) {
@@ -97,24 +128,38 @@ function sizeOf(dir) {
   return n;
 }
 
-// 启动器：chcp 65001 是为了中文提示不乱码；%PORT% 未设时由 server.js 默认 3210
+// 启动器：**只允许 ASCII**（见 writeBatch 的踩坑记录）。
+// chcp 65001 放在最前面：后面所有行都是 ASCII，不受解析代码页影响；
+// 而它能让 node 输出的中文日志（UTF-8）在窗口里正确显示 —— 中文提示由服务端给出。
 const LAUNCHER = `@echo off
 chcp 65001 >nul
-title AI 狼人杀
+title AI Werewolf
 cd /d "%~dp0"
+if not exist "%~dp0node.exe" goto nonode
 echo.
-echo   AI 狼人杀 —— 正在启动，浏览器会自动打开
-echo   关闭这个窗口即结束服务（存档在 saves\\，配置与日志也在本文件夹内）
+echo   AI Werewolf 1.4  -  starting the local server ...
+echo   Browser opens http://localhost:3210 automatically.
+echo   Keep this window open while playing; close it to stop the server.
+echo   Saves are in .\\saves\\ , config and logs are in this folder.
 echo.
 "%~dp0node.exe" server.js
-if errorlevel 1 (
-  echo.
-  echo   [启动失败] 常见原因是端口被占用。可以换端口再试：
-  echo       set PORT=3310
-  echo       "%~dp0node.exe" server.js
-  echo.
-  pause
-)
+if errorlevel 1 goto fail
+goto :eof
+
+:nonode
+echo.
+echo   [ERROR] node.exe not found. Please re-extract the whole folder.
+echo.
+pause
+goto :eof
+
+:fail
+echo.
+echo   [ERROR] Failed to start. The usual cause is port 3210 already in use.
+echo   Try another port:  set PORT=3310   then run this file again.
+echo   Details: see the output above, or logs\\server.log
+echo.
+pause
 `;
 
 function readme() {
@@ -125,6 +170,9 @@ function readme() {
   双击「启动 AI 狼人杀.cmd」。
   会弹出一个小黑窗口（那是服务端，别关），浏览器自动打开 http://localhost:3210 开始玩。
   关掉小黑窗口 = 结束服务。
+  注：小黑窗口里的提示是英文的 —— 那是刻意的，中文写进批处理文件会在不同代码页的
+  命令行窗口里被读成乱码甚至当成命令执行（见下面「为什么窗口是英文」）。服务端自己的
+  中文日志（如「AI 狼人杀已启动」）会正常显示在同一个窗口里。
 
 【需要准备什么】
   · Windows 10 / 11 64 位。不需要装 Node，已内置。
@@ -151,6 +199,11 @@ function readme() {
 
 【这个版本是什么】
   与安卓版 1.4 同源：同一份服务端与网页。电脑版不带安卓壳，直接跑 Node 服务端 + 浏览器。
+
+【为什么窗口是英文】
+  批处理文件（.cmd）的编码必须与控制台代码页一致，而中文 Windows 默认是 GBK(936)、
+  有些终端是 UTF-8(65001)，写中文总有一边会乱码，乱码字节还可能被当成命令分隔符执行。
+  所以启动器只用 ASCII（任何代码页下都合法），中文提示放到本文件与服务端日志里。
 `;
 }
 
