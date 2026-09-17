@@ -20,7 +20,7 @@
 // 缓存版本：前端资源有实质变更就升一档 —— 静态资源是缓存优先 + 后台更新，
 // 不升版本的话老用户要刷两次才看到新样式。升级后**不自动 skipWaiting**
 // （对局中途悄悄换前端会造成"页面是旧代码、接口是新行为"），由页面提示用户点刷新。
-const VERSION = 'ww-v4';
+const VERSION = 'ww-v5';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 

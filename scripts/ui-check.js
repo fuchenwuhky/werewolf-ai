@@ -117,6 +117,28 @@ class Browser {
     return this.eval(`(() => { const el=document.querySelector(${JSON.stringify(sel)}); if(!el) return 'NOT_FOUND'; el.scrollIntoView({block:'center'}); el.click(); return 'OK'; })()`);
   }
 
+  /** 真实鼠标点击（走 CDP Input 域，会产生完整命中测试）。
+   *  为什么必须有一个：click() 用的是 el.click() 合成事件，会**绕过命中测试**——
+   *  被别的图层压住、pointer-events:none、坐标算错这类问题它一律测不出来。
+   *  设置页复选框"点了勾不上"那次，状态其实一直是翻转的，问题在视觉上，
+   *  但真被别的层挡住时也需要这个方法才能复现。 */
+  async realClick(sel) {
+    const box = await this.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    if (!box) return 'NOT_FOUND';
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent',
+        { type, x: box.x, y: box.y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 },
+        this.sessionId);
+    }
+    return 'OK';
+  }
+
   setViewport(width, height, mobile) { return this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, this.sessionId); }
   setLatency(ms) { return this.send('Network.emulateNetworkConditions', { offline: false, latency: ms, downloadThroughput: -1, uploadThroughput: -1 }, this.sessionId); }
   setOffline(on) { return this.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }, this.sessionId); }
@@ -197,6 +219,30 @@ class Browser {
     check('节奏档位说明有正文', setup.paceHint > 10, `${setup.paceHint} 字`);
     check('规则开关渲染', setup.rules >= 8, `${setup.rules} 个`);
     check('板子模板渲染', setup.boards >= 5, `${setup.boards} 个`);
+
+    // 复选/单选：自己画的控件必须"勾上看得出"。
+    // 用户报的"点了勾不上"根因是 `background: linear-gradient(...)` 之后又写 `background-image: url(勾)`，
+    // 前者被顶掉 → 底色透明 → 深色勾画在暗底上等于看不见（状态其实是翻转的，所以只测 checked 测不出来）。
+    // 所以这里同时钉三件事：真实鼠标点击能翻转状态、勾选态**同时**有勾画与不透明底色、取消后回到暗底。
+    const cb = await b.eval(`(() => {
+      const el = document.getElementById('cfg-cachecontrol');
+      const read = () => { const s = getComputedStyle(el); return {
+        checked: el.checked, image: s.backgroundImage, color: s.backgroundColor, border: s.borderTopColor }; };
+      el.checked = false;
+      return read();
+    })()`);
+    await b.realClick('#cfg-cachecontrol');
+    await sleep(300);
+    const cbOn = await b.eval(`(() => { const el = document.getElementById('cfg-cachecontrol'); const s = getComputedStyle(el); return {
+      checked: el.checked, image: s.backgroundImage, color: s.backgroundColor }; })()`);
+    check('复选框：真实鼠标点击能勾上', cbOn.checked === true, JSON.stringify({ before: cb.checked, after: cbOn.checked }));
+    check('复选框：勾选态同时有勾画与不透明底色（缺一个就等于看不见）',
+      /svg/.test(cbOn.image) && /gradient/.test(cbOn.image) && !/rgba\\(0, 0, 0, 0\\)|transparent/.test(cbOn.color),
+      JSON.stringify({ image: cbOn.image.slice(0, 60), color: cbOn.color }));
+    await b.realClick('#cfg-cachecontrol');
+    await sleep(300);
+    const cbOff = await b.eval(`document.getElementById('cfg-cachecontrol').checked`);
+    check('复选框：再点一次能取消', cbOff === false);
     // 设置页下半（板子编辑器 / 玩家昵称 / 底部操作条）在 1440×900 里落在首屏之外，
     // 而这几张卡恰好是改动最频繁的部分 —— 滚到底单独留一张。
     await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 2000)`);

@@ -404,9 +404,16 @@ input[type=checkbox], input[type=radio] {
 input[type=radio] { border-radius: 50%; }
 input[type=checkbox]:hover, input[type=radio]:hover { border-color: var(--gold); }
 input[type=checkbox]:checked {
-  border-color: var(--gold); background: linear-gradient(160deg, var(--gold-bright), var(--gold-deep));
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='11' viewBox='0 0 13 11'%3E%3Cpath d='M1.5 5.6 4.8 9 11.4 2' fill='none' stroke='%23241803' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: center;
+  border-color: var(--gold);
+  /* ⚠ 这里踩过一次：原来写成 `background: linear-gradient(...)` 之后再写
+     `background-image: url(勾)` —— 后者会把简写里的渐变整个顶掉，底色随之变透明，
+     于是深色勾画在暗底上几乎看不见，勾与不勾长得一模一样（用户报的"点了勾不上"就是这个）。
+     修法：把「勾」与「金底」当作两层写在同一个 background-image 里，勾在上、底在下。 */
+  background-color: var(--gold);
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='11' viewBox='0 0 13 11'%3E%3Cpath d='M1.5 5.6 4.8 9 11.4 2' fill='none' stroke='%23241803' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"),
+    linear-gradient(160deg, var(--gold-bright), var(--gold-deep));
+  background-repeat: no-repeat, no-repeat;
+  background-position: center, center;
 }
 input[type=radio]:checked {
   border-color: var(--gold);
