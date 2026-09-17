@@ -754,6 +754,41 @@ class Browser {
         }
         await api('POST', `/api/games/${g3.gameId}/terminate`, { token: g3.playerToken });
       }
+
+      // (E) P5 移动端：手机版必须能进对局并把座位/流程/待办渲染出来（mock 局，零成本）
+      log('\n=== P5 手机端进入对局 ===');
+      const g4 = await mkGame('quick10', 10, 20260917);
+      await api('POST', `/api/games/${g4.gameId}/start`, { token: g4.playerToken });
+      await b.setViewport(390, 844, true);
+      // 手机端用自己的键 `mww_current`（桌面版是 `ww_current`，两者不共用）——
+      // 只写 `ww_current` 手机会一直停在板子页（实测）。这里两个都写，模拟"手机上开的局"。
+      await b.eval(`localStorage.setItem('mww_current', ${JSON.stringify(JSON.stringify(g4))}); localStorage.setItem('ww_current', ${JSON.stringify(JSON.stringify(g4))});`);
+      await b.goto(base + '/m/', 2500);
+      // 手机版可能直接进局，也可能先给一张"继续上局"的入口 —— 两种都兼容
+      const resumed = await b.eval(`(() => {
+        const btn = [...document.querySelectorAll('#m-app button')].find((x) => /继续|恢复|进入/.test(x.textContent) && x.offsetParent !== null);
+        if (btn) { btn.click(); return btn.textContent.trim(); }
+        return '';
+      })()`);
+      await sleep(2500);
+      const mobGame = await b.eval(`(() => {
+        const shown = [...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id);
+        return {
+          shown,
+          day: ((document.getElementById('m-day') || {}).textContent || '').trim(),
+          phase: ((document.getElementById('m-phase') || {}).textContent || '').trim(),
+          seats: document.querySelectorAll('#m-seats-l > *, #m-seats-r > *').length,
+          flow: document.querySelectorAll('#m-flow > *').length,
+          hint: ((document.getElementById('m-pending-hint') || {}).textContent || '').trim(),
+          dialogBtns: document.querySelectorAll('#m-dialog button').length,
+        };
+      })()`);
+      check('手机端进入对局页', mobGame.shown.includes('m-game'), `入口=${resumed || '直接进局'} 可见=${mobGame.shown}`);
+      check('手机端渲染座位与流程', mobGame.seats >= 8 && mobGame.flow >= 1, `座位=${mobGame.seats} 流程=${mobGame.flow} ${mobGame.day}/${mobGame.phase}`);
+      check('手机端有待办面板或明确提示', mobGame.dialogBtns >= 1 || mobGame.hint.length > 0, `按钮=${mobGame.dialogBtns} 提示="${mobGame.hint.slice(0, 40)}"`);
+      await b.shot(path.join(SHOTS, '13-mobile-game.png'));
+      await api('POST', `/api/games/${g4.gameId}/terminate`, { token: g4.playerToken });
+      await b.setViewport(1280, 900, false);
     }
 
     // ---- 8. 控制台必须干净 ----
