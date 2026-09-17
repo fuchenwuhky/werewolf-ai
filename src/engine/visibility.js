@@ -35,6 +35,9 @@ const EVENT_VISIBILITY = {
   // 投票方向是游戏信息，泄露它就是改游戏。所以它同时进 context 的 NOISE_TYPES 与
   // effort 的 CHATTER_TYPES：AI 上下文与思考预算都不受它影响（纯 UI 反馈）。
   vote_progress: 'public',
+  // 宣称账本（B2）：记录"某人公开说过什么"。**说了什么是事实，说的内容不是** ——
+  // 事件里永远带 verifiedBy:null，且绝不携带说话者的真实身份；快照把它单独成区，与硬事实隔开。
+  claim: 'public',
   sheriff_run: 'public',
   sheriff_none: 'public',
   sheriff_elected: 'public',

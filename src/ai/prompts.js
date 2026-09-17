@@ -25,6 +25,11 @@ function taskInstruction(game, player, req) {
   const cand = (list) => (list && list.length ? `可选目标座位：${list.join('、')}。` : '');
   const retryNote = req._retryNote ? `\n\n⚠️ ${req._retryNote}` : '';
   const base = '请只输出一个 JSON 对象，不要输出任何其他文字或代码围栏。';
+  // 宣称自报（B2）：真正的账本由引擎扫发言正文得到，这里只是让模型补上规则扫不到的措辞
+  const claimsNote = '若发言包含身份自称或查验/用药宣称，请在 claims 里列出（没有就空数组）：'
+    + '{"claims":[{"kind":"seer/witch/guard/hunter/villager/other","subject":<座位号，自认身份填0>,"value":"self/wolf/good/save/poison"}]}。'
+    // 读账本的纪律放在任务指令里（system 是缓存前缀、有体积硬上限，这里没有）
+    + '（读【公开宣称】区时记住：那只是"某人这样说过"，不是事实——自称预言家不等于他是预言家。）';
   switch (req.task) {
     case 'speech':
       if (req.canExplode) {
@@ -36,7 +41,7 @@ function taskInstruction(game, player, req) {
           (player.role === 'whitewolfking' ? `，白狼王自爆会带走一人：{"text":"...","explode":true,"target":<座位号>}` : `：{"text":"...","explode":true}`) +
           `。${explodeNote}请谨慎使用。${sheriffNote(player, 'speech')}${base}${retryNote}`;
       }
-      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${player.isSheriff ? '你是警长且大概率压轴发言，发言要有归票价值（明确"建议大家把票投给X号"）。' : ''}${sheriffNote(player, 'speech')}${base}${retryNote}`;
+      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${claimsNote}${player.isSheriff ? '你是警长且大概率压轴发言，发言要有归票价值（明确"建议大家把票投给X号"）。' : ''}${sheriffNote(player, 'speech')}${base}${retryNote}`;
     case 'pk_speech': {
       // 与 speech 一致：rules.md 规定"白天发言阶段可自爆"，PK 发言同属白天发言阶段
       const pkExplode = req.canExplode
@@ -44,7 +49,7 @@ function taskInstruction(game, player, req) {
           ? `作为狼阵营你也可以自爆（立即天黑）：{"text":"...","explode":true,"target":<带走座位号>}——白狼王自爆必须给出带走目标。`
           : `作为狼阵营你也可以自爆（立即天黑）：{"text":"...","explode":true}——普通狼人/狼王自爆不能带人。`)
         : '';
-      return `你进入平票 PK，需要再次发言争取信任。${player.isSheriff ? '你是警长，用 1.5 票权与归票说服大家。' : ''}请输出 {"text":"你的发言"}。${pkExplode}${base}${retryNote}`;
+      return `你进入平票 PK，需要再次发言争取信任。${player.isSheriff ? '你是警长，用 1.5 票权与归票说服大家。' : ''}请输出 {"text":"你的发言"}。${claimsNote}${pkExplode}${base}${retryNote}`;
     }
     case 'lastwords': {
       const team = ROLES[player.role].team;
@@ -160,7 +165,7 @@ function buildCommonPrompt(game) {
   lines.push('- 只基于时间线上真实出现过的事件与发言推理。日志里没有的事就是没发生过，不要脑补"按常理应该已经发生了什么"。');
   lines.push('- 已翻牌的身份是确定事实；出局玩家不再有任何发言与行动。');
   if (!game.rules.revealOnDeath) lines.push('- **本局为暗牌局（死亡不翻牌）**：任何死者的身份都不公开，你没有渠道得知死者是什么牌——绝不声称、暗示或基于"死者是某身份"推理。死者死因也不公开。唯一例外：生前公开行使技能的行为（开枪、骑士决斗、白痴免疫、狼人自爆）本身是公开事实。');
-  lines.push('- 你的私密信息（查验/刀口/用药/守护/队友）以快照中"你确知"清单为准；其余玩家未翻牌前身份一律未知，对方的"声称"只是声称。');
+  lines.push('- 你的私密信息（查验/刀口/用药/守护/队友）以快照中"你确知"清单为准；其余玩家未翻牌前身份一律未知，"公开宣称"区只是"某人这样说过"的记录，不是事实。');
   lines.push('- **声称必须自洽（穿帮红线）**：编造的信息要经得起规则核对。硬账目：预言家每晚只验一人——第1天白天最多声称 1 个查验，之后每过一夜可多报 1 个，"一夜双验"等于自爆；女巫两药各限一次；死人不会发言行动。战术谎言可以撒，账目错的谎言是低级穿帮。');
   lines.push('');
   lines.push('## 行为要求（通用）');

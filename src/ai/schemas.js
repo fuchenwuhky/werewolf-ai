@@ -32,10 +32,27 @@ function strictObj(props) {
   return { type: 'object', properties: props, required: Object.keys(props), additionalProperties: false };
 }
 
+/**
+ * 宣称账本（B2）的 schema 片段：让模型自报"这句话里包含哪些身份/查验宣称"。
+ *
+ * 注意这只是**补充**：真正的记录由引擎的确定性扫描（`claims.js`）完成 ——
+ * 模型漏报、少报、甚至故意不报，账本都不会失真（它本来就在撒谎，不能指望它自报）。
+ * 模型自报的价值是覆盖规则扫不到的措辞（例如"我验的那个位置"）。
+ */
+const CLAIM_KINDS = ['seer', 'witch', 'guard', 'hunter', 'villager', 'other'];
+const CLAIMS = {
+  type: 'array',
+  items: strictObj({
+    kind: { type: 'string', enum: CLAIM_KINDS },
+    subject: { type: 'integer' }, // 0 = 自认身份
+    value: { type: 'string' },
+  }),
+};
+
 /** task → { name, build(req, opts) } */
 const BUILDERS = {
   // 发言类：可带自爆；白狼王自爆带人的目标必须落在候选座位上（与 validatePayload 的 inCand 严丝合缝）
-  speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates), withdraw: BOOL }),
+  speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates), withdraw: BOOL, claims: CLAIMS }),
   // 退水只在允许退水的轮次存在：不允许时把 withdraw **锁成 false**（enum 单值），
   // 否则模型会以为"我退水了"而引擎照样把它留在 PK 名单里 —— 模型侧与引擎侧的认知分歧，
   // 正是"看起来像 bug"的来源。校验器里另有一道同样的归一化（纵深防御）。
@@ -45,6 +62,7 @@ const BUILDERS = {
       explode: BOOL,
       target: seatProp(req.candidates),
       withdraw: req.canWithdraw ? BOOL : { type: 'boolean', enum: [false] },
+      claims: CLAIMS,
     }),
   pk_speech: (req) => strictObj({ text: TEXT, explode: BOOL, target: seatProp(req.candidates) }),
   lastwords: () => strictObj({ text: TEXT }),

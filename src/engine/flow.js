@@ -5,6 +5,7 @@
 'use strict';
 const { ROLES } = require('./roles');
 const { resolveNightDamage, triggersCharm } = require('./damage');
+const { claimScan, mergeClaims } = require('./claims');
 
 // ---------- 输入校验（人类与 AI 共用同一套） ----------
 /**
@@ -43,7 +44,14 @@ const V = {
   speech: ({ payload, req, p, game, asInt, inCand, fail, task, seat }) => {
     const text = clipSpeech(game, seat, payload.text);
     if (!text) return fail('发言内容不能为空');
-    const value = { text, explode: false, target: 0, withdraw: false };
+    const value = {
+      text,
+      explode: false,
+      target: 0,
+      withdraw: false,
+      // 模型自报的宣称（B2）：只当补充，真正的账本由引擎扫描发言正文得到 —— 不依赖模型诚实
+      claims: Array.isArray(payload.claims) ? payload.claims.slice(0, 6) : [],
+    };
     if (payload.explode) {
       if (!req.canExplode) return fail('当前不能自爆');
       if (!game.rules.allowSelfExplode) return fail('本局规则不允许自爆');
@@ -219,6 +227,26 @@ function validatePayload(task, payload, req, game, seat) {
 }
 
 // ---------- 通用询问（人类挂起 / AI 校验重试 + 降级） ----------
+
+/**
+ * 统一的"某人公开发言"出口：落 `speech`，并把这句话里的**宣称**记进账本（B2）。
+ *
+ * 为什么收口成一个函数：发言有 5 个出口（白天/警上/PK/遗言/狼聊），
+ * 散着写就得改 5 处、以后加一处又漏一处；宣称的抽取（claimScan）是确定性的代码规则，
+ * **不依赖模型自报**，所以模型漏报也不会让账本失真。
+ * 每条 `claim` 都带 `verifiedBy: null`：引擎永远不替宣称背书，它只是"某人这样说过"的记录。
+ */
+function emitSpeech(game, seat, v, context) {
+  const text = (v && v.text) || '';
+  const data = { text, context };
+  if (v && v.degraded) data.degraded = true;
+  game.emit('speech', { actor: seat, data });
+  // 人类玩家的发言同样走这里：他们打的"我是预言家"也会进账本，AI 侧看得到
+  const claims = mergeClaims(claimScan(text, game.players.length), v && v.claims, game.players.length);
+  for (const c of claims) {
+    game.emit('claim', { actor: seat, data: { ...c, day: game.day, verifiedBy: null } });
+  }
+}
 async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) {
   const p = game.player(seat);
   if (p.isHuman) {
@@ -367,7 +395,7 @@ async function settleDeath(game, seat, cause, opts = {}) {
     const text = (v && v.text) || '';
     // 遗言降级不再"凭空消失"：以前 text 为空就一条事件都不发，玩家分不清
     // "他不想说"与"AI 挂了"。现在一律落一条**中性占位**（不编造内容）并标记 degraded。
-    game.emit('speech', { actor: seat, data: { text: text || '（他没有留下遗言。）', context: 'lastwords', degraded: !text } });
+    emitSpeech(game, seat, { text: text || '（他没有留下遗言。）', degraded: !text }, 'lastwords');
   }
   // 警徽
   if (p.isSheriff) await badgeResolve(game, seat);
@@ -806,7 +834,7 @@ async function electionPhase(game) {
       continue;
     }
     campaignOrder.push(s);
-    game.emit('speech', { actor: s, data: { text: v.text, context: 'sheriff' } });
+    emitSpeech(game, s, v, 'sheriff');
     if (v.withdraw) {
       game.emit('withdraw', { actor: s, data: {} });
       p._withdrawn = true;
@@ -835,7 +863,7 @@ async function electionPhase(game) {
       if (r2 === 'dayEnded') return 'dayEnded';
       continue;
     }
-    game.emit('speech', { actor: s, data: { text: v.text, context: 'pk' } });
+    emitSpeech(game, s, v, 'pk');
   }
   const aliveTops = r.topSeats.filter((s) => game.player(s).alive);
   if (!aliveTops.length) { game.emit('sheriff_none', {}); return 'ok'; }
@@ -964,7 +992,7 @@ async function speechPhase(game) {
       await handleExplode(game, s, v, { inElection: false });
       return 'dayEnded';
     }
-    game.emit('speech', { actor: s, data: { text: v.text, context: 'day' } });
+    emitSpeech(game, s, v, 'day');
     if (await consumeExplodeRequest(game)) return 'dayEnded'; // 发言刚结束即生效（打断后续发言）
     const dr = await consumeDuelRequest(game);
     if (dr === 'dayEnded') return 'dayEnded';
@@ -1008,7 +1036,7 @@ async function votePhase(game) {
       await handleExplode(game, s, v, { inElection: false });
       return;
     }
-    game.emit('speech', { actor: s, data: { text: v.text, context: 'pk' } });
+    emitSpeech(game, s, v, 'pk');
     if (await consumeExplodeRequest(game)) return;
     if (await consumeDuelRequest(game)) return;
   }

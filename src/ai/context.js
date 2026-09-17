@@ -15,6 +15,10 @@ const { renderEvent, PHASE_LABEL } = require('../engine/render');
 const { spotlightEvent } = require('./spotlight');
 const { estimateTokens } = require('./tokens');
 const { selectMemory, MEMORY_HEADER } = require('./memory');
+const { renderClaim } = require('../engine/claims');
+
+/** 公开宣称分区最多保留的"查验/用药"条数（自认身份每座位只留最近一次，不占这个额度） */
+const CLAIM_KEEP = 12;
 
 const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'vote_progress']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
@@ -101,6 +105,7 @@ function dayFacts(game, dayEvents) {
   for (const e of dayEvents) {
     if (NOISE_TYPES.has(e.type)) continue;
     if (e.type === 'speech' || e.type === 'phase') continue; // 发言进实录层，阶段标题由分区头承担
+    if (e.type === 'claim') continue; // 宣称不是硬事实，单独成区（见 claimSection）
     const line = spotlightEvent(game, e, renderEvent(game, e));
     if (line && line.trim()) lines.push(`  ${line}`);
   }
@@ -190,6 +195,28 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = 
     if (s) spine.push(`  第${d}天·结论：${s}`);
   }
   const spineBlock = spine.length ? `公开硬事实时间线：\n  每日脊柱（代码生成，永不裁剪）：\n${spine.join('\n')}` : '';
+  // 公开宣称（B2）：与硬事实**物理隔开** —— "某人说过什么"是事实，"他说的内容"不是。
+  // 有界策略：每个座位只留**最近一次**自认身份 + 最近 N 条查验/用药宣称，其余折叠并写明条数；
+  // 不设界的话，从第 3 天起账本就会变成上下文里最大的噪声源。
+  const claimEvents = ledger.events.filter((e) => e.type === 'claim');
+  const selfLatest = new Map();
+  const verified = [];
+  for (const e of claimEvents) {
+    const d = e.data || {};
+    if (!d.subject) selfLatest.set(e.actor, e); // subject=0：自认身份
+    else verified.push(e);
+  }
+  const lineOf = (e) => `  · 第${(e.data && e.data.day) || e.day}天 ${e.actor}号 ${renderClaim(e.data || {})}`;
+  const selfLines = [...selfLatest.values()].sort((a, b) => (a.seq || 0) - (b.seq || 0)).map(lineOf);
+  const recentClaims = verified.slice(-CLAIM_KEEP);
+  const claimLines = [...selfLines, ...recentClaims.map(lineOf)];
+  const claimNote = verified.length > recentClaims.length
+    ? `  （更早的 ${verified.length - recentClaims.length} 条宣称已省略）`
+    : '';
+  const claimSection = claimLines.length
+    ? '公开宣称（未经证实：以下只是"某人这样说过"，不代表为真，真假要你自己判断）：\n'
+      + [...claimLines, claimNote].filter(Boolean).join('\n')
+    : '';
   // ② 结构区（时钟/座位/确知/脊柱）是快照的**下限**，任何预算下都不裁 —— 先量出它的体积
   const structural = [
     head,
@@ -197,6 +224,8 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = 
     '你确知（私密）：\n' + youKnow,
     '你不知道（不要臆测）：\n' + notKnow.map((s) => `  · ${s}`).join('\n'),
     spineBlock,
+    // 宣称区进结构区：它是"谁说过什么"的唯一索引，被裁掉就等于把 AI 的判断依据抽走
+    claimSection,
   ].filter(Boolean);
   const budget = opts.tokenBudget;
   const fixedTokens = structural.reduce((a, s) => a + estimateTokens(s), 0);
@@ -255,7 +284,7 @@ function renderSnapshot(game, player, ledger, request, lastSeq = 0, suspicion = 
         : `自你上次行动后的新事件：共 ${freshLines.length} 条，预算不足未展开（见上方实录）。`;
     }
   }
-  return [head, `座位与状态：${seatLine}`, '你确知（私密）：\n' + youKnow, '你不知道（不要臆测）：\n' + notKnow.map((s) => `  · ${s}`).join('\n'), factSection, freshText]
+  return [head, `座位与状态：${seatLine}`, '你确知（私密）：\n' + youKnow, '你不知道（不要臆测）：\n' + notKnow.map((s) => `  · ${s}`).join('\n'), factSection, claimSection, freshText]
     .filter(Boolean)
     .join('\n');
 }
