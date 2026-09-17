@@ -24,6 +24,9 @@ app/android/local.properties
 *.apk
 *.keystore
 
+# 电脑版打包产物：npm run app:win 生成（文件夹 + zip，含内置 node.exe，可重建）
+release/
+
 # 系统
 .DS_Store
 Thumbs.db

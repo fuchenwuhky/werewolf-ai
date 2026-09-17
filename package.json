@@ -21,7 +21,8 @@
     "gen-icons": "node scripts/make-icons.js",
     "ui:check": "node scripts/ui-check.js",
     "app:sync": "node scripts/build-app.js && cd app && npx cap sync android",
-    "app:apk": "bash scripts/update-app.sh"
+    "app:apk": "bash scripts/update-app.sh",
+    "app:win": "node scripts/build-win.js"
   },
   "engines": {
     "node": ">=18.18"
