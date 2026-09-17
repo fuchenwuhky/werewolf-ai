@@ -67,20 +67,33 @@ function craftReply(prompt) {
     : (text.match(/\b\d{1,2}\b/g) || []).map(Number);
   const valid = pool.filter((n) => n >= 1 && n <= 24 && n !== mySeat);
   const seat = valid.length ? Math.min(...valid) : (pool.length ? Math.min(...pool) : 1);
+  // 4. 按模板里的**字段名**构造对象，而不是做字符串替换。
+  //    为什么改：老实现是"替换模板里的值"，一旦模板带占位符或没抓到模板，就会退回
+  //    `{"text":"…"}` —— 对 wolf_kill / vote / seer_check 这类 target 任务这就是**非法负载**，
+  //    应用会校验失败→重试→降级，把调用量放大。我因此误判过一整轮（把假模型的行为当成引擎僵持）。
+  const keys = template ? [...template.matchAll(/"([a-zA-Z_]+)"\s*:/g)].map((m) => m[1]) : [];
   let body;
-  if (template) {
-    // 把模板里的值替换成可用的：字符串→一句短发言，数字→座位号，布尔→false
-    body = template.replace(/"([a-zA-Z_]+)"\s*:\s*("([^"]*)"|\d+|true|false)/g, (all, key) => {
-      if (/text|reason|speech|words|content|summary|claim/i.test(key)) return `"${key}":"（假模型）我按规则表态。"`;
-      if (/target|seat|check|poison|save|kill|vote|guard|shoot|crush|curse|dream|charm/i.test(key)) return `"${key}":${seat}`;
-      if (/explode|withdraw|antidote|agree|pass/i.test(key)) return `"${key}":false`;
-      if (/lessons|tags|events|list|notes/i.test(key)) return `"${key}":["（假模型）保持简洁。"]`;
-      return all;
-    });
+  if (keys.length) {
+    const obj = {};
+    for (const k of keys) {
+      if (/text|reason|speech|words|content|summary|claim|say/i.test(k)) obj[k] = '（假模型）我按规则表态。';
+      else if (/explode|withdraw|antidote|agree|pass/i.test(k)) obj[k] = false;
+      else if (/lessons|tags|events|list|notes/i.test(k)) obj[k] = ['（假模型）保持简洁。'];
+      else obj[k] = seat; // target/seat/poison/… 以及未知字段：给座位号（多数任务的可选值就是座位）
+    }
+    body = JSON.stringify(obj);
+  } else if (/刀口|袭击|查验|摄梦|魅惑|诅咒|决斗|开枪|投票|票选|守护|目标/.test(text)) {
+    body = JSON.stringify({ target: seat });
+  } else if (/上警|竞选/.test(text)) {
+    body = JSON.stringify({ run: false });
+  } else if (/自爆/.test(text)) {
+    body = JSON.stringify({ explode: false });
+  } else if (/解药|毒药/.test(text)) {
+    body = JSON.stringify({ antidote: false, poison: 0 });
   } else {
-    body = '{"text":"（假模型）我按规则表态。"}';
+    body = JSON.stringify({ text: '（假模型）我按规则表态。' });
   }
-  try { JSON.parse(body); } catch (_) { body = '{"text":"（假模型）我按规则表态。"}'; }
+  try { JSON.parse(body); } catch (_) { body = JSON.stringify({ target: seat }); }
   return body;
 }
 
