@@ -15,6 +15,9 @@
  *   node scripts/eval/eval-harness.js                          # mock，2 个引擎配置 × 8 局
  *   node scripts/eval/eval-harness.js --games=20 --json        # 只看机器可读结果
  *   node scripts/eval/eval-harness.js --live --games=2 --max-calls=200
+ *     ⚠️ --games=N 是**每个配置** N 局！默认跑 2 个配置（base + nosheriff）→
+ *        --games=2 实际会打 **4 局真局**（实测踩到：批准"2 局"却会跑到 4 局，成本翻倍）。
+ *        只想跑两局就配合 --configs=base，或跑完 N 局后手动收手。
  *   node scripts/eval/eval-harness.js --update-baseline        # 把本次结果写成新基线（改引擎后要看懂差异再用）
  */
 'use strict';
