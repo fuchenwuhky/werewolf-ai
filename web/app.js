@@ -1106,10 +1106,22 @@ function openInspect(rid) {
    数据全部来自服务端 meta（roles / roleArt / roleStrategies），前端不写死任何角色知识：
    新增身份只要在 src/engine/roles.js 注册，图鉴自动多一张牌。
    ============================================================ */
+/** 图鉴分区按**卡框的阵营**分（CardFrame.roleAttrs().faction），而不是按引擎的 category：
+ *  暗恋者在 card-frame.js 的 THIRD_PARTY 里是"外观上的第三方"（引擎 category 仍是 villager，
+ *  因为它的有效阵营随暗恋对象终身变动，见 src/engine/game.js 的 categoryOf）。
+ *  按 category 分区会把它归进"平民阵营"，可它挂的却是紫框 —— 图鉴会与牌面自相矛盾。 */
+function codexFactionOf(rid) {
+  const r = roleInfo(rid);
+  const attrs = window.CardFrame.roleAttrs(rid);
+  return attrs.faction || (r && r.category) || 'villager';
+}
+// 分区顺序 = 展示顺序。第三方放最后：前三个分区是"这一局会遇到什么"，例外项当脚注读更顺，
+// 也能让图鉴的默认选中项（第一张可见牌）是狼人而不是这个特例。
 const CODEX_SECTIONS = [
-  { key: 'wolf', match: (r) => r.category === 'wolf', titleKey: 'codex.secWolf', catKey: 'codex.catWolf' },
-  { key: 'god', match: (r) => r.category === 'god', titleKey: 'codex.secGod', catKey: 'codex.catGod' },
-  { key: 'villager', match: (r) => r.category === 'villager', titleKey: 'codex.secVillager', catKey: 'codex.catVillager' },
+  { key: 'wolf', match: (rid) => codexFactionOf(rid) === 'wolf', titleKey: 'codex.secWolf', catKey: 'codex.catWolf' },
+  { key: 'god', match: (rid) => codexFactionOf(rid) === 'god', titleKey: 'codex.secGod', catKey: 'codex.catGod' },
+  { key: 'villager', match: (rid) => codexFactionOf(rid) === 'villager', titleKey: 'codex.secVillager', catKey: 'codex.catVillager' },
+  { key: 'third', match: (rid) => codexFactionOf(rid) === 'third', titleKey: 'codex.secThird', catKey: 'codex.catThird' },
 ];
 const codexState = { filter: 'all', q: '', pick: null, from: 'screen-setup' };
 
@@ -1144,7 +1156,7 @@ function codexVisible() { return !$('#screen-codex').classList.contains('hidden'
 /** 牌面：复用身份牌那套 .card-frame + 立绘，铭牌挂在卡框内部（--band* 变量才继承得到） */
 function codexCardHtml(rid, inGame) {
   const r = roleInfo(rid);
-  const catKey = CODEX_SECTIONS.find((s) => s.match(r));
+  const catKey = CODEX_SECTIONS.find((s) => s.match(rid));
   const catLabel = catKey ? cdxT(catKey.catKey) : '';
   const badge = inGame ? `<span class="cdx-ingame">${cdxT('codex.inGame', { n: inGame })}</span>` : '';
   return `<div class="card-frame"${attrStr(window.CardFrame.roleAttrs(rid))}>`
@@ -1193,7 +1205,7 @@ function renderCodexFilters(counts) {
 
 function codexMatches(rid, counts) {
   const r = roleInfo(rid);
-  const sec = CODEX_SECTIONS.find((s) => s.match(r));
+  const sec = CODEX_SECTIONS.find((s) => s.match(rid));
   if (codexState.filter === 'ingame') { if (!(counts[rid] > 0)) return false; }
   else if (codexState.filter !== 'all' && (!sec || sec.key !== codexState.filter)) return false;
   const q = codexState.q.trim().toLowerCase();
@@ -1209,7 +1221,7 @@ function renderCodexGrid(counts) {
   let total = 0;
   const visible = [];
   for (const sec of CODEX_SECTIONS) {
-    const ids = Object.keys(roles).filter((id) => sec.match(roles[id]) && codexMatches(id, counts));
+    const ids = Object.keys(roles).filter((id) => sec.match(id) && codexMatches(id, counts));
     if (!ids.length) continue;
     const node = el('section', 'cdx-sec');
     node.appendChild(el('h2', null, `${cdxT(sec.titleKey)} <em>${ids.length}</em>`));
@@ -1247,7 +1259,7 @@ function renderCodexDetail(counts) {
   if (!rid) { box.appendChild(el('div', 'cdx-empty', cdxT('codex.pickHint'))); return; }
   const r = roleInfo(rid);
   const cs = counts || codexBoardCounts();
-  const sec = CODEX_SECTIONS.find((s) => s.match(r));
+  const sec = CODEX_SECTIONS.find((s) => s.match(rid));
   const big = el('div', 'cdx-big card-frame');
   Object.assign(big.dataset, window.CardFrame.roleAttrs(rid));
   big.innerHTML = window.CardFrame.html() + roleArtOnly(rid);
@@ -1258,6 +1270,7 @@ function renderCodexDetail(counts) {
   // 前端不写"谁有夜间行动"这种知识 —— 否则 roles.js 一改图鉴就说谎
   const chips = [];
   if (sec) chips.push([cdxT(sec.titleKey), false]);
+  if (r.categoryDynamic) chips.push([cdxT('codex.chipDynamic'), true]);
   if (r.nightStep) chips.push([cdxT('codex.chipNight'), true]);
   if (r.deathTrigger) chips.push([cdxT('codex.chipDeath'), true]);
   if (r.selfExplode) chips.push([cdxT('codex.chipExplode'), false]);
@@ -1270,6 +1283,8 @@ function renderCodexDetail(counts) {
 
   box.appendChild(el('p', 'cdx-short', escapeHtml(r.short)));
   box.appendChild(el('p', 'cdx-desc', escapeHtml(r.description)));
+  // 阵营不固定（暗恋者）必须单独说清楚，否则读者会按牌面下沿那个"绑定"猜
+  if (r.categoryDynamic) box.appendChild(el('p', 'cdx-note', cdxT('codex.dynamicNote')));
 
   const strats = (state.meta.roleStrategies && state.meta.roleStrategies[rid]) || [];
   if (strats.length) {

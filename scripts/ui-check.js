@@ -219,7 +219,7 @@ class Browser {
       chips: document.querySelectorAll('#cdx-detail .cdx-chips span').length,
       strat: document.querySelectorAll('#cdx-detail .cdx-strat div').length,
     })`);
-    check('图鉴：独立成屏并列出全部身份', cdx.screen === 'screen-codex' && cdx.cards >= 15 && cdx.secs === 3, JSON.stringify(cdx));
+    check('图鉴：独立成屏并列出全部身份', cdx.screen === 'screen-codex' && cdx.cards >= 15 && cdx.secs === 4, JSON.stringify(cdx));
     check('图鉴：每张牌都用真实立绘', cdx.art === cdx.cards, `${cdx.art}/${cdx.cards}`);
     check('图鉴：默认选中一张并显示细节与徽记', cdx.detail.length > 0 && cdx.chips >= 3, `${cdx.detail} / ${cdx.chips} 徽记`);
     check('图鉴：带 AI 打法模板', cdx.strat >= 2, `${cdx.strat} 条`);
@@ -245,6 +245,25 @@ class Browser {
     const picked = await b.eval(`document.querySelectorAll('#cdx-grid .cdx-card')[1]?.dataset.role`);
     const shown = await b.eval(`document.querySelector('#cdx-detail .cdx-chips') ? document.querySelector('#cdx-detail .cdx-dname').textContent.trim() : ''`);
     check('图鉴：点牌切换右侧细节', !!shown && !!picked, `${picked} → ${shown}`);
+    // 阵营不固定的角色（暗恋者）**不能**被归进"平民阵营"：它的有效阵营随暗恋对象终身变动
+    // （见 src/engine/game.js 的 categoryOf），按静态 category 展示就是图鉴在说谎。
+    await b.eval(`(() => { const i=document.getElementById('cdx-search'); i.value='暗恋者'; i.dispatchEvent(new Event('input')); })()`);
+    await sleep(400);
+    const dyn = await b.eval(`(() => {
+      const secs = [...document.querySelectorAll('#cdx-grid .cdx-sec h2')].map((h) => h.textContent.trim());
+      const card = document.querySelector('#cdx-grid .cdx-card');
+      return {
+        secs, role: card && card.dataset.role,
+        plate: card && (card.querySelector('.cdx-cat') || {}).textContent,
+        note: !!document.querySelector('#cdx-detail .cdx-note'),
+        chips: (document.querySelector('#cdx-detail .cdx-chips') || {}).textContent || '',
+      };
+    })()`);
+    check('图鉴：阵营不固定的角色不进"平民阵营"', dyn.role === 'admirer' && dyn.secs.length === 1 && /阵营随对象/.test(dyn.secs[0]) && !/平民/.test(dyn.secs[0]), JSON.stringify(dyn.secs));
+    check('图鉴：暗恋者按第三方展示并说明为何阵营不固定', /第三方/.test(dyn.plate || '') && dyn.note && /暗恋/.test(dyn.chips), `${dyn.plate} / note=${dyn.note}`);
+    await b.shot(path.join(SHOTS, '02d-codex-dynamic.png'));
+    await b.eval(`(() => { const i=document.getElementById('cdx-search'); i.value=''; i.dispatchEvent(new Event('input')); })()`);
+    await sleep(300);
     // 返回
     await b.click('#btn-codex-back');
     await sleep(600);

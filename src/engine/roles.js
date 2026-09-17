@@ -203,6 +203,10 @@ const ROLES = {
     name: '暗恋者',
     team: 'good',
     category: 'villager',
+    // 有效阵营**不固定**：绑定暗恋对象后随对方终身变动（实现见 Game.categoryOf()，
+    // 屠边胜负按变动后的类别判）。所以 category 只是"还没绑定时的基线"，不是它的阵营。
+    // UI 与文档必须读这个标记，否则会把暗恋者当成平民展示 —— 那是错的。
+    categoryDynamic: 'crush',
     emoji: '💗',
     color: '#ec407a',
     nightStep: 'admirer',

@@ -16,15 +16,20 @@ lines.push('');
 lines.push('| 角色 | 阵营 | 类别 | 技能（官方口径） |');
 lines.push('|---|---|---|---|');
 for (const r of Object.values(ROLES)) {
-  const team = r.team === 'wolf' ? '狼人阵营' : '好人阵营';
-  const cat = { wolf: '狼', god: '神职', villager: '平民' }[r.category];
+  // 阵营不固定的角色（暗恋者：绑定后随对象变动，见 Game.categoryOf）不能按 team/category 平铺成
+  // "好人阵营 / 平民" —— 那是绑定前的基线，写成阵营就是文档在说谎。
+  const team = r.categoryDynamic ? '随暗恋对象' : (r.team === 'wolf' ? '狼人阵营' : '好人阵营');
+  const cat = r.categoryDynamic ? '绑定（未绑定时按平民）' : { wolf: '狼', god: '神职', villager: '平民' }[r.category];
   lines.push(`| ${r.emoji} ${r.name} | ${team} | ${cat} | ${r.short} |`);
 }
 lines.push('');
 lines.push('## 完整描述');
 lines.push('');
 for (const r of Object.values(ROLES)) {
-  lines.push(`### ${r.emoji} ${r.name}（${{ wolf: '狼人阵营', god: '神职', villager: '平民' }[r.category]}）`);
+  const camp = r.categoryDynamic
+    ? '阵营随暗恋对象变动'
+    : { wolf: '狼人阵营', god: '神职', villager: '平民' }[r.category];
+  lines.push(`### ${r.emoji} ${r.name}（${camp}）`);
   lines.push('');
   lines.push(r.description);
   lines.push('');

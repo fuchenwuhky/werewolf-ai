@@ -18,6 +18,10 @@
     'zh-CN': {
       'app.kicker': '月夜集会 · 村人闭眼，狼人睁眼',
   'codex.title': '角色图鉴',
+  'codex.secThird': '❓ 第三方（阵营随对象变动）',
+  'codex.catThird': '第三方',
+  'codex.chipDynamic': '🔗 胜负阵营随暗恋对象',
+  'codex.dynamicNote': '阵营不固定：绑定前按平民计，绑定后随对象 —— 对象是狼则你随狼胜，对象是好人则你随好人胜（预言家查验你永远是好人）。',
   'codex.catWolf': '狼',
   'codex.catGod': '神',
   'codex.catVillager': '民',
@@ -150,6 +154,10 @@
     en: {
       'app.kicker': 'Moonlit gathering · villagers sleep, wolves wake',
   'codex.title': 'Role codex',
+  'codex.secThird': '❓ Third party (camp follows a target)',
+  'codex.catThird': 'Third',
+  'codex.chipDynamic': '🔗 Wins with the beloved',
+  'codex.dynamicNote': 'Camp is not fixed: it counts as a villager before binding, then follows the beloved — win with wolves if they are a wolf, with the good side otherwise (the seer always sees you as good).',
   'codex.catWolf': 'Wolf',
   'codex.catGod': 'God',
   'codex.catVillager': 'Villager',
