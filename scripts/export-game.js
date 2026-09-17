@@ -36,7 +36,7 @@ function render(json) {
   line(`# 狼人杀复盘 · ${g.id}`);
   line('');
   line(`- **板子**：${boardName}`);
-  line(`- **结果**：${g.finished ? (g.winner === 'none' ? '平局/终止 — ' + (g.winReason || '') : (g.winner === 'good' ? '🎉 好人阵营获胜' : '🐺 狼人阵营获胜') + ' — ' + (g.winReason || '')) : '未结束'}`);
+  line(`- **结果**：${g.finished ? (g.winner === 'none' ? '对局终止 — ' + (g.winReason || '') : g.winner === 'draw' ? '🤝 平局 — ' + (g.winReason || '') : (g.winner === 'good' ? '🎉 好人阵营获胜' : '🐺 狼人阵营获胜') + ' — ' + (g.winReason || '')) : '未结束'}`);
   line(`- **天数**：共 ${g.day} 天 | **AI 调用**：${(g.llmStats && g.llmStats.calls) || 0} 次，输入 ${(g.llmStats && g.llmStats.promptTokens) || 0} tokens（缓存 ${(g.llmStats && g.llmStats.cachedTokens) || 0}），输出 ${(g.llmStats && g.llmStats.completionTokens) || 0}`);
   line('');
 
@@ -117,7 +117,7 @@ function render(json) {
       case 'duel': line(`- ⚔️ ${who(e.actor)}（骑士）翻牌决斗 ${who(d.target)}`); break;
       case 'idiot_save': line(`- 🃏 ${who(d.seat)} 白痴翻牌免疫放逐`); break;
       case 'llm_error': break;
-      case 'game_over': line(`- 🏁 **${d.winner === 'none' ? (d.reason || '对局终止') : d.winner === 'good' ? '好人阵营获胜 — ' + (d.reason || '') : '狼人阵营获胜 — ' + (d.reason || '')}**`); break;
+      case 'game_over': line(`- 🏁 **${d.winner === 'none' || d.winner === 'draw' ? (d.reason || (d.winner === 'draw' ? '平局' : '对局终止')) : d.winner === 'good' ? '好人阵营获胜 — ' + (d.reason || '') : '狼人阵营获胜 — ' + (d.reason || '')}**`); break;
       default: break; // ai_thinking 等调试事件跳过
     }
   }
@@ -142,7 +142,7 @@ function main() {
 function exportOne(id, outDir) {
   const { id: gid, json } = loadSave(id);
   const md = render(json);
-  const winner = json.game.winner === 'good' ? '好人胜' : json.game.winner === 'wolf' ? '狼人胜' : '终止';
+  const winner = json.game.winner === 'good' ? '好人胜' : json.game.winner === 'wolf' ? '狼人胜' : json.game.winner === 'draw' ? '平局' : '终止';
   const file = path.join(outDir, `${gid}-${winner}.md`);
   fs.writeFileSync(file, md);
   console.log('已导出:', file, `（${md.length} 字符）`);

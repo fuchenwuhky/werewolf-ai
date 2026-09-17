@@ -1120,6 +1120,7 @@ class Api {
             agg.finished++;
             if (g.winner === 'good') agg.goodWins++;
             else if (g.winner === 'wolf') agg.wolfWins++;
+            else if (g.winner === 'draw') agg.draws = (agg.draws || 0) + 1;
             daysSum += g.day || 0;
           }
           if (g.started && g.board) {

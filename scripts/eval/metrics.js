@@ -250,7 +250,7 @@ function extractGameMetrics(game, opts = {}) {
 /** 聚合多局：既给总体，也给分角色/分配置 */
 function aggregate(games) {
   const n = games.length || 1;
-  const wins = { good: 0, wolf: 0, other: 0 };
+  const wins = { good: 0, wolf: 0, draw: 0, other: 0 };
   let daysSum = 0;
   let votesCast = 0;
   let votesHit = 0;
@@ -271,6 +271,9 @@ function aggregate(games) {
   for (const g of games) {
     if (g.winner === 'good') wins.good++;
     else if (g.winner === 'wolf') wins.wolf++;
+    // 平局单列：既不算好人胜也不算狼人胜 → winRate.good / winRate.wolf 的分母仍是总局数，
+    // 所以平局会同时压低两边胜率（这正是"平局不计入胜率"的语义）。
+    else if (g.winner === 'draw') wins.draw++;
     else wins.other++;
     daysSum += g.days;
     votesCast += g.votes.cast;
@@ -302,7 +305,7 @@ function aggregate(games) {
   const r3 = (x) => (x == null ? null : Number(x.toFixed(3)));
   return {
     games: games.length,
-    winRate: { good: r3(wins.good / n), wolf: r3(wins.wolf / n), other: r3(wins.other / n) },
+    winRate: { good: r3(wins.good / n), wolf: r3(wins.wolf / n), draw: r3(wins.draw / n), other: r3(wins.other / n) },
     wins,
     avgDays: Number((daysSum / n).toFixed(2)),
     vote: {

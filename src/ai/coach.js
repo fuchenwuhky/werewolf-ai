@@ -82,7 +82,7 @@ function consistencyBlock(game) {
 function factsBlock(facts, game) {
   const L = [];
   const push = (k, v) => { if (v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)) L.push(`- ${k}：${Array.isArray(v) ? v.join('；') : v}`); };
-  push('对局', `${facts.days} 天，${facts.winner === 'wolf' ? '狼人阵营获胜' : '好人阵营获胜'}${facts.winReason ? `（${facts.winReason}）` : ''}`);
+  push('对局', `${facts.days} 天，${facts.winner === 'wolf' ? '狼人阵营获胜' : facts.winner === 'good' ? '好人阵营获胜' : '平局'}${facts.winReason ? `（${facts.winReason}）` : ''}`);
   push('玩家本人', `${facts.seat}号${facts.name}，身份${facts.roleName}（${facts.teamCn}），${facts.deathDesc}，本局${facts.won ? '获胜' : '落败'}`);
   if (facts.score) push('评分', `${facts.score.total} 分${facts.score.details.length ? `（${facts.score.details.join('，')}）` : ''}`);
   if (facts.mvp) push('本局 MVP', `${facts.mvp.seat}号${facts.mvp.name}（${facts.mvp.roleName}）${facts.mvp.score} 分`);

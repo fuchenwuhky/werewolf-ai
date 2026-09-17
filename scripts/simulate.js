@@ -44,8 +44,8 @@ async function main() {
     });
     try {
       await runGame(game);
-      if (!game.finished || !['good', 'wolf'].includes(game.winner)) throw new Error('未正常产生胜负');
-      results[game.winner]++;
+      if (!game.finished || !['good', 'wolf', 'draw'].includes(game.winner)) throw new Error('未正常产生胜负');
+      results[game.winner] = (results[game.winner] || 0) + 1;
       results.days.push(game.day);
       const problems = auditIsolation(game);
       if (problems.length) { results.audits.push(`第${i}局: ${problems.join('; ')}`); }

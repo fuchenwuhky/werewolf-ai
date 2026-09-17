@@ -253,7 +253,7 @@ function lessonInstruction(game, player, digestsText) {
     .map((p) => `${p.seat}号 ${p.name}=${ROLES[p.role].name}（${p.alive ? '存活' : '出局'}）`)
     .join('；');
   return [
-    `你是狼人杀游戏中的 ${player.seat}号，本局身份【${ROLES[player.role].name}】，本局已结束：${game.winner === 'good' ? '好人阵营获胜' : '狼人阵营获胜'}，你所在的阵营${(ROLES[player.role].team === 'good') === (game.winner === 'good') ? '获胜' : '失败'}。`,
+    `你是狼人杀游戏中的 ${player.seat}号，本局身份【${ROLES[player.role].name}】，本局已结束：${game.winner === 'good' ? '好人阵营获胜' : game.winner === 'wolf' ? '狼人阵营获胜' : '平局（未分胜负）'}，你所在的阵营${game.winner === 'good' || game.winner === 'wolf' ? ((ROLES[player.role].team === 'good') === (game.winner === 'good') ? '获胜' : '失败') : '未分胜负'}。`,
     '',
     '—— 你本局的每日反思纪要（你当时的判断与状态）——',
     digestsText || '（本局没有留下反思纪要）',

@@ -120,7 +120,7 @@ async function main() {
       if (Date.now() - t0 > 120000) throw new Error('e2e 超时：对局未在 120s 内结束');
     }
     check('人类 pending 流程走通（含非法提交被拒）', sawPending && badSubmitRejected);
-    check('对局结束且有胜负', view.finished && ['good', 'wolf'].includes(view.winner));
+    check('对局结束且有胜负', view.finished && ['good', 'wolf', 'draw'].includes(view.winner));
     check('人类能看到自己身份', view.me && !!view.me.role);
 
     // 人类视角泄漏检查（人类自己是狼时，狼聊事件对其可见属正常）

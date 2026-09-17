@@ -66,3 +66,27 @@ test('僵局护栏：有人出局就归零，连续无人出局才累加并结�
 test('僵局护栏：阈值是 3 天（早于既有 40 天保险兜底）', () => {
   assert.strictEqual(STALE_DAYS, 3);
 });
+
+// ---- 平局（draw）：僵局护栏与 40 天保险都判平局，这是用户批准的语义 ----
+
+test('平局：引擎接受 winner=draw，并通过 winReason 传出去', () => {
+  const { setWinner } = _internals;
+  const fake = {
+    winner: null, winReason: null, _lastWin: null,
+    emit: () => {},
+    logger: { info() {}, warn() {} },
+  };
+  setWinner(fake, { winner: 'draw', reason: `连续 ${STALE_DAYS} 天无人出局，判定平局（僵局护栏）。` });
+  assert.strictEqual(fake.winner, 'draw', '平局必须被引擎接受（不是 none，也不是好人胜）');
+  assert.match(fake.winReason, /平局/);
+  // setWinner 只做登记；发 game_over 事件是 finish() 的职责，而 finish() 取的是
+  // `checkWin() || _lastWin` —— 所以 _lastWin 里必须是这个平局，否则结算会被判成"对局终止"。
+  assert.strictEqual(fake._lastWin && fake._lastWin.winner, 'draw', 'finish() 要从 _lastWin 取到这个平局');
+});
+
+test('平局：game_over 文案渲染为"平局"，不再显示成狼人/好人获胜', () => {
+  const { renderEvent } = require('../src/engine/render');
+  const line = renderEvent({ players: [] }, { type: 'game_over', data: { winner: 'draw', reason: '连续 3 天无人出局，判定平局（僵局护栏）。' } });
+  assert.match(line, /平局/, `实际渲染：${line}`);
+  assert.ok(!/狼人阵营获胜|好人阵营获胜/.test(line), `平局不该渲染成某方获胜：${line}`);
+});

@@ -139,12 +139,12 @@ async function main() {
       }
       try {
         const { game, audit } = await runOneGame({ id, seed, board: args.board, rules: conf.rules, agentFactory });
-        if (!game.finished || !['good', 'wolf'].includes(game.winner)) throw new Error('未正常产生胜负');
+        if (!game.finished || !['good', 'wolf', 'draw'].includes(game.winner)) throw new Error('未正常产生胜负');
         const m = metrics.extractGameMetrics(game, { seed, board: args.board, config: name, audit });
         perConfig[name].push(m);
         callsSoFar += m.llm.calls;
         if (!args.json) {
-          process.stdout.write(`  ${name} #${i + 1}: ${game.winner === 'good' ? '好人胜' : '狼人胜'} · ${game.day}天 · 事件${m.events}${m.llm.calls ? ` · 调用${m.llm.calls}` : ''}\n`);
+          process.stdout.write(`  ${name} #${i + 1}: ${game.winner === 'good' ? '好人胜' : game.winner === 'wolf' ? '狼人胜' : '平局'} · ${game.day}天 · 事件${m.events}${m.llm.calls ? ` · 调用${m.llm.calls}` : ''}\n`);
         }
       } catch (e) {
         console.error(`  ✗ ${name} #${i + 1} 异常：${e.message}`);

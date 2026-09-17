@@ -1311,9 +1311,10 @@ function renderEventNode(e) {
         b.style.fontSize = '15px';
         return b;
       }
+      const draw = d.winner === 'draw';
       const good = d.winner === 'good';
       const wrap = el('div');
-      const b = el('div', `banner ${good ? '' : 'night'}`, good ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！');
+      const b = el('div', `banner ${draw || good ? '' : 'night'}`, draw ? '🤝 平局（未分胜负）' : good ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！');
       b.style.fontSize = '16px';
       wrap.appendChild(b);
       const score = state.view && state.view.score;
@@ -2230,7 +2231,7 @@ function renderCoach(v) {
 
   // 本局速览：终局后这一列原本只有一颗按钮、大片留白。把"谁赢了/打了几天/还剩几人/我这局是什么"
   // 摆在这里 —— 复盘时最先想知道的四件事，且全部来自服务端视图，不是推测。
-  const winners = { wolf: '🐺 狼人阵营获胜', good: '🕊 好人阵营获胜', third: '🎭 第三方获胜', none: '平局 / 无胜者' };
+  const winners = { wolf: '🐺 狼人阵营获胜', good: '🕊 好人阵营获胜', third: '🎭 第三方获胜', draw: '🤝 平局（未分胜负）', none: '对局终止' };
   const me = v.me || null;
   const facts = [
     `<div class="cs-row"><span>结果</span><b>${winners[v.winner] || (v.winner ? escapeHtml(String(v.winner)) : '—')}</b></div>`,

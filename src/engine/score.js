@@ -61,7 +61,8 @@ function computeScores(game) {
   for (const r of rows.values()) {
     // ---- 基础 ----
     const role = ROLES[r.role];
-    const won = (role.team === 'wolf') === (game.winner === 'wolf');
+    // 平局（winner === 'draw'）：谁都不算"阵营获胜"，不给这 20 分
+    const won = (game.winner === 'good' || game.winner === 'wolf') && (role.team === 'wolf') === (game.winner === 'wolf');
     if (won) add(r.seat, 20, '阵营获胜');
     if (r.alive) add(r.seat, 10, '存活到最后');
 

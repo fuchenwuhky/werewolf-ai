@@ -758,6 +758,7 @@ function renderEventNode(e) {
     case 'direction': return el('div', 'sysline', `${seatLabel(d.by)}（警长）决定从 ${d.startSeat} 号开始${d.direction === 'cw' ? '顺时针' : '逆时针'}发言`);
     case 'game_over': {
       if (d.winner === 'none') return el('div', 'banner', `⏹ ${d.reason || '对局已终止'}`);
+      if (d.winner === 'draw') return el('div', 'banner', '🤝 平局（未分胜负）');
       const b = el('div', `banner ${d.winner === 'good' ? '' : 'night'}`, d.winner === 'good' ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！');
       b.style.fontSize = '15px';
       return b;
@@ -923,7 +924,7 @@ function feedStage(e, fresh) {
       if (fresh) flash('警长诞生', '');
       break;
     case 'game_over': {
-      const won = d.winner === 'good' ? '好人阵营获胜' : d.winner === 'wolf' ? '狼人阵营获胜' : '对局结束';
+      const won = d.winner === 'good' ? '好人阵营获胜' : d.winner === 'wolf' ? '狼人阵营获胜' : d.winner === 'draw' ? '平局' : '对局结束';
       if (fresh) flash(won, d.winner === 'wolf' ? 'night' : 'red');
       break;
     }

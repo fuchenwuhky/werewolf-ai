@@ -242,7 +242,7 @@ function reviewFacts(game, seat) {
     roleName: roleName(me.role),
     team: myTeam,
     teamCn: myTeam === 'wolf' ? '狼人阵营' : myTeam === 'god' ? '神职阵营' : '村民阵营',
-    won: !!game.winner && (myTeam === 'wolf') === (game.winner === 'wolf'),
+    won: (game.winner === 'good' || game.winner === 'wolf') && (myTeam === 'wolf') === (game.winner === 'wolf'),
     death,
     deathDesc: death.alive ? '存活到最后' : `第${death.day}天${causeCn(death.cause)}`,
     score: myRow ? { total: myRow.score, details: myRow.details } : null,

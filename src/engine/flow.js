@@ -1282,7 +1282,7 @@ async function runGameInner(game, resumeFrom = null) {
   let staleDays = 0;
   while (!game.winner) {
     if (game.day >= 40) {
-      setWinner(game, { winner: 'good', reason: '对局超过 40 天仍未分出胜负，按存活人数判定好人阵营获胜（保险机制）。' });
+      setWinner(game, { winner: 'draw', reason: '对局超过 40 天仍未分出胜负，判定平局（保险机制）。' });
       break;
     }
     if (!dayEnded && game.sheriffElectionPending && game.rules.sheriff && !game.badgeSwallowed) {
@@ -1304,14 +1304,14 @@ async function runGameInner(game, resumeFrom = null) {
     await dawnPhase(game);
     // 僵局护栏：一整天（昼+夜）走完，存活人数没变 → 连续无出局天数 +1；一旦有人出局就归零。
     // 连续 3 天无人出局即结算（早于上面"40 天保险"），避免无限循环把调用量放大。
-    // 取舍：仓库的胜负域是 'good' | 'wolf'（无"平局"概念），故沿用与 40 天保险同一形状的判定，
-    // 只把原因写清楚；若要真正引入"平局"，需同时改前端结束文案与评估指标（另议）。
+    // 判定为**平局**（用户批准的语义）：胜负域除了 'good'/'wolf' 之外新增 'draw'，
+    // 与 'none'（对局被终止）区分开 —— 平局是"打完了但没分出胜负"，终止是"没打完"。
     const aliveNow = game.aliveSeats().length;
     const guard = advanceStaleDays(lastAliveCount, aliveNow, staleDays);
     staleDays = guard.staleDays;
     lastAliveCount = aliveNow;
     if (guard.settle) {
-      setWinner(game, { winner: 'good', reason: `连续 ${STALE_DAYS} 天无人出局，判定好人阵营获胜（僵局护栏）。` });
+      setWinner(game, { winner: 'draw', reason: `连续 ${STALE_DAYS} 天无人出局，判定平局（僵局护栏）。` });
       break;
     }
   }
@@ -1323,4 +1323,4 @@ async function runGameInner(game, resumeFrom = null) {
 
 module.exports = { runGame, validatePayload, secretVote, buildSpeechOrder, checkWinWithPending,
   // 供单元测试直接驱动内部阶段
-  _internals: { askValidated, nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS, tallyWolfKill, advanceStaleDays, STALE_DAYS } };
+  _internals: { askValidated, nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS, tallyWolfKill, advanceStaleDays, STALE_DAYS, setWinner } };

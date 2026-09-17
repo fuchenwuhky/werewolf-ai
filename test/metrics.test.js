@@ -186,6 +186,28 @@ test('aggregate：胜率/均值/分位数按局数正确汇总', () => {
   assert.ok(agg.latency.p90 >= 100 && agg.latency.p90 <= 300);
 });
 
+test('aggregate：平局（winner=draw）不计入任何一方胜率，单列 wins.draw', () => {
+  const mk = (winner, days) => ({
+    winner, days,
+    votes: { cast: 0, abstain: 0, hit: 0, goodCast: 0, goodHit: 0 },
+    seer: { count: 0, hits: 0 },
+    fakeClaim: { wolfSeerClaims: 0, wolfSeerClaimSurvived: 0 },
+    llm: { calls: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, latencyP90: null },
+    deathsByCause: {},
+    byRole: {},
+    isolationProblems: [],
+  });
+  // 1 局好人胜 + 1 局平局：分母仍是 2，所以好人胜率被平局压低到 0.5，狼人胜率为 0
+  const agg = metrics.aggregate([mk('good', 3), mk('draw', 6)]);
+  assert.strictEqual(agg.wins.good, 1);
+  assert.strictEqual(agg.wins.wolf, 0);
+  assert.strictEqual(agg.wins.draw, 1);
+  assert.strictEqual(agg.winRate.good, 0.5);
+  assert.strictEqual(agg.winRate.wolf, 0);
+  assert.strictEqual(agg.winRate.draw, 0.5, '平局要单列可见，而不是被并进 other');
+  assert.strictEqual(agg.winRate.other, 0, 'other 只统计"既非胜负也非平局"的异常局（如对局终止）');
+});
+
 // ---------- 基线门禁 ----------
 test('基线对比：容差内通过；超差必须失败；隔离泄漏是零容忍', () => {
   const base = { winRate: { good: 0.5, wolf: 0.5 }, avgDays: 4, isolationProblems: 0, latency: { p90: 1000 } };

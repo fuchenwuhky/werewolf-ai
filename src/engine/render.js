@@ -85,7 +85,7 @@ function renderEvent(game, e) {
     case 'shoot': return d.target ? `${seatName(game, e.actor)} 开枪带走了 ${seatName(game, d.target)}！` : `${seatName(game, e.actor)} 没有开枪。`;
     case 'explode': return d.target ? `${seatName(game, e.actor)} 自爆（狼人），并带走了 ${seatName(game, d.target)}！` : `${seatName(game, e.actor)} 自爆（狼人），天黑了！`;
     case 'direction': return `${seatName(game, d.by)}（警长）决定今天从 ${seatName(game, d.startSeat)} 开始、${d.direction === 'cw' ? '顺时针' : '逆时针'}方向依次发言。`;
-    case 'game_over': return `游戏结束：${d.winner === 'good' ? '好人阵营' : '狼人阵营'}获胜！${d.reason || ''}`;
+    case 'game_over': return `游戏结束：${d.winner === 'good' ? '好人阵营获胜' : d.winner === 'wolf' ? '狼人阵营获胜' : d.winner === 'draw' ? '平局' : '对局终止'}！${d.reason || ''}`;
     default: return e.text || '';
   }
 }

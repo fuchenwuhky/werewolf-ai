@@ -78,6 +78,22 @@ const isAllowed = (rawLine) => /lint-allow\b.*[：:—-]\s*\S/.test(rawLine) || 
 
 const RULES = [
   {
+    id: 'no-test-suffix-outside-test',
+    desc: '测试目录之外的文件名不得以 -test.js / .test.js 结尾：node --test 的自动发现规则包含 **/*-test.js，'
+      + '这类文件会被当测试文件执行。事故记录：scripts/serve-test.js（测试实例启动器）被 coverage 门禁'
+      + '（node --test --experimental-test-coverage，无路径参数）当测试跑，它 spawn 的常驻 server.js 永不退出，'
+      + '导致 `npm run gate` 无限挂起（实测 40+ 分钟无进展）',
+    scope: () => true,
+    check(stripped, raw, file) {
+      if (/^test[\\/]/.test(file)) return []; // test/ 目录下的 *-test.js 是正常测试文件
+      const base = path.basename(file);
+      if (/-test\.js$/.test(base) || /\.test\.js$/.test(base)) {
+        return [{ line: 1, msg: `文件名「${base}」会命中 node --test 的自动发现规则（**/*-test.js），请改名（例如 -check.js / -harness.js）` }];
+      }
+      return [];
+    },
+  },
+  {
     id: 'no-runtime-deps',
     keepStrings: true, // 模块名在字符串里，剥掉字符串等于废掉这条规则
     desc: '运行时零依赖：只能 require 相对路径或 Node 内建模块',
