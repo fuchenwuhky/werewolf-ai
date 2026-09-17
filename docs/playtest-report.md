@@ -233,7 +233,18 @@
 
 结论：F1/F2 修复、400 次/局护栏、ui-check 新增断言、pace-bench 修复、两个新脚本，**均未引入回归**。
 
-## 3.12 结论：对局日志在当前配置下确实没有写出（**待你关注**）
+## 3.12 结论（**撤回误报**）：对局日志正常写出，不是缺陷
+
+**决定性实验**（`scripts/tmp-logprobe.js`，用与 `playtest-fault.js` 完全相同的 `spawn` + `{...process.env}` 启动）：
+```
+logs\game-gmu5jtmm3151.log → 6327 bytes
+logs\server.log            → 7338 bytes
+```
+⇒ **日志正常写出**。此前观察到的"0 字节"是**我自己的探测方式**（PowerShell `Start-Process` 起实例）造成的副作用，
+**与产品无关**。**撤回**我先前"日志可能不再产出、`bench:pace`/`playtest:report` 会断粮"的告警（特此更正）。
+
+因此：日常启动方式下 `logs/` 会正常新增 `game-*.log`；P6 的**实测口径**可以用"跑器同款启动"的实例取得。
+（为何 `Start-Process` 会导致零字节，我没有继续深究 —— 它与产品行为无关，继续查属于浪费。）
 
 - **判据已出**：P4 第一局是**自然结束**的（`finished: true`，不是 `--terminate-at-end`），
   实例仍然**产出 0 个 `game-*.log`**，只有 0 KB 的 `server.log`。
