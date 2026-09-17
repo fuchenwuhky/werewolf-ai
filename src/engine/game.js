@@ -227,6 +227,25 @@ class Game {
     return agents.length;
   }
 
+  /**
+   * 日切边界用：把"上一天的纪要"落实后再继续推进（锚点重放的确定性所需）。
+   *
+   * 为什么需要：`scheduleReflection` 是 fire-and-forget —— 纪要何时就绪取决于时序。
+   * 于是锚点重放会在同一个决策点看到与原局**不同的记忆状态**（记忆块有没有那一天），
+   * 提示词哈希随之漂移（`test/journal.test.js` 的漂移哨兵抓到过 4 处）。
+   * 这里**不新增任何 LLM 调用**：只是等既有那一次反思完成，并把它限定在日切边界。
+   */
+  async waitReflection(completedDay) {
+    this.scheduleReflection(completedDay);
+    const waits = [];
+    for (const a of this._agents.values()) {
+      // 注意：`_reflecting` 的条目会在它自己的 .then 里被 delete，所以必须"先取 Promise 再等"
+      const p = a && a._reflecting && typeof a._reflecting.get === 'function' ? a._reflecting.get(completedDay) : null;
+      if (p && typeof p.then === 'function') waits.push(p.catch(() => {}));
+    }
+    if (waits.length) await Promise.all(waits);
+  }
+
   /** 日切反思进度：全部结束后清空（前端据此显示"AI 正在整理记忆…"） */
   memoryDone() {
     if (!this.memory) return;

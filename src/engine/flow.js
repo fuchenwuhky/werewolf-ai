@@ -525,9 +525,11 @@ async function nightPhase(game) {
   game.night = { guardActions: [], dreamActions: [], charmActions: [], curses: [], wolfKill: 0, saved: false, poisonTargets: [] };
   game.activeCurse = []; // 乌鸦诅咒只在"次日的放逐投票"生效，新的一夜先清空
   game.emit('phase', { data: { title: `第${game.day}夜 · 天黑请闭眼` } });
-  // 日切边界：上一个白天已完整结束 → 让已创建的 AI 在后台整理纪要（优先级 1，不阻塞流程）。
-  // 这样"反思"不再压在新一天的首个决策里，也就不会再出现"某 AI 首答异常慢"。
-  if (game.day > 1 && typeof game.scheduleReflection === 'function') game.scheduleReflection(game.day - 1);
+  // 日切边界：上一个白天已完整结束 → 落实"上一天的纪要"再继续推进（优先级 1，等待但不新增调用）。
+  // 旧实现是 fire-and-forget：纪要何时就绪取决于时序，于是锚点重放会在同一决策点看到
+  // 与原局不同的记忆状态 → 提示词哈希漂移（journal 的漂移哨兵抓到过 4 处）。
+  // 这里只是把既有那一次反思从"后台并行"改成"边界串行"，不增加调用次数。
+  if (game.day > 1 && typeof game.waitReflection === 'function') await game.waitReflection(game.day - 1);
   // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播；暗恋者仅首夜行动
   const activeSteps = game.rules.nightOrder.filter((s) => NIGHT_STEPS[s] && NIGHT_STEPS[s].present(game));
   if (game.parallelLlm && activeSteps.length > 1) {
@@ -698,6 +700,16 @@ async function wolfStep(game) {
   for (const v of votes) game.emit('wolf_kill_vote', { actor: v.seat, visibleTo: vis, data: { target: v.target } });
   const tally = {};
   for (const v of votes) if (v.target) tally[v.target] = (tally[v.target] || 0) + 1;
+  // 狼王平票加权（用户批准：首领狼在平票情况下有更高的权重）。
+  // 狼王 = wolfking（roles.js:39；12 人进阶场为"狼王+3狼"），白狼王 whitewolfking 不参与这条。
+  // 语义：狼王那一票所指目标已得票 → 给它再 +1（等价于狼王那一票按两票计）。
+  // 加权后仍平票 → 仍走下面的 randomOf 收敛，所以"必然收敛"这个性质没有被破坏。
+  // 不额外发事件：加权属于狼队内部信息，公布结果的那条 wolf_kill 已经足够。
+  const king = wolves.find((w) => w.role === 'wolfking');
+  if (king) {
+    const kv = votes.find((v) => v.seat === king.seat);
+    if (kv && kv.target && tally[kv.target]) tally[kv.target] += 1;
+  }
   let final = 0;
   const entries = Object.entries(tally);
   if (entries.length) {
