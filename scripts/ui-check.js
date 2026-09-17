@@ -197,6 +197,13 @@ class Browser {
     check('节奏档位说明有正文', setup.paceHint > 10, `${setup.paceHint} 字`);
     check('规则开关渲染', setup.rules >= 8, `${setup.rules} 个`);
     check('板子模板渲染', setup.boards >= 5, `${setup.boards} 个`);
+    // 设置页下半（板子编辑器 / 玩家昵称 / 底部操作条）在 1440×900 里落在首屏之外，
+    // 而这几张卡恰好是改动最频繁的部分 —— 滚到底单独留一张。
+    await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 2000)`);
+    await sleep(500);
+    await b.shot(path.join(SHOTS, '02b-setup-lower.png'));
+    await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 0)`);
+    await sleep(300);
 
     // 座位：默认随机（老坐 1 号很难受），可以自定义，且要说明"座位开局才定"
     const seat = await b.eval(`({
@@ -256,6 +263,10 @@ class Browser {
     if (FULL) {
       log('\n=== 观战 Mock 局跑到终局（--full）===');
       await b.setViewport(1440, 900, false);
+      // 开新局之前先清掉"进行中的对局"：否则刷新后会**恢复上一局**，
+      // 后面的点击打在设置页之外（本轮加翻牌段时就踩过一次：观战局根本没开起来）。
+      await b.goto(base + '/', 1500);
+      await b.eval(`localStorage.removeItem('ww_current'); localStorage.removeItem('ww_resumable');`);
       await b.goto(base + '/', 2000);
       for (let i = 0; i < 80; i++) { if (await b.eval(`(() => { const s=document.getElementById('btn-start'); return !!s && !s.disabled; })()`)) break; await sleep(250); }
       await b.click('input[name=mode][value=watch]');
@@ -265,6 +276,11 @@ class Browser {
       await b.click('#btn-start');
       await sleep(2500);
       check('开局进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
+      // 中局留一张：这一刻圆桌上有座位状态、发言卡、可能的投票角标 —— 终局那张反而看不出这些
+      await sleep(20000);
+      const mid = await b.eval(`({ seats: document.querySelectorAll('#seats .seat').length, msgs: document.querySelectorAll('#stream .msg').length, ring: !!document.querySelector('#seats .ring-stage') })`);
+      check('中局：圆桌座位与事件流都已渲染', mid.seats >= 4 && mid.msgs >= 3 && mid.ring, JSON.stringify(mid));
+      await b.shot(path.join(SHOTS, '07a-midgame.png'));
       let fin = false;
       for (let i = 0; i < 140; i++) {
         await sleep(3000);
@@ -287,6 +303,28 @@ class Browser {
         ? fs.readdirSync(savesDir).filter((f) => f.endsWith('.json')).map((f) => { try { return !!JSON.parse(fs.readFileSync(path.join(savesDir, f), 'utf8')).mock; } catch (_) { return null; } })
         : [];
       check('UI 勾选的 Mock 落到存档', flags.some((x) => x === true), JSON.stringify(flags));
+
+      // ---- 7b. 玩家视角：身份翻牌（开局第一眼）----
+      // 放在最后跑：它要开一局"我参战"的 Mock 局，会和观战局抢 localStorage 的"当前对局"。
+      log('\n=== 玩家视角：身份翻牌（开局第一眼）===');
+      await b.goto(base + '/', 1500);
+      await b.eval(`localStorage.removeItem('ww_current'); localStorage.removeItem('ww_resumable');`);
+      await b.goto(base + '/', 2000);
+      for (let i = 0; i < 80; i++) { if (await b.eval(`(() => { const s=document.getElementById('btn-start'); return !!s && !s.disabled; })()`)) break; await sleep(250); }
+      await b.click('input[name=mode][value=play]');
+      await sleep(300);
+      await b.click('#use-mock');
+      await b.click('#btn-start');
+      await sleep(2500);
+      const flip = await b.eval(`(() => { const o=document.getElementById('role-overlay'); return { shown: !!o && !o.classList.contains('hidden'), caption: (document.getElementById('flip-caption')?.textContent||'').slice(0,20) }; })()`);
+      check('玩家视角出现翻牌遮罩且给了提示', flip.shown && flip.caption.length > 0, JSON.stringify(flip));
+      await b.shot(path.join(SHOTS, '07b-flip.png'));
+      await b.click('#flip-card');
+      await sleep(700);
+      await b.shot(path.join(SHOTS, '07c-flip-open.png'));
+      await b.click('#btn-flip-done');
+      await sleep(1500);
+      check('翻牌确认后进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
     }
 
     // ---- 8. 控制台必须干净 ----

@@ -688,11 +688,12 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 .seat .sname {
-  max-width: 64px; font-size: 10px; line-height: 1.3; color: var(--text-dim); text-align: center;
+  max-width: 64px; margin-top: 3px; font-size: 10px; line-height: 1.3; color: var(--text-dim); text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.seat .role-chip {
-  position: absolute; left: 50%; bottom: -4px; transform: translateX(-50%);
+/* 挂在 .snum 内部（右下角）：挂在座位外层会压住下面的昵称 */
+.seat .snum .role-chip {
+  position: absolute; right: -4px; bottom: -4px;
   display: inline-flex; align-items: center; justify-content: center;
   width: 19px; height: 19px; padding: 0; border-radius: 50%; font-size: 10px; overflow: hidden;
   background: #070c18; border: 1px solid var(--line-strong);
@@ -864,6 +865,20 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid rgba(216, 178, 95, .35); background: rgba(216, 178, 95, .1); color: var(--gold-bright);
 }
 .coach-panel .coach-warn { color: #ffcdd2; }
+/* 本局速览：终局后这一列原本只有一颗按钮 + 大片留白，把复盘最想问的四件事摆出来 */
+.coach-panel .coach-stat {
+  display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--sp-4); overflow: hidden;
+  border: 1px solid var(--line-dim); border-radius: var(--r-sm);
+  background: rgba(6, 10, 20, .45);
+}
+.coach-panel .cs-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: 7px var(--sp-3); font-size: var(--fs-md);
+  border-bottom: 1px solid var(--line-soft);
+}
+.coach-panel .cs-row:last-child { border-bottom: none; }
+.coach-panel .cs-row span { color: var(--muted); }
+.coach-panel .cs-row b { color: var(--text); font-weight: 600; text-align: right; }
 
 /* ============================================================
    五、上帝 / 开发者面板

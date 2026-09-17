@@ -130,6 +130,9 @@ async function initSetup() {
   // 这里显式启用；整个加载窗口内的拦截由 index.html 最先执行的那段守卫负责（见 index.html 顶部）。
   const startBtn = $('#btn-start');
   if (startBtn) startBtn.disabled = false;
+  // 顺手擦掉守卫写下的"正在加载配置"：按钮已经可用了，这行字留着会自相矛盾（截图里就挂着过）
+  const errBox = $('#setup-error');
+  if (errBox && /正在加载配置/.test(errBox.textContent || '')) errBox.textContent = '';
   state.ready = true;
   window.__wwReady = true; // 告诉顶部守卫可以放行了
 }
@@ -1350,15 +1353,15 @@ function updateSeats(v) {
     const canPick = actionState.needTarget && actionState.candidates.includes(p.seat);
     if (canPick) s.classList.add('targetable');
     if (canPick && actionState.target === p.seat) s.classList.add('picked');
-    // 已知身份：头像右下角一枚小徽记（整块文字 chip 会把每个座位撑高 18px，12 人局直接撞成一团），
-    // 同时把头像一个圆染色成阵营色 —— 一眼分阵营、细节靠悬停看名字。
+    // 已知身份：头像**右下角**一枚小徽记（整块文字 chip 会把座位撑高 18px，12 人局直接撞成一团；
+    // 挂在 .snum 里面而不是座位外层，才不会压住下面的昵称），同时把头像圆染成阵营色。
     const info = p.role ? roleInfo(p.role) : null;
     const roleHtml = info
       ? `<span class="role-chip" style="color:${info.color}" title="${info.emoji}${info.name}">${info.emoji}</span>` : '';
     const badges = `${p.isSheriff ? '<span class="badge" title="警长">👑</span>' : ''}${p.lostVote ? '<span class="badge" title="失去投票权">🚫</span>' : ''}`;
     const votes = tally[p.seat];
-    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}>${p.seat}${badges}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
-      + `<span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>${roleHtml}`;
+    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}>${p.seat}${badges}${roleHtml}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
+      + `<span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>`;
     s.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
     // 点座位 = 选目标（与手机端同一套交互：目标类任务时座位本身就是按钮）
     if (canPick) s.addEventListener('click', () => selectTarget(p.seat));
@@ -2056,7 +2059,7 @@ function renderCoach(v) {
   }
   const r = v.review || null;
   // 签名：内容没变就不重绘，否则每次视图更新都会把用户正在读的文本重建一遍
-  const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}`;
+  const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}|${v.day}|${(v.players || []).filter((p) => p.alive).length}`;
   if (sig === state.coachSig) return;
   state.coachSig = sig;
   box.classList.remove('hidden');
@@ -2071,6 +2074,22 @@ function renderCoach(v) {
     head.appendChild(again);
   }
   box.appendChild(head);
+
+  // 本局速览：终局后这一列原本只有一颗按钮、大片留白。把"谁赢了/打了几天/还剩几人/我这局是什么"
+  // 摆在这里 —— 复盘时最先想知道的四件事，且全部来自服务端视图，不是推测。
+  const winners = { wolf: '🐺 狼人阵营获胜', good: '🕊 好人阵营获胜', third: '🎭 第三方获胜', none: '平局 / 无胜者' };
+  const me = v.me || null;
+  const facts = [
+    `<div class="cs-row"><span>结果</span><b>${winners[v.winner] || (v.winner ? escapeHtml(String(v.winner)) : '—')}</b></div>`,
+    `<div class="cs-row"><span>天数</span><b>第 ${v.day} 天</b></div>`,
+    `<div class="cs-row"><span>存活</span><b>${(v.players || []).filter((p) => p.alive).length} / ${(v.players || []).length}</b></div>`,
+  ];
+  if (me && me.role) {
+    const info = roleInfo(me.role);
+    facts.push(`<div class="cs-row"><span>我的身份</span><b style="color:${info.color}">${info.emoji}${info.name}${me.alive ? '' : ' · 已出局'}</b></div>`);
+  }
+  const stat = el('div', 'coach-stat', facts.join(''));
+  box.appendChild(stat);
 
   if (!r) {
     const btn = el('button', 'btn', '让教练点评这一局');
