@@ -1248,6 +1248,11 @@ async function runGameInner(game, resumeFrom = null) {
     game._dayEnded = false;
   }
   // 主循环：每天 = 发言 → 投票 → 夜晚 → 天亮
+  // 僵局护栏计数器：连续"一整天结束都没人出局"的天数。
+  // 为什么需要：狼刀空刀 / 女巫救 / 守卫守 / 白天全员投弃权 都可能让对局原地踏步，
+  // 原实现只能靠下面的"40 天保险"，会出现"打十天不结束、调用量被放大"（P1 实测过）。
+  let lastAliveCount = game.aliveSeats().length;
+  let staleDays = 0;
   while (!game.winner) {
     if (game.day >= 40) {
       setWinner(game, { winner: 'good', reason: '对局超过 40 天仍未分出胜负，按存活人数判定好人阵营获胜（保险机制）。' });
@@ -1270,6 +1275,18 @@ async function runGameInner(game, resumeFrom = null) {
     // 恢复重放到"首夜"时，这里同样要补上警长竞选（与开新局路径严格一致）
     if (resumeFrom === 'night' && await firstNightElection(game)) dayEnded = true;
     await dawnPhase(game);
+    // 僵局护栏：一整天（昼+夜）走完，存活人数没变 → 连续无出局天数 +1；一旦有人出局就归零。
+    // 连续 3 天无人出局即结算（早于上面"40 天保险"），避免无限循环把调用量放大。
+    // 取舍：仓库的胜负域是 'good' | 'wolf'（无"平局"概念），故沿用与 40 天保险同一形状的判定，
+    // 只把原因写清楚；若要真正引入"平局"，需同时改前端结束文案与评估指标（另议）。
+    const aliveNow = game.aliveSeats().length;
+    if (aliveNow === lastAliveCount) staleDays += 1;
+    else staleDays = 0;
+    lastAliveCount = aliveNow;
+    if (staleDays >= 3) {
+      setWinner(game, { winner: 'good', reason: '连续 3 天无人出局，判定好人阵营获胜（僵局护栏）。' });
+      break;
+    }
   }
   game.finish();
   game.logger.info('engine', `对局结束：${game.winner} —— ${game.winReason}，共 ${game.day} 天`, {
