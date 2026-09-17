@@ -27,6 +27,10 @@ app/android/local.properties
 # 电脑版打包产物：npm run app:win 生成（文件夹 + zip，含内置 node.exe，可重建）
 release/
 
+# 电脑版（Electron 桌面应用）：依赖与产物不入库，npm run app:desktop 重建
+desktop/node_modules/
+desktop/dist/
+
 # 系统
 .DS_Store
 Thumbs.db

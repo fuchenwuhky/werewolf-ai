@@ -22,7 +22,8 @@
     "ui:check": "node scripts/ui-check.js",
     "app:sync": "node scripts/build-app.js && cd app && npx cap sync android",
     "app:apk": "bash scripts/update-app.sh",
-    "app:win": "node scripts/build-win.js"
+    "app:win": "node scripts/build-win.js",
+    "app:desktop": "node scripts/build-desktop.js"
   },
   "engines": {
     "node": ">=18.18"

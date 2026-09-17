@@ -1,0 +1,37 @@
+{
+  "name": "werewolf-ai-desktop",
+  "version": "1.4.0",
+  "private": true,
+  "description": "AI 狼人杀 · 电脑版（Electron 桌面应用，内嵌本项目自带的服务端）",
+  "author": "werewolf-ai",
+  "main": "main.js",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.werewolfai.desktop",
+    "productName": "werewolf-ai-desktop",
+    "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "package.json"],
+    "extraResources": [
+      { "from": "../server.js", "to": "server/server.js" },
+      { "from": "../package.json", "to": "server/package.json" },
+      { "from": "../src", "to": "server/src" },
+      { "from": "../web", "to": "server/web" },
+      { "from": "../scripts/mock-agent.js", "to": "server/scripts/mock-agent.js" }
+    ],
+    "win": {
+      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "icon": "../web/assets/icon-512.png",
+      "signAndEditExecutable": false
+    },
+    "portable": { "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}" }
+  }
+}
