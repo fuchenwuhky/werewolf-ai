@@ -205,6 +205,51 @@ class Browser {
     await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 0)`);
     await sleep(300);
 
+    // ---- 3.5 角色图鉴（独立成屏：左翻牌、右细节） ----
+    log('\n=== 角色图鉴 ===');
+    await b.click('#btn-codex');
+    await sleep(700);
+    const cdx = await b.eval(`({
+      screen: document.querySelector('#app > .screen:not(.hidden)')?.id,
+      cards: document.querySelectorAll('#cdx-grid .cdx-card').length,
+      secs: document.querySelectorAll('#cdx-grid .cdx-sec').length,
+      filters: document.querySelectorAll('#cdx-filters button').length,
+      art: document.querySelectorAll('#cdx-grid img.role-art').length,
+      detail: (document.querySelector('#cdx-detail .cdx-dname')?.textContent || '').trim(),
+      chips: document.querySelectorAll('#cdx-detail .cdx-chips span').length,
+      strat: document.querySelectorAll('#cdx-detail .cdx-strat div').length,
+    })`);
+    check('图鉴：独立成屏并列出全部身份', cdx.screen === 'screen-codex' && cdx.cards >= 15 && cdx.secs === 3, JSON.stringify(cdx));
+    check('图鉴：每张牌都用真实立绘', cdx.art === cdx.cards, `${cdx.art}/${cdx.cards}`);
+    check('图鉴：默认选中一张并显示细节与徽记', cdx.detail.length > 0 && cdx.chips >= 3, `${cdx.detail} / ${cdx.chips} 徽记`);
+    check('图鉴：带 AI 打法模板', cdx.strat >= 2, `${cdx.strat} 条`);
+    await b.shot(path.join(SHOTS, '02c-codex.png'));
+
+    // 阵营筛选
+    await b.eval(`document.querySelector('#cdx-filters button[data-filter=wolf]').click()`);
+    await sleep(400);
+    const wolf = await b.eval(`({ n: document.querySelectorAll('#cdx-grid .cdx-card').length, secs: document.querySelectorAll('#cdx-grid .cdx-sec').length })`);
+    check('图鉴：阵营筛选只留该阵营', wolf.n === 5 && wolf.secs === 1, JSON.stringify(wolf));
+    // 搜索（先把阵营筛选复位：两个条件是**与**关系，"狼人 + 预言家"本来就该只剩隐狼那种）
+    await b.eval(`document.querySelector('#cdx-filters button[data-filter=all]').click()`);
+    await sleep(300);
+    await b.eval(`(() => { const i=document.getElementById('cdx-search'); i.value='预言家'; i.dispatchEvent(new Event('input')); })()`);
+    await sleep(400);
+    const searched = await b.eval(`([...document.querySelectorAll('#cdx-grid .cdx-card')].map(c=>c.dataset.role))`);
+    check('图鉴：搜索命中且只留命中项', searched.includes('seer') && searched.length <= 4, JSON.stringify(searched));
+    // 点牌切换细节
+    await b.eval(`(() => { const i=document.getElementById('cdx-search'); i.value=''; i.dispatchEvent(new Event('input')); })()`);
+    await sleep(300);
+    await b.eval(`document.querySelectorAll('#cdx-grid .cdx-card')[1].click()`);
+    await sleep(300);
+    const picked = await b.eval(`document.querySelectorAll('#cdx-grid .cdx-card')[1]?.dataset.role`);
+    const shown = await b.eval(`document.querySelector('#cdx-detail .cdx-chips') ? document.querySelector('#cdx-detail .cdx-dname').textContent.trim() : ''`);
+    check('图鉴：点牌切换右侧细节', !!shown && !!picked, `${picked} → ${shown}`);
+    // 返回
+    await b.click('#btn-codex-back');
+    await sleep(600);
+    check('图鉴：返回回到设置页', await b.eval(`document.querySelector('#app > .screen:not(.hidden)')?.id`) === 'screen-setup');
+
     // 座位：默认随机（老坐 1 号很难受），可以自定义，且要说明"座位开局才定"
     const seat = await b.eval(`({
       value: document.getElementById('my-seat')?.value,

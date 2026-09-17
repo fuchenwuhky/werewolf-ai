@@ -881,6 +881,129 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .coach-panel .cs-row b { color: var(--text); font-weight: 600; text-align: right; }
 
 /* ============================================================
+   四之二、角色图鉴
+   ------------------------------------------------------------
+   左翻牌、右细节：图鉴是"边玩边查"的东西，弹窗里滚动找牌很难用。
+   牌面复用 .card-frame（SVG 画框）+ 同一张立绘 —— 图鉴里看到的就是手上那张牌。
+   立绘窗口的 inset 必须与卡框 SVG 的 BX/BYT/BYB 对齐，所以这里同样用
+   --band-t-y / --band / --band-y 那三个变量（见"角色卡"一节的说明）。
+   ============================================================ */
+#screen-codex { overflow: hidden; }
+.cdx-head {
+  flex: none; display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
+  padding: var(--sp-4) var(--sp-5);
+  border-bottom: 1px solid var(--line-dim);
+  background: linear-gradient(180deg, rgba(11, 17, 32, .92), rgba(7, 11, 22, .8));
+}
+.cdx-title { min-width: 0; flex: 1 1 240px; }
+.cdx-title h1 {
+  margin: 0; font-family: var(--font-cn-title); font-size: var(--fs-2xl); letter-spacing: 4px;
+  background: linear-gradient(180deg, #fffdf3 0%, #f6e6b4 38%, #e2c05a 68%, #a37f27 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, .75));
+}
+.cdx-sub { margin: 4px 0 0; font-size: var(--fs-sm); color: var(--muted); letter-spacing: .5px; }
+.cdx-tools { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+.cdx-tools input[type=search] {
+  width: min(220px, 40vw); height: var(--h-ctl); padding: 0 var(--sp-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: linear-gradient(180deg, rgba(5, 8, 16, .92), rgba(9, 14, 26, .78));
+  color: var(--text); font-family: inherit; font-size: var(--fs-base);
+  box-shadow: var(--inset-field);
+}
+.cdx-tools input[type=search]:focus { outline: none; border-color: var(--gold); box-shadow: var(--inset-field), var(--ring-soft); }
+
+/* 阵营筛选：一排胶囊，选中的用金边 + 金色字（与弹窗 tab 同一套语言） */
+.cdx-filters {
+  flex: none; display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--line-dim);
+}
+.cdx-filters button {
+  padding: 5px 13px; border-radius: var(--r-pill); cursor: pointer; font-family: inherit; font-size: var(--fs-md);
+  border: 1px solid var(--line); background: rgba(146, 174, 235, .05); color: var(--text-dim);
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.cdx-filters button:hover { border-color: var(--gold-dim); color: var(--gold-bright); }
+.cdx-filters button.on { border-color: var(--gold); background: rgba(216, 178, 95, .14); color: var(--gold-bright); }
+
+.cdx-body {
+  flex: 1 1 auto; min-height: 0; display: grid;
+  grid-template-columns: minmax(0, 1fr) 372px; gap: var(--sp-4);
+  padding: var(--sp-4) var(--sp-5); align-items: start;
+}
+.cdx-grid { min-width: 0; height: 100%; overflow-y: auto; padding-right: var(--sp-2); }
+.cdx-sec { margin: 0 0 var(--sp-5); }
+.cdx-sec h2 {
+  display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-3);
+  font-family: var(--font-cn-title); font-size: var(--fs-lg); letter-spacing: 2px; color: var(--moon);
+  padding-bottom: 6px; border-bottom: 1px solid var(--line-dim);
+}
+.cdx-sec h2 em { font-style: normal; font-size: var(--fs-sm); color: var(--muted); font-family: var(--font-body); }
+.cdx-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: var(--sp-3); }
+
+/* 一张牌：卡框 + 立绘 + 底部铭牌。悬停抬起、选中给金色外环 */
+.cdx-card {
+  position: relative; cursor: pointer; border: none; background: none; padding: 0;
+  font-family: inherit; color: inherit; text-align: left;
+  transition: transform var(--dur) var(--ease);
+}
+.cdx-card:hover { transform: translateY(-4px); }
+.cdx-card .cdx-plate {
+  position: absolute; left: var(--band); right: var(--band); bottom: var(--band-y); z-index: 5;
+  padding: 14px var(--sp-1) var(--sp-1); text-align: center;
+}
+.cdx-card .cdx-plate::before {
+  content: ''; position: absolute; inset: 0; z-index: -1;
+  background: linear-gradient(180deg, transparent 0%, rgba(6, 4, 10, .68) 42%, rgba(6, 4, 10, .94) 100%);
+}
+.cdx-card .cdx-name { font-family: var(--font-cn-title); font-size: var(--fs-md); letter-spacing: 1px; line-height: 1.3; }
+.cdx-card .cdx-cat { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+.cdx-card.on .card-frame { box-shadow: 0 0 0 2px var(--gold), 0 10px 28px rgba(0, 0, 0, .7); }
+.cdx-card .cdx-ingame {
+  position: absolute; right: -4px; top: -6px; z-index: 6;
+  padding: 1px 7px; border-radius: var(--r-pill); font-size: 10px; font-weight: 700;
+  background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); color: #241802;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
+}
+
+/* 右侧细节：大牌 + 全部字段（能力 / 夜间行动 / 出局触发 / AI 打法） */
+.cdx-detail {
+  position: sticky; top: 0; max-height: 100%; overflow-y: auto;
+  padding: var(--sp-4); border-radius: var(--r-lg);
+  border: 1px solid var(--line); background: linear-gradient(180deg, rgba(24, 34, 60, .9), rgba(13, 19, 36, .92));
+  box-shadow: var(--el-2), var(--bevel);
+}
+.cdx-detail .cdx-big { width: min(210px, 60%); margin: 0 auto var(--sp-3); }
+.cdx-detail .cdx-dname { text-align: center; font-family: var(--font-cn-title); font-size: var(--fs-xl); letter-spacing: 3px; }
+.cdx-detail .cdx-chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: var(--sp-3) 0; }
+.cdx-detail .cdx-chips span {
+  padding: 3px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs);
+  border: 1px solid var(--line); background: rgba(146, 174, 235, .07); color: var(--text-dim);
+}
+.cdx-detail .cdx-chips span.hot { border-color: var(--gold-dim); background: rgba(216, 178, 95, .12); color: var(--gold-bright); }
+.cdx-detail .cdx-short { margin: 0 0 var(--sp-3); font-size: var(--fs-md); color: var(--gold-bright); line-height: 1.7; }
+.cdx-detail .cdx-desc { margin: 0 0 var(--sp-4); font-size: var(--fs-md); color: var(--text-dim); line-height: 1.85; }
+.cdx-detail h4 {
+  margin: var(--sp-4) 0 var(--sp-2); padding-bottom: 5px; font-size: var(--fs-sm); color: var(--muted);
+  letter-spacing: 1px; border-bottom: 1px solid var(--line-dim);
+}
+.cdx-detail .cdx-strat { display: flex; flex-direction: column; gap: 6px; }
+.cdx-detail .cdx-strat div {
+  padding: 7px var(--sp-3); border-radius: var(--r-sm); font-size: var(--fs-sm); line-height: 1.7;
+  border-left: 2px solid var(--gold-dim); background: rgba(6, 10, 20, .5); color: var(--text-dim);
+}
+.cdx-detail .cdx-strat b { color: var(--moon); font-weight: 600; }
+.cdx-detail .cdx-actions { display: flex; gap: var(--sp-2); margin-top: var(--sp-4); flex-wrap: wrap; }
+.cdx-detail .cdx-empty { color: var(--muted); font-size: var(--fs-md); text-align: center; padding: var(--sp-6) 0; }
+
+@media (max-width: 1080px) {
+  .cdx-body { grid-template-columns: minmax(0, 1fr); }
+  /* 窄屏改成"列表在上、细节在下"，细节区不再 sticky（否则会盖住网格） */
+  .cdx-detail { position: static; max-height: none; }
+  .cdx-cards { grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); }
+}
+
+/* ============================================================
    五、上帝 / 开发者面板
    ============================================================ */
 .god-drawer {

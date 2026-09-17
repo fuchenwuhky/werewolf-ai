@@ -95,6 +95,7 @@
           <ul class="hero-facts" id="hero-facts"></ul>
         </div>
         <button class="btn ghost small hero-lang" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
+        <button class="btn ghost small hero-codex" id="btn-codex" data-i18n="codex.entry">📖 角色图鉴</button>
       </div>
     </header>
 
@@ -270,6 +271,29 @@
       </div>
       <div id="log-rows" class="log-rows"></div>
     </aside>
+  </section>
+
+  <!-- ============ 角色图鉴 ============
+       独立成一屏而不是塞进规则书弹窗：图鉴是"边玩边查"的东西 ——
+       左边翻牌、右边看细节，不需要在弹窗里滚动找；对局中从齿轮菜单进来也不会盖住牌桌。
+       牌面用与身份牌同一套 .card-frame（SVG 画框）+ 同一张立绘，图鉴里看到的就是手上那张。 -->
+  <section id="screen-codex" class="screen hidden">
+    <header class="cdx-head">
+      <button class="btn ghost small" id="btn-codex-back" data-i18n="codex.back">← 返回</button>
+      <div class="cdx-title">
+        <h1 data-i18n="codex.title">角色图鉴</h1>
+        <p class="cdx-sub" id="cdx-sub"></p>
+      </div>
+      <div class="cdx-tools">
+        <input id="cdx-search" type="search" data-i18n-placeholder="codex.search" placeholder="搜索身份…" data-i18n-aria="codex.search" aria-label="搜索身份">
+        <button class="btn ghost small" id="btn-codex-rulebook" data-i18n="codex.rulebook">📖 完整规则书</button>
+      </div>
+    </header>
+    <div class="cdx-filters" id="cdx-filters"></div>
+    <div class="cdx-body">
+      <div class="cdx-grid" id="cdx-grid"></div>
+      <aside class="cdx-detail" id="cdx-detail"></aside>
+    </div>
   </section>
 </div>
 

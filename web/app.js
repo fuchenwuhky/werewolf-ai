@@ -86,6 +86,18 @@ async function initSetup() {
   });
   renderSetupDigest();
   $('#btn-rand-names').addEventListener('click', () => { renderAiNames(true); renderPersonas(); });
+  // 角色图鉴：设置页入口 + 返回 + 站内的规则书/搜索（图鉴本身不依赖对局状态，随时可看）
+  const codexBtn = $('#btn-codex');
+  if (codexBtn) codexBtn.addEventListener('click', openCodex);
+  const codexBack = $('#btn-codex-back');
+  if (codexBack) codexBack.addEventListener('click', closeCodex);
+  const codexRb = $('#btn-codex-rulebook');
+  if (codexRb) codexRb.addEventListener('click', () => openRulebook());
+  const cdxSearch = $('#cdx-search');
+  if (cdxSearch) cdxSearch.addEventListener('input', () => {
+    codexState.q = cdxSearch.value;
+    renderCodexGrid(codexBoardCounts());
+  });
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
       localStorage.removeItem('ww_current');
@@ -669,6 +681,7 @@ function openGearMenu() {
   const v = state.view;
   const items = [
     ['📖 规则书', () => openRulebook()],
+    [cdxT('codex.entry'), () => openCodex()],
     ['🎴 我的身份牌', () => { if (v && v.me && v.me.role) openInspect(v.me.role); }],
     [`👁 上帝视角（当前${state.godMode ? '开' : '关'}）`, () => toggleGod()],
     [`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => switchLangDesktop()],
@@ -691,6 +704,7 @@ function openGearMenu() {
 function switchLangDesktop() {
   I18N.setLang(I18N.getLang() === 'en' ? 'zh-CN' : 'en');
   renderSetupDigest(); // 信息条与摘要是 JS 拼的，不跟着 data-i18n 自动重刷
+  if (codexVisible()) renderCodex(); // 图鉴也是 JS 拼的（含搜索框占位符之外的徽记文案）
 }
 
 function saveTags() {
@@ -1081,6 +1095,205 @@ function openInspect(rid) {
   });
   stage.addEventListener('click', () => stage.remove());
   document.body.appendChild(stage);
+}
+
+/* ============================================================
+   角色图鉴
+   ------------------------------------------------------------
+   为什么单独做一屏、而不是塞进规则书弹窗（弹窗里那一版仍在，只是简表）：
+   图鉴是"边玩边查"的东西 —— 左边翻牌、右边看细节，不用在弹窗里滚动找；
+   对局中从齿轮菜单进来也不会盖住牌桌。
+   数据全部来自服务端 meta（roles / roleArt / roleStrategies），前端不写死任何角色知识：
+   新增身份只要在 src/engine/roles.js 注册，图鉴自动多一张牌。
+   ============================================================ */
+const CODEX_SECTIONS = [
+  { key: 'wolf', match: (r) => r.category === 'wolf', titleKey: 'codex.secWolf', catKey: 'codex.catWolf' },
+  { key: 'god', match: (r) => r.category === 'god', titleKey: 'codex.secGod', catKey: 'codex.catGod' },
+  { key: 'villager', match: (r) => r.category === 'villager', titleKey: 'codex.secVillager', catKey: 'codex.catVillager' },
+];
+const codexState = { filter: 'all', q: '', pick: null, from: 'screen-setup' };
+
+const cdxT = (k, vars) => ((typeof I18N !== 'undefined' && I18N.t && I18N.t(k, vars)) || k);
+
+/** 本局在场人数：优先当前对局的板子，其次设置页选中的板子（都没有就返回空表 = 不加角标） */
+function codexBoardCounts() {
+  const v = state.view;
+  if (v && v.board && v.board.roles) return v.board.roles;
+  return state.setup.boardCounts || {};
+}
+
+function showScreen(id) {
+  document.querySelectorAll('#app > .screen').forEach((s) => s.classList.toggle('hidden', s.id !== id));
+}
+
+function openCodex() {
+  const cur = document.querySelector('#app > .screen:not(.hidden)');
+  codexState.from = cur && cur.id !== 'screen-codex' ? cur.id : 'screen-setup';
+  showScreen('screen-codex');
+  renderCodex();
+}
+
+function closeCodex() {
+  showScreen(codexState.from || 'screen-setup');
+  // 回到对局时事件流要贴回底部：中间离开过一会儿，回来后停在半空很别扭
+  if (codexState.from === 'screen-game') autoScroll();
+}
+
+function codexVisible() { return !$('#screen-codex').classList.contains('hidden'); }
+
+/** 牌面：复用身份牌那套 .card-frame + 立绘，铭牌挂在卡框内部（--band* 变量才继承得到） */
+function codexCardHtml(rid, inGame) {
+  const r = roleInfo(rid);
+  const catKey = CODEX_SECTIONS.find((s) => s.match(r));
+  const catLabel = catKey ? cdxT(catKey.catKey) : '';
+  const badge = inGame ? `<span class="cdx-ingame">${cdxT('codex.inGame', { n: inGame })}</span>` : '';
+  return `<div class="card-frame"${attrStr(window.CardFrame.roleAttrs(rid))}>`
+    + window.CardFrame.html()
+    + roleArtOnly(rid)
+    + `<div class="cdx-plate"><div class="cdx-name gilt-name">${escapeHtml(r.name)}</div>`
+    + `<div class="cdx-cat">${escapeHtml(r.emoji + ' ' + catLabel)}</div></div></div>${badge}`;
+}
+/** {a:1,b:'x'} → 属性串（只用于 dataset，值都来自服务端白名单，仍做一次转义） */
+function attrStr(obj) {
+  return Object.entries(obj || {}).map(([k, val]) => ` ${k}="${escapeHtml(String(val))}"`).join('');
+}
+
+function renderCodex() {
+  const roles = state.meta ? state.meta.roles : {};
+  const counts = codexBoardCounts();
+  const ids = Object.keys(roles);
+  const nW = ids.filter((id) => roles[id].category === 'wolf').length;
+  const nG = ids.filter((id) => roles[id].category === 'god').length;
+  const nV = ids.filter((id) => roles[id].category === 'villager').length;
+  const sub = $('#cdx-sub');
+  if (sub) sub.textContent = cdxT('codex.sub', { n: ids.length, w: nW, g: nG, v: nV });
+  renderCodexFilters(counts);
+  renderCodexGrid(counts);
+}
+
+function renderCodexFilters(counts) {
+  const box = $('#cdx-filters');
+  if (!box) return;
+  const inGame = Object.values(counts || {}).some((n) => n > 0);
+  const defs = [
+    ['all', cdxT('codex.filterAll')],
+    ['wolf', cdxT('codex.filterWolf')],
+    ['god', cdxT('codex.filterGod')],
+    ['villager', cdxT('codex.filterVillager')],
+  ];
+  if (inGame) defs.push(['ingame', cdxT('codex.filterInGame')]);
+  box.innerHTML = '';
+  for (const [key, label] of defs) {
+    const b = el('button', codexState.filter === key ? 'on' : '', label);
+    b.dataset.filter = key;
+    b.addEventListener('click', () => { codexState.filter = key; renderCodexFilters(counts); renderCodexGrid(counts); });
+    box.appendChild(b);
+  }
+}
+
+function codexMatches(rid, counts) {
+  const r = roleInfo(rid);
+  const sec = CODEX_SECTIONS.find((s) => s.match(r));
+  if (codexState.filter === 'ingame') { if (!(counts[rid] > 0)) return false; }
+  else if (codexState.filter !== 'all' && (!sec || sec.key !== codexState.filter)) return false;
+  const q = codexState.q.trim().toLowerCase();
+  if (!q) return true;
+  return [r.name, r.emoji, r.short, r.description, rid].some((s) => String(s || '').toLowerCase().includes(q));
+}
+
+function renderCodexGrid(counts) {
+  const grid = $('#cdx-grid');
+  if (!grid) return;
+  const roles = state.meta ? state.meta.roles : {};
+  grid.innerHTML = '';
+  let total = 0;
+  const visible = [];
+  for (const sec of CODEX_SECTIONS) {
+    const ids = Object.keys(roles).filter((id) => sec.match(roles[id]) && codexMatches(id, counts));
+    if (!ids.length) continue;
+    const node = el('section', 'cdx-sec');
+    node.appendChild(el('h2', null, `${cdxT(sec.titleKey)} <em>${ids.length}</em>`));
+    const cards = el('div', 'cdx-cards');
+    for (const id of ids) {
+      // div + role=button 而不是 <button>：卡框是块级结构，放进 button 属于非法嵌套。
+      // data-role/data-faction 一律走 CardFrame.roleAttrs 原语（手写 dataset.role 会漏掉阵营，
+      // 徽记就永远是狼爪 —— test/card-frame.test.js 专门守这条）
+      const card = el('div', 'cdx-card', codexCardHtml(id, counts[id] || 0));
+      Object.assign(card.dataset, window.CardFrame.roleAttrs(id));
+      card.setAttribute('role', 'button');
+      card.setAttribute('tabindex', '0');
+      card.setAttribute('aria-label', `${roleInfo(id).name}：${roleInfo(id).short}`);
+      card.title = `${roleInfo(id).name} · ${roleInfo(id).short}`;
+      const pick = () => { codexState.pick = id; renderCodexDetail(counts); renderCodexGrid(counts); };
+      card.addEventListener('click', pick);
+      card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
+      cards.appendChild(card);
+      visible.push(id);
+      total++;
+    }
+    node.appendChild(cards);
+    grid.appendChild(node);
+  }
+  if (!total) grid.appendChild(el('div', 'cdx-empty', cdxT('codex.empty')));
+  if (!codexState.pick || !visible.includes(codexState.pick)) codexState.pick = visible[0] || null;
+  renderCodexDetail(counts);
+}
+
+function renderCodexDetail(counts) {
+  const box = $('#cdx-detail');
+  if (!box) return;
+  const rid = codexState.pick;
+  box.innerHTML = '';
+  if (!rid) { box.appendChild(el('div', 'cdx-empty', cdxT('codex.pickHint'))); return; }
+  const r = roleInfo(rid);
+  const cs = counts || codexBoardCounts();
+  const sec = CODEX_SECTIONS.find((s) => s.match(r));
+  const big = el('div', 'cdx-big card-frame');
+  Object.assign(big.dataset, window.CardFrame.roleAttrs(rid));
+  big.innerHTML = window.CardFrame.html() + roleArtOnly(rid);
+  box.appendChild(big);
+  box.appendChild(el('div', 'cdx-dname gilt-name', `${r.emoji} ${escapeHtml(r.name)}`));
+
+  // 徽记：全部由数据驱动（nightStep / deathTrigger / selfExplode / explodeShot / voteImmunity），
+  // 前端不写"谁有夜间行动"这种知识 —— 否则 roles.js 一改图鉴就说谎
+  const chips = [];
+  if (sec) chips.push([cdxT(sec.titleKey), false]);
+  if (r.nightStep) chips.push([cdxT('codex.chipNight'), true]);
+  if (r.deathTrigger) chips.push([cdxT('codex.chipDeath'), true]);
+  if (r.selfExplode) chips.push([cdxT('codex.chipExplode'), false]);
+  if (r.explodeShot) chips.push([cdxT('codex.chipExplodeShot'), false]);
+  if (r.voteImmunity) chips.push([cdxT('codex.chipVoteImmune'), false]);
+  if (cs[rid] > 0) chips.push([cdxT('codex.inGame', { n: cs[rid] }), true]);
+  const chipBox = el('div', 'cdx-chips');
+  for (const [label, hot] of chips) chipBox.appendChild(el('span', hot ? 'hot' : '', label));
+  box.appendChild(chipBox);
+
+  box.appendChild(el('p', 'cdx-short', escapeHtml(r.short)));
+  box.appendChild(el('p', 'cdx-desc', escapeHtml(r.description)));
+
+  const strats = (state.meta.roleStrategies && state.meta.roleStrategies[rid]) || [];
+  if (strats.length) {
+    box.appendChild(el('h4', null, cdxT('codex.aiTitle')));
+    const wrap = el('div', 'cdx-strat');
+    for (const s of strats) wrap.appendChild(el('div', null, `<b>${escapeHtml(s.name)}</b>：${escapeHtml(s.text)}`));
+    box.appendChild(wrap);
+    box.appendChild(el('p', 'hint', cdxT('codex.aiHint')));
+  }
+  const actions = el('div', 'cdx-actions');
+  const inspect = el('button', 'btn small', cdxT('codex.inspect'));
+  inspect.addEventListener('click', () => openInspect(rid));
+  const rb = el('button', 'btn ghost small', cdxT('codex.rulebook'));
+  rb.addEventListener('click', () => openRulebook());
+  actions.append(inspect, rb);
+  box.appendChild(actions);
+}
+
+/** 只要立绘那一层（大卡用：卡框之外不再叠铭牌，名字放在下面写得更清楚） */
+function roleArtOnly(rid) {
+  const ext = state.meta.roleArt && state.meta.roleArt[rid];
+  if (ext) return `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${escapeHtml(roleInfo(rid).name)}">`;
+  const r = roleInfo(rid);
+  return `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${escapeHtml(r.name)}</div></div>`;
 }
 
 function autoScroll() {
