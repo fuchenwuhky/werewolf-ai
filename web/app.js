@@ -7,6 +7,12 @@
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, html) => { const d = document.createElement(tag); if (cls) d.className = cls; if (html != null) d.innerHTML = html; return d; };
 
+/**
+ * 推送看门狗阈值：服务端心跳约 16s（src/api.js 的 STREAM_TICK_MS × STREAM_PING_TICKS），
+ * 这里取 36s = 2 个心跳周期 + 余量，容忍丢一次心跳。绝不能小于心跳周期，否则正常空闲会误杀连接。
+ */
+const STREAM_DEAD_MS = 36000;
+
 const state = {
   meta: null,            // {roles, boards, ruleMeta, defaultRules}
   setup: { boardCounts: null, boardId: 'adv12', rules: null, mode: 'play', mySeat: 'random' },
@@ -818,10 +824,14 @@ function startStream() {
     if (state.godMode && g.godToken) {
       state.godStream = openViewStream('god', g.godToken, () => state.godAfter || 0);
     }
-    // 心跳/断流兜底：若 8s 内既没有帧也没有心跳，视为连接已死 → 回退轮询
+    // 心跳/断流兜底：若超过 STREAM_DEAD_MS 既没有帧也没有心跳，视为连接已死 → 回退轮询。
+    // ⚠ 这个阈值必须**大于服务端心跳周期的 2 倍**（src/api.js：STREAM_TICK_MS 500ms × STREAM_PING_TICKS 32 ≈ 16s）。
+    //   原来写死 8s < 16s：正常空闲（等人类玩家输入时一个事件都没有）就会被误判成断线，
+    //   于是横幅常驻"已切换为轮询"、推送白白降级 —— 真实对局里反复复现（P1）。
+    //   36s = 16s × 2 + 余量，容忍丢一次心跳。test/stream-consistency.test.js 会锁死这个关系。
     state.streamWatchdog = setInterval(() => {
       if (!state.stream) return;
-      if (Date.now() - (state.lastStreamAt || 0) > 8000) {
+      if (Date.now() - (state.lastStreamAt || 0) > STREAM_DEAD_MS) {
         appendSys('⚠️ 推送连接无响应，已切换为轮询');
         stopStream();
         startPollFallback();

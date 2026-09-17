@@ -263,16 +263,32 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
   let lastError = '';
   // 单次决策的总时间闸（A3）：调用层已有"分任务软超时"（发言 90s / 微决策 30s），
   // 但传输层重试 × 校验层重试会相乘 —— 极端情况一次决策能拖十几分钟，整局看起来就是卡死。
-  // 超过这个总预算就直接走降级（宁可出一手平凡但合法的棋，也不要让全场等一个人）。
-  const deadlineAt = Date.now() + DECISION_TOTAL_MS;
+  // 超过这个总预算就不再发**昂贵**的重试（宁可出一手平凡但合法的棋，也不要让全场等一个人）。
+  //
+  // E1 修正（真实对局暴露的问题）：一次发言就可能吃满 12000 tokens / 362s，把预算一次花光，
+  // 于是**第一次**校验失败时闸门已经超了 → 直接降级（真实发生：3 号只说了"我过。"）。
+  // 但"闸门用尽"不等于"只能放弃"：这里允许**一次轻量补救**——effort 压到 fastEffort、
+  // 预算封在极小上限（agent.js 的 _cheapRetry），几秒钟就能重新要一份合法 JSON。
+  // 只有这次补救也失败才降级，代价是几秒，收益是玩家不必看到一句空话。
+  const budgetMs = Number(game.decisionTotalMs) > 0 ? Number(game.decisionTotalMs) : DECISION_TOTAL_MS;
+  const deadlineAt = Date.now() + budgetMs;
+  let cheapTried = false;
+  let wasCheap = false;
   for (let i = 0; i <= maxRetries; i++) {
-    if (Date.now() > deadlineAt) {
-      lastError = `单次决策总耗时超过 ${Math.round(DECISION_TOTAL_MS / 1000)}s（超时/失败重试累计）`;
+    const overBudget = Date.now() > deadlineAt;
+    if (overBudget && cheapTried) {
+      lastError = `单次决策总耗时超过 ${Math.round(budgetMs / 1000)}s（超时/失败重试累计）`;
       game.logger.warn('ai', `${seat}号 ${req.task} ${lastError}，停止重试并降级`);
       game.emit('llm_error', { actor: seat, visibleTo: 'god', data: { task: req.task, attempt: i + 1, error: lastError, timeout: true, degraded: false } });
       break;
     }
-    const request = note ? { ...req, _retryNote: note } : req;
+    if (overBudget) {
+      cheapTried = true;
+      game.logger.warn('ai', `${seat}号 ${req.task} 已用尽 ${Math.round(budgetMs / 1000)}s 决策预算 → 只再给一次轻量补救（最低思考 + 极小预算）`);
+    }
+    wasCheap = overBudget;
+    const base = note ? { ...req, _retryNote: note } : req;
+    const request = overBudget ? { ...base, _cheapRetry: true } : base;
     const raw = await game.ask(seat, request);
     const v = validatePayload(req.task, raw, req, game, seat);
     if (v.ok) return v.value;
@@ -283,7 +299,7 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
     game.emit('llm_error', {
       actor: seat,
       visibleTo: 'god',
-      data: { task: req.task, attempt: i + 1, error: v.error, degraded: false },
+      data: { task: req.task, attempt: i + 1, error: v.error, degraded: false, cheap: wasCheap },
     });
   }
   game.logger.warn('ai', `${seat}号 ${req.task} 多次输出不合法，使用降级方案`);

@@ -48,6 +48,14 @@ function extractJson(text) {
 const DIGEST_MAX_CHARS = 700;
 
 /**
+ * 轻量补救重试（E1）的输出上限：决策时间预算已经花光，这次重试必须几秒钟出结果。
+ * 1200 tokens 对"给一句合法发言/一个座位号"绰绰有余，而 hardCap 封死意味着
+ * 即使模型再想跑长思考，也绝不可能把等待重新拉回几分钟。
+ */
+const CHEAP_RETRY_MAX_TOKENS = 1200;
+const CHEAP_RETRY_HARD_CAP = 2000;
+
+/**
  * 生成中即可对全场公开的任务：只有这些才把流式增量展示给其他玩家。
  * 其余任务（狼队频道、女巫用药、查验…）一律保密——半成品文本同样是私密信息。
  * 注：flow.js 里所有 speech 事件的 context 都是公开的（day/sheriff/pk/lastwords），
@@ -304,6 +312,16 @@ class Agent {
     // 2. 单发调用（思考预算按"信息含量"调度：常规决策降档、关键节点加档）
     const messages = [this.messages[0], { role: 'user', content: built.text }];
     const plan = effort.planEffort(g, this.player, request, { cfg: this.llmCfg, lastSeq: this.lastSeq });
+    // E1 轻量补救（配合 flow.js 的校验层重试）：决策时间预算已经花光时的重试必须**又便宜又有上限**，
+    // 否则等于再赌一次长思考（实测最坏 362s）——那正是 180s 总闸门当初要避免的事。
+    // 几分钟的等待换来的通常只是一句合法发言，几秒钟的降档重试是明显更好的交易。
+    if (request._cheapRetry) {
+      plan.effort = this.llmCfg.fastEffort || 'low';
+      plan.maxTokens = Math.min(plan.maxTokens, CHEAP_RETRY_MAX_TOKENS);
+      plan.hardCap = Math.min(plan.hardCap, CHEAP_RETRY_HARD_CAP);
+      plan.reasons = ['轻量补救重试：决策时间预算已用尽 → 最低思考 + 极小预算'];
+      plan.cheap = true;
+    }
     this.lastPlan = plan; // 上帝面板可见：这次为什么给了这个档位
     // 直播缓冲在**请求真的开始跑**时才建（onStart）：扇出提交时不会出现"还没轮到就已经在打字"，
     // 也不会几路增量混进同一个缓冲（多 Key 下确实会同时有好几路）。
@@ -317,8 +335,11 @@ class Agent {
         hardCap: plan.hardCap, // 没有它，截断后的预算翻倍会让 maxTokens 形同虚设
         // 分层模型（A2）：快速任务可换更小的模型；未配置 modelFast 时与主模型一致
         model: ctx.taskModel(request.task, this.llmCfg),
-        // 分任务软超时（A3）：发言 90s / 微决策 30s，超时会在 llm 内部先降档重试一次
-        timeoutMs: ctx.taskTimeoutMs(request.task, this.llmCfg),
+        // 分任务软超时（A3）：发言 90s / 微决策 30s，超时会在 llm 内部先降档重试一次。
+        // 轻量补救则连超时也压到快速任务的档位：它本来就是"几秒钟要一份合法 JSON"。
+        timeoutMs: request._cheapRetry
+          ? Math.min(ctx.taskTimeoutMs(request.task, this.llmCfg), this.llmCfg.fastTimeoutMs || 30000)
+          : ctx.taskTimeoutMs(request.task, this.llmCfg),
         signal: g.abortSignal, // 终止对局时立即中断在途调用
         priority: PRIORITY.decision, // 玩家可见决策：最高优先级
         meta: { label: `${seat}号`, task: request.task, seat },
