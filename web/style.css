@@ -894,7 +894,18 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 @keyframes drawerIn { from { transform: translateX(18px); opacity: .4; } to { transform: none; opacity: 1; } }
 .god-drawer .drawer-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .god-drawer .drawer-head h3 { margin: 0; font-family: var(--font-cn-title); font-size: var(--fs-lg); color: var(--gold-bright); letter-spacing: 2px; }
-#god-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--sp-2); margin-bottom: var(--sp-4); }
+/* 上帝面板的统计：一行一项的键值表（原来做成网格卡片，每项自己折行成一大坨） */
+#god-stats {
+  display: flex; flex-direction: column; gap: 1px; margin-bottom: var(--sp-4); overflow: hidden;
+  border: 1px solid var(--line-dim); border-radius: var(--r-sm); background: rgba(6, 10, 20, .45);
+}
+#god-stats .gs-row {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3);
+  padding: 6px var(--sp-3); font-size: var(--fs-sm);
+}
+#god-stats .gs-row span { flex: none; color: var(--muted); }
+#god-stats .gs-row b { color: var(--text); font-weight: 600; text-align: right; overflow-wrap: anywhere; }
+#god-stats .gs-row b i { margin-left: 6px; font-style: normal; font-size: var(--fs-xs); color: var(--jade); }
 .god-drawer h4 {
   margin: var(--sp-4) 0 var(--sp-2); padding-bottom: 6px; font-size: var(--fs-md);
   color: var(--gold); letter-spacing: 1px; border-bottom: 1px solid var(--line-dim);
@@ -910,12 +921,16 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   line-height: 1.65; color: var(--text-dim); white-space: pre-wrap; word-break: break-word;
 }
 .log-rows { max-height: 40vh; }
+/* 三列：级别 / 模块 / 正文。正文列必须 minmax(0,1fr) + anywhere，否则长 token 会把整行撑破 */
 .log-row {
-  display: grid; grid-template-columns: 62px 54px 62px minmax(0, 1fr); gap: var(--sp-2);
+  display: grid; grid-template-columns: 52px 56px minmax(0, 1fr); gap: var(--sp-2);
   padding: 5px var(--sp-2); border-bottom: 1px solid var(--line-soft);
   font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.55;
 }
 .log-row:last-child { border-bottom: none; }
+.log-row .lm { color: var(--muted); }
+.log-row .lmsg { color: var(--text-dim); overflow-wrap: anywhere; }
+.log-row .lstk { color: var(--muted); }
 .log-row .lv-ERROR { color: #ff9aa5; }
 .log-row .lv-WARN { color: #ffd479; }
 .log-row .lv-INFO { color: var(--moon-dim); }

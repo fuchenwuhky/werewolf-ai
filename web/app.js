@@ -199,31 +199,35 @@ function updateBoardTotal() {
  * 也顺便让"改完忘记保存"这类问题暴露得更早（模型来自服务端返回的已保存配置）。
  */
 function renderSetupDigest() {
+  // 本页新增的文案全部走 i18n：写死中文会让"英文模式"里突然冒出一条中文（本轮就漏过一次）。
+  // 板子名/节奏名来自服务端 meta（引擎数据，按既定范围不翻译），只翻译包着它们的标签。
+  const T = (k, v) => ((typeof I18N !== 'undefined' && I18N.t && I18N.t(k, v)) || k);
   const boardSel = $('#board-template');
   const boardName = boardSel && boardSel.selectedOptions[0] ? boardSel.selectedOptions[0].textContent : '';
   const total = boardTotal();
   const wolves = Object.entries(state.setup.boardCounts || {}).filter(([r]) => state.meta && state.meta.roles[r] && state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
   const mode = document.querySelector('input[name=mode]:checked');
   const isWatch = mode && mode.value === 'watch';
-  const model = ($('#cfg-model') && $('#cfg-model').value.trim()) || '未配置模型';
+  const model = ($('#cfg-model') && $('#cfg-model').value.trim()) || T('digest.noModel');
   const paceSel = $('#cfg-pace');
   const pace = paceSel && paceSel.selectedOptions[0] ? paceSel.selectedOptions[0].textContent : '';
+  const paceTxt = pace ? pace.replace(/（.*$/, '') : '';
   const mock = $('#use-mock') && $('#use-mock').checked;
+  const cleanBoard = escapeHtml(String(boardName || T('digest.unknownBoard')).replace(/^[^\u4e00-\u9fa5A-Za-z]*/, '').slice(0, 16));
   const facts = [
-    `<li>板子 <b>${escapeHtml(String(boardName || '自定义').replace(/^[^\u4e00-\u9fa5A-Za-z]*/, '').slice(0, 14))}</b></li>`,
-    `<li><b>${total}</b> 人局 · 狼 <b>${wolves}</b> / 好 <b>${total - wolves}</b></li>`,
-    `<li>${isWatch ? '纯观战（上帝视角）' : '我参战'}</li>`,
-    mock ? '<li>Mock 试玩（不调 API）</li>' : `<li>模型 <b>${escapeHtml(model.replace(/^.*\//, ''))}</b></li>`,
+    `<li>${T('digest.board')} <b>${cleanBoard}</b></li>`,
+    `<li><b>${T('digest.players', { n: total })}</b> · ${T('digest.wolves', { w: wolves })} / ${T('digest.good', { g: total - wolves })}</li>`,
+    `<li>${isWatch ? T('digest.watch') : T('digest.play')}</li>`,
+    mock ? `<li>${T('digest.mock')}</li>` : `<li>${T('digest.model', { m: escapeHtml(model.replace(/^.*\//, '')) })}</li>`,
   ];
-  if (pace) facts.push(`<li>${escapeHtml(pace.replace(/（.*$/, ''))}</li>`);
+  if (paceTxt) facts.push(`<li>${T('digest.pace', { p: escapeHtml(paceTxt) })}</li>`);
   const box = $('#hero-facts');
   if (box) box.innerHTML = facts.join('');
   const sum = $('#setup-summary');
   if (sum) {
-    const paceTxt = pace ? pace.replace(/（.*$/, '') : '';
-    sum.innerHTML = `${isWatch ? '观战' : '参战'} · ${total} 人 · 狼 ${wolves}/好 ${total - wolves}`
-      + `<span class="ss-sep">|</span>${escapeHtml(String(boardName || '自定义板子'))}`
-      + (mock ? '<span class="ss-sep">|</span>Mock 试玩' : `<span class="ss-sep">|</span>${escapeHtml(model)}`)
+    sum.innerHTML = `${isWatch ? T('digest.watch') : T('digest.play')} · ${T('digest.players', { n: total })} · ${T('digest.wolves', { w: wolves })}/${T('digest.good', { g: total - wolves })}`
+      + `<span class="ss-sep">|</span>${cleanBoard}`
+      + (mock ? `<span class="ss-sep">|</span>${T('digest.mock')}` : `<span class="ss-sep">|</span>${escapeHtml(model)}`)
       + (paceTxt ? `<span class="ss-sep">|</span>${escapeHtml(paceTxt)}` : '');
   }
 }
@@ -686,6 +690,7 @@ function openGearMenu() {
 
 function switchLangDesktop() {
   I18N.setLang(I18N.getLang() === 'en' ? 'zh-CN' : 'en');
+  renderSetupDigest(); // 信息条与摘要是 JS 拼的，不跟着 data-i18n 自动重刷
 }
 
 function saveTags() {
@@ -2153,14 +2158,18 @@ function renderGodStats() {
     ? Object.entries(s.byTier).map(([k, n]) => `${tierNames[k] || k} ${n}`).join(' · ')
     : '-';
   const sched = v.scheduler
-    ? `<p>调度器：队列 <b>${v.scheduler.depth}</b>${v.scheduler.busy ? ' · 忙' : ' · 闲'}${v.scheduler.current ? ` · 当前 ${escapeHtml(String(v.scheduler.current.label || ''))}` : ''} ｜ 平均等待 <b>${v.scheduler.avgWaitMs}ms</b> / 最大 <b>${v.scheduler.maxWaitMs}ms</b></p>`
+    ? `<div class="gs-row"><span>调度器</span><b>队列 ${v.scheduler.depth}${v.scheduler.busy ? ' · 忙' : ' · 闲'}`
+      + `${v.scheduler.current ? ` · ${escapeHtml(String(v.scheduler.current.label || ''))}` : ''}`
+      + ` ｜ 等待 ${v.scheduler.avgWaitMs}ms / 峰值 ${v.scheduler.maxWaitMs}ms</b></div>`
     : '';
+  // 一行一项的键值表：原来是一串 <p> 塞进网格，"LLM 调用：0 次 ｜ 报错 0 次…" 会各自折行成一大坨读不下去
   $('#god-stats').innerHTML = `
-    <p>LLM 调用：<b>${s.calls}</b> 次 ｜ 报错 ${s.errors} 次 ｜ 流式 ${s.streamedCalls || 0} 次</p>
-    <p>输入 tokens：<b>${s.promptTokens}</b>（其中缓存命中 <b style="color:var(--accent2)">${s.cachedTokens}</b>，命中率 <b>${hit}%</b>）</p>
-    <p>输出 tokens：<b>${s.completionTokens}</b></p>
-    <p>首字延迟 TTFT：<b>${ttft}</b></p>
-    <p>思考预算档位：<b>${tierStr}</b></p>${sched}`;
+    <div class="gs-row"><span>LLM 调用</span><b>${s.calls} 次</b></div>
+    <div class="gs-row"><span>报错 / 流式</span><b>${s.errors} / ${s.streamedCalls || 0}</b></div>
+    <div class="gs-row"><span>输入 tokens</span><b>${s.promptTokens}<i>缓存命中 ${hit}%</i></b></div>
+    <div class="gs-row"><span>输出 tokens</span><b>${s.completionTokens}</b></div>
+    <div class="gs-row"><span>首字延迟 TTFT</span><b>${ttft}</b></div>
+    <div class="gs-row"><span>思考预算档位</span><b>${tierStr}</b></div>${sched}`;
 }
 
 let logTimer = null;
@@ -2180,7 +2189,12 @@ async function pollLogs() {
     const box = $('#log-rows');
     for (const row of r.rows) {
       state.godLogAfter = Math.max(state.godLogAfter, row.seq);
-      const line = el('div', 'log-row', `<span class="lv-${row.level.toUpperCase()}">${row.level.toUpperCase()}</span> [${row.module}] ${escapeHtml(row.msg)}${row.data && row.data.stack ? `<br><span style="color:var(--muted)">${escapeHtml(String(row.data.stack).slice(0, 400))}</span>` : ''}`);
+      // 三个显式单元格（级别 / 模块 / 正文）：CSS 网格是 3 列，正文必须是**独立元素**——
+      // 之前 `[模块] 正文` 是一段连续文本，会被当成同一个网格项塞进窄列，长行折成一条竖线
+      const line = el('div', 'log-row',
+        `<span class="lv-${row.level.toUpperCase()}">${row.level.toUpperCase()}</span>`
+        + `<span class="lm">[${escapeHtml(String(row.module || ''))}]</span>`
+        + `<span class="lmsg">${escapeHtml(row.msg)}${row.data && row.data.stack ? `<br><span class="lstk">${escapeHtml(String(row.data.stack).slice(0, 400))}</span>` : ''}</span>`);
       box.appendChild(line);
     }
     while (box.children.length > 400) box.removeChild(box.firstChild);
