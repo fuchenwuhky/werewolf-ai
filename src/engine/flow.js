@@ -357,6 +357,40 @@ function wolfVis(game) { return game.nightWolves().map((p) => p.seat); }
 
 function randomOf(arr, rnd = Math.random) { return arr[Math.floor(rnd() * arr.length)]; }
 
+/**
+ * 狼刀计票（纯函数，便于确定性测试）。
+ *
+ * 规则：每人一票；**若狼王那一票所指目标本身已得票，则该目标再 +1**（等价于狼王票按两票计）。
+ * 为什么这样加权：用户批准的"首领狼在平票情况下有更高的权重"——三方各投一人时，
+ * 首领狼的一票就把平票打破，不再靠随机抽签。
+ * 注意 `randomOf` 无论候选多少个都恰好消耗一次 `rnd()`（见其实现），所以加权**不改变随机数消耗次数**。
+ *
+ * @param {{seat:number,target:number}[]} votes 各狼的票（target=0 表示空刀，不计入）
+ * @param {number|null} kingSeat 存活狼王的座位；无狼王/已出局传 null
+ * @returns {Record<string, number>} 目标座位 → 票数
+ */
+function tallyWolfKill(votes, kingSeat) {
+  const tally = {};
+  for (const v of votes) if (v.target) tally[v.target] = (tally[v.target] || 0) + 1;
+  if (kingSeat != null) {
+    const kv = votes.find((v) => v.seat === kingSeat);
+    if (kv && kv.target && tally[kv.target]) tally[kv.target] += 1;
+  }
+  return tally;
+}
+
+/** 僵局护栏阈值：连续这么多天（昼+夜）无人出局即结算 */
+const STALE_DAYS = 3;
+
+/**
+ * 僵局护栏计数（纯函数，便于确定性测试）。
+ * @returns {{staleDays:number, settle:boolean}} 新的连续无出局天数，以及是否应当结算
+ */
+function advanceStaleDays(lastAliveCount, aliveNow, staleDays) {
+  const next = aliveNow === lastAliveCount ? staleDays + 1 : 0;
+  return { staleDays: next, settle: next >= STALE_DAYS };
+}
+
 /** 从 anchor 的下家开始，沿 dir(+1顺/-1逆) 环绕存活座位 */
 function buildSpeechOrder(game, anchor, dir, sheriffLast) {
   const alive = game.aliveSeats();
@@ -698,18 +732,11 @@ async function wolfStep(game) {
   }
   votes.sort((a, b) => a.seat - b.seat); // 公布顺序按座位
   for (const v of votes) game.emit('wolf_kill_vote', { actor: v.seat, visibleTo: vis, data: { target: v.target } });
-  const tally = {};
-  for (const v of votes) if (v.target) tally[v.target] = (tally[v.target] || 0) + 1;
   // 狼王平票加权（用户批准：首领狼在平票情况下有更高的权重）。
-  // 狼王 = wolfking（roles.js:39；12 人进阶场为"狼王+3狼"），白狼王 whitewolfking 不参与这条。
-  // 语义：狼王那一票所指目标已得票 → 给它再 +1（等价于狼王那一票按两票计）。
-  // 加权后仍平票 → 仍走下面的 randomOf 收敛，所以"必然收敛"这个性质没有被破坏。
-  // 不额外发事件：加权属于狼队内部信息，公布结果的那条 wolf_kill 已经足够。
-  const king = wolves.find((w) => w.role === 'wolfking');
-  if (king) {
-    const kv = votes.find((v) => v.seat === king.seat);
-    if (kv && kv.target && tally[kv.target]) tally[kv.target] += 1;
-  }
+  // 狼王 = wolfking（roles.js:39；12 人进阶场为"狼王+3狼"），白狼王 whitewolfking 不参与。
+  // 计票抽成纯函数 tallyWolfKill 是为了可确定性测试（见 test/rules-tuning.test.js）。
+  const kingPlayer = wolves.find((w) => w.role === 'wolfking');
+  const tally = tallyWolfKill(votes, kingPlayer ? kingPlayer.seat : null);
   let final = 0;
   const entries = Object.entries(tally);
   if (entries.length) {
@@ -1280,11 +1307,11 @@ async function runGameInner(game, resumeFrom = null) {
     // 取舍：仓库的胜负域是 'good' | 'wolf'（无"平局"概念），故沿用与 40 天保险同一形状的判定，
     // 只把原因写清楚；若要真正引入"平局"，需同时改前端结束文案与评估指标（另议）。
     const aliveNow = game.aliveSeats().length;
-    if (aliveNow === lastAliveCount) staleDays += 1;
-    else staleDays = 0;
+    const guard = advanceStaleDays(lastAliveCount, aliveNow, staleDays);
+    staleDays = guard.staleDays;
     lastAliveCount = aliveNow;
-    if (staleDays >= 3) {
-      setWinner(game, { winner: 'good', reason: '连续 3 天无人出局，判定好人阵营获胜（僵局护栏）。' });
+    if (guard.settle) {
+      setWinner(game, { winner: 'good', reason: `连续 ${STALE_DAYS} 天无人出局，判定好人阵营获胜（僵局护栏）。` });
       break;
     }
   }
@@ -1296,4 +1323,4 @@ async function runGameInner(game, resumeFrom = null) {
 
 module.exports = { runGame, validatePayload, secretVote, buildSpeechOrder, checkWinWithPending,
   // 供单元测试直接驱动内部阶段
-  _internals: { askValidated, nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS } };
+  _internals: { askValidated, nightPhase, resolveNightDeaths, dawnPhase, settleDeath, electionPhase, speechPhase, votePhase, exile, handleExplode, consumeExplodeRequest, handleDuel, consumeDuelRequest, daySkillCheck, witchStep, guardStep, wolfStep, seerStep, admirerStep, dreamerStep, wolfbeautyStep, crowStep, NIGHT_STEPS, TASK_VALIDATORS, tallyWolfKill, advanceStaleDays, STALE_DAYS } };
