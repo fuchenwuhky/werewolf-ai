@@ -155,6 +155,12 @@ async function view(gameId, token) {
 
   const v = await view(gameId, token);
   me.ended = me.ended || { finished: !!v.finished, winner: v.winner, winReason: v.winReason, timeout: Date.now() >= deadline };
+  // --terminate-at-end：跑器提前收工（例如冒烟局只想走几步）时必须把对局终止掉，
+  // 否则对局会在后台继续跑，白烧额度（真 API 下这是真金白银）。
+  if (arg['terminate-at-end'] && !me.ended.finished) {
+    await api('POST', `/api/games/${gameId}/terminate`, { token });
+    me.ended = { ...me.ended, terminatedByRunner: true };
+  }
   me.gameId = gameId;
   me.seat = mySeat;
   me.mock = MOCK;
