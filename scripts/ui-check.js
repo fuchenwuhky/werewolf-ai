@@ -122,6 +122,23 @@ class Browser {
    *  被别的图层压住、pointer-events:none、坐标算错这类问题它一律测不出来。
    *  设置页复选框"点了勾不上"那次，状态其实一直是翻转的，问题在视觉上，
    *  但真被别的层挡住时也需要这个方法才能复现。 */
+  /** 真实鼠标悬停（CDP Input 事件）：`:hover` 样式只对真事件生效，合成 el.dispatchEvent 查不出来 */
+  async realHover(sel) {
+    const box = await this.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return null;
+      el.scrollIntoView({ block: 'center' });
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    if (!box) return 'NOT_FOUND';
+    await this.send('Input.dispatchMouseEvent',
+      { type: 'mouseMoved', x: box.x, y: box.y, button: 'none', clickCount: 0 },
+      this.sessionId);
+    return 'OK';
+  }
+
+  /** 真实鼠标点击（CDP Input 事件）。 */
   async realClick(sel) {
     const box = await this.eval(`(() => {
       const el = document.querySelector(${JSON.stringify(sel)});
@@ -262,6 +279,24 @@ class Browser {
     await b.shot(path.join(SHOTS, '02b-setup-lower.png'));
     await b.eval(`document.querySelector('.setup-scroll')?.scrollTo(0, 0)`);
     await sleep(300);
+
+    // ---- 3.35 下拉框箭头：悬停/聚焦时也必须还在（background 简写曾把 background-image 顶掉） ----
+    {
+      const before = await b.eval(`(() => {
+        const s = document.querySelector('#board-template');
+        if (!s) return null;
+        return { arrow: getComputedStyle(s).backgroundImage, cursor: getComputedStyle(s).cursor };
+      })()`);
+      check('下拉框自带内嵌箭头（默认态）', !!(before && /url\(/.test(before.arrow)), before ? before.arrow.slice(0, 60) : 'NOT_FOUND');
+      await b.realHover('#board-template');
+      await sleep(300);
+      const hovered = await b.eval(`getComputedStyle(document.querySelector('#board-template')).backgroundImage`);
+      check('真实鼠标悬停后箭头仍在（简写不得顶掉 background-image）', /url\(/.test(hovered), hovered.slice(0, 60));
+      await b.eval(`document.querySelector('#board-template').focus()`);
+      await sleep(200);
+      const focused = await b.eval(`getComputedStyle(document.querySelector('#board-template')).backgroundImage`);
+      check('聚焦后箭头仍在', /url\(/.test(focused), focused.slice(0, 60));
+    }
 
     // ---- 3.4 手机端：试玩开关必须在板子页一眼可见（P2-b：原来只藏在设置弹窗最底下） ----
     {

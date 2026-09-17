@@ -106,3 +106,24 @@ test('P1：推送看门狗必须大于服务端心跳周期的 2 倍', () => {
   assert.ok(/Date\.now\(\) - \(state\.lastStreamAt \|\| 0\) > STREAM_DEAD_MS/.test(app),
     '看门狗比较必须使用 STREAM_DEAD_MS 常量，不能留裸数字');
 });
+
+/**
+ * P2-a 守卫：推送降级必须是**可恢复**的，提示必须是**单例**。
+ *
+ * 真实故障（用户实测报告）：SSE 一旦被判死就 stopStream + startPollFallback，
+ * 从此再也回不到推送通道；而且每次断线都用 appendSys 往事件流里追加一条
+ * "已切换为轮询"，重连成功也无从体现 —— 横幅永久留在事件流里，玩家分不清当前走的是哪条通道。
+ * 这里做源码级守卫（渲染行为由 ui:check 覆盖），防止哪天又被改回单向降级。
+ */
+test('P2-a：推送降级可恢复（定时重连 + 单例状态条），不再单向 append 横幅', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+  assert.match(app, /function setStreamStatus\(/, '必须有单例状态条函数');
+  assert.ok(!/appendSys\('.*推送(连接无响应|通道中断)/.test(app), '降级提示不能再走 appendSys（会永久留在事件流里）');
+  assert.match(app, /setStreamStatus\('⚠️ 推送/, '两处断线都应当更新状态条');
+  // 降级后要定时重连，且连上要撤掉提示
+  const poll = /function startPollFallback\(\)[\s\S]*?\n}/.exec(app);
+  assert.ok(poll, '应当能定位 startPollFallback');
+  assert.match(poll[0], /state\.streamRetry = setInterval/, 'startPollFallback 里必须安排定时重连');
+  assert.match(poll[0], /startStream\(\)\) setStreamStatus\(null\)/, '重连成功必须撤掉降级提示');
+  assert.match(app, /function stopPolling\(\) \{\s*\n\s*if \(state\.streamRetry\)/, '退出对局必须清掉重连定时器');
+});

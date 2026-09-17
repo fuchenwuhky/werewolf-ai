@@ -138,3 +138,29 @@ test('文本文件必须都是合法 UTF-8（PowerShell Add-Content 曾按 GBK �
   walk(ROOT);
   assert.deepStrictEqual(bad, [], `非 UTF-8 文件：${bad.join('、')}`);
 });
+
+/**
+ * 4) 简写与长写混用导致的**隐式重置** —— 两次真实故障同源，必须钉住：
+ *    · 复选框"点了勾不上"：同一块里先 `background` 简写、后又 `background-image`，
+ *      简写里的填充色被顶掉 → 填充透明 → 深色勾在深底上看不见；
+ *    · 下拉框箭头消失：`select:hover` / `:focus` 用 `background` 简写，
+ *      把上面那条内嵌金色箭头（background-image）一起重置，一悬停/一聚焦箭头就凭空没了。
+ * 规则：① 同一块内不得同时出现 background 简写与 background-image 长写；
+ *      ② 自身带箭头的 select，其 hover/focus 只能用 background-color。
+ */
+test('样式表：background 简写不得顶掉 background-image（复选框填充 / 下拉箭头两次事故同源）', () => {
+  const problems = [];
+  for (const f of CSS_FILES) {
+    for (const { sel, line, props } of collectSelectors(read(f))) {
+      // ① 同一块内简写 + 长写并存：简写会重置长写
+      if (props.has('background') && props.has('background-image')) {
+        problems.push(`${f}:${line} 「${sel}」同一块里同时写了 background 简写与 background-image`);
+      }
+      // ② 带内嵌箭头的 select（箭头规则见 style.css「下拉：去掉原生箭头」），hover/focus 不得用简写
+      if (/\bselect\b/.test(sel) && /:hover|:focus/.test(sel) && props.has('background')) {
+        problems.push(`${f}:${line} 「${sel}」用了 background 简写 —— 会把内嵌箭头一起重置（应用 background-color）`);
+      }
+    }
+  }
+  assert.deepStrictEqual(problems, [], `简写/长写混用：\n${problems.join('\n')}`);
+});

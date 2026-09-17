@@ -370,16 +370,26 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
 }
 .card textarea, .modal .mbody textarea, textarea.field { height: auto; min-height: 84px; padding: var(--sp-2) var(--sp-3); line-height: 1.6; resize: vertical; }
 .card input:not([type=checkbox]):not([type=radio]):hover,
-.card select:hover, .card textarea:hover,
+.card textarea:hover,
 .modal .mbody input:not([type=checkbox]):not([type=radio]):hover,
-.modal .mbody select:hover, .modal .mbody textarea:hover,
+.modal .mbody textarea:hover,
 .field:hover { border-color: var(--line-strong); background: rgba(11, 17, 32, .9); }
+/* 下拉单独写 hover/focus：只能用 background-color，**不能用 background 简写** ——
+   简写会把上面那条内嵌金色箭头（background-image）一起重置掉，于是一悬停/一聚焦箭头就凭空消失。
+   与复选框"勾不上"同源：简写与长写混用造成的隐式重置。颜色值与上面逐字一致，视觉不变。 */
+.card select:hover, .modal .mbody select:hover, select.field:hover {
+  border-color: var(--line-strong); background-color: rgba(11, 17, 32, .9);
+}
 .card input:not([type=checkbox]):not([type=radio]):focus,
-.card select:focus, .card textarea:focus,
+.card textarea:focus,
 .modal .mbody input:not([type=checkbox]):not([type=radio]):focus,
-.modal .mbody select:focus, .modal .mbody textarea:focus,
+.modal .mbody textarea:focus,
 .field:focus {
   outline: none; border-color: var(--gold); background: rgba(13, 20, 38, .95);
+  box-shadow: var(--inset-field), var(--ring-soft);
+}
+.card select:focus, .modal .mbody select:focus, select.field:focus {
+  outline: none; border-color: var(--gold); background-color: rgba(13, 20, 38, .95);
   box-shadow: var(--inset-field), var(--ring-soft);
 }
 .card input::placeholder, .modal .mbody input::placeholder, textarea::placeholder, .field::placeholder { color: #616a89; }
