@@ -429,6 +429,42 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           throw err;
         }
 
+        // ---- 上游网关可能忽略 stream:true，直接回 HTTP 200 + 一个 JSON 错误体 ----
+        // 实测（P1 假 LLM 注入）：配额错误就是这么来的。若按 SSE 解析，这种响应只会被当成
+        // "没有内容" → 校验失败 → 重试 → 永远重复（单局空转上万次调用，真实额度按次烧掉）。
+        // 用 Content-Type 判断（比嗅探首字节稳，也不必预读流）：
+        //   · 是错误体 → 按业务码分类，致命就走既有的暂停路径；
+        //   · 只是 JSON 而不是 SSE（网关改造过响应）→ 退回非流式重试一次，让非流式分支正常处理。
+        if (useStream) {
+          const ctype = String(res.headers.get('content-type') || '').toLowerCase();
+          if (ctype.includes('application/json')) {
+            const data = await res.json().catch(() => null);
+            const cls = classifyFailure(res.status, JSON.stringify(data || {}), res.headers);
+            if (data && (data.error || data.code)) {
+              if (cls.fatal) {
+                if (logger) logger.error('llm', `${label} 致命错误（HTTP ${res.status} + 业务码 ${cls.kind}/${cls.code}）：${cls.message}`, { task: meta.task, seat: meta.seat });
+                const fatal = new LlmFatalError(cls);
+                fatal.status = res.status;
+                throw fatal;
+              }
+              const berr = new Error(`LLM 响应体错误（HTTP ${res.status} ${cls.code}）：${cls.message.slice(0, 300)}`);
+              berr.retryable = cls.retryable;
+              berr.retryAfterMs = cls.retryAfterMs;
+              berr.rateLimited = !!cls.rateLimited;
+              throw berr;
+            }
+            if (streamMode !== 'off') {
+              streamMode = 'off';
+              attempts--; // 协议降级不消耗重试预算
+              if (logger) logger.warn('llm', `${label} 流式请求收到 JSON 而非 SSE（网关改造过响应）→ 退回非流式重试`);
+              const derr = new Error('响应体不是 SSE，退回非流式重试');
+              derr.retryable = true;
+              derr.noBackoff = true;
+              throw derr;
+            }
+          }
+        }
+
         // ---- 流式 / 非流式两条路径，统一产出 content / reasoning / usage / finishReason ----
         if (useStream && (!res.body || typeof res.body.getReader !== 'function')) {
           // 网关/代理把响应体改造过，读不到流：全局退回非流式（只发生一次）

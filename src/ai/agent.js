@@ -323,6 +323,22 @@ class Agent {
       plan.cheap = true;
     }
     this.lastPlan = plan; // 上帝面板可见：这次为什么给了这个档位
+    // 单局调用次数硬上限（P1 真实对局测试发现的护栏）。
+    // 为什么必须有：既有的预算保护是**按时间**算的（decisionTotalMs 180s），而成本是**按次数**算的。
+    // 实测（假 LLM 注入"狼队永远凑不出多数"这种僵持）时，秒回的模型在 25 秒内把单局调用刷到近 6000 次
+    // —— 时间预算完全拦不住，真金白银的额度却按次烧掉了。这里放一道**次数**护栏：
+    // 超限即按"致命"抛出，走既有的暂停路径（不判负、可恢复、留有排查现场），而不是让对局继续空转。
+    const callLimit = Number(this.llmCfg && this.llmCfg.maxCallsPerGame) || 0;
+    if (callLimit > 0 && g.llmStats.calls >= callLimit) {
+      const msg = `本局 AI 调用次数已达上限（${callLimit} 次）——疑似僵持或模型异常，已中止本局以免继续消耗额度`;
+      if (g.logger) g.logger.error('ai', msg);
+      // 为什么是"中止"而不是"暂停"：暂停依赖断点锚点才能恢复，而锚点只在白天/夜晚**边界**拍摄；
+      // 实测僵持发生在夜间投刀环节（没有锚点），此时暂停 = 谁也恢复不了的死局。
+      // 这里走既有的 terminate → forceEnded → runGame 优雅结算（不判负、亮牌、写明原因），
+      // 玩家看到的是"本局因调用异常结束"，可以直接开下一局，而不是一个永远转圈的对局。
+      try { g.terminate(msg); } catch (_) { /* terminate 会抛出以解栈，交给上层结算 */ }
+      throw new Error(msg);
+    }
     // 直播缓冲在**请求真的开始跑**时才建（onStart）：扇出提交时不会出现"还没轮到就已经在打字"，
     // 也不会几路增量混进同一个缓冲（多 Key 下确实会同时有好几路）。
     let liveEntry = null;

@@ -57,9 +57,16 @@ function craftReply(prompt) {
   for (const m of text.matchAll(/\{[^{}]{0,200}\}/g)) {
     if (/"[a-zA-Z_]+"\s*:/.test(m[0])) template = m[0];
   }
-  // 2. 座位号：提示词里的候选座位（取最小，保证确定性）
-  const seats = (text.match(/\b\d{1,2}\b/g) || []).map(Number).filter((n) => n >= 1 && n <= 24);
-  const seat = seats.length ? Math.min(...seats) : 1;
+  // 2. 自己的座位（提示词里写"你（4 号）"），投票/技能不能选自己 —— 否则永远非法，对局原地打转
+  const me = /你[（(]\s*(\d{1,2})\s*号/.exec(text);
+  const mySeat = me ? Number(me[1]) : null;
+  // 3. 候选座位：优先取"候选/可选/存活/目标"附近的数字列表（最近一次出现的优先）
+  const near = [...text.matchAll(/(?:候选|可选|存活|可投|目标|票|刀口)[^\d]{0,40}((?:\d{1,2}[\s,、，]+){1,20}\d{1,2})/g)];
+  const pool = near.length
+    ? (near[near.length - 1][1].match(/\d{1,2}/g) || []).map(Number)
+    : (text.match(/\b\d{1,2}\b/g) || []).map(Number);
+  const valid = pool.filter((n) => n >= 1 && n <= 24 && n !== mySeat);
+  const seat = valid.length ? Math.min(...valid) : (pool.length ? Math.min(...pool) : 1);
   let body;
   if (template) {
     // 把模板里的值替换成可用的：字符串→一句短发言，数字→座位号，布尔→false
@@ -79,7 +86,10 @@ function craftReply(prompt) {
 
 function sse(res, obj) { res.write(`data: ${JSON.stringify(obj)}\n\n`); }
 function usageOf(prompt, content, cached) {
-  const pt = rough(prompt) + 800; // 假装有系统提示词开销
+  // 基准 4500 是刻意的：真实对局的 prompt 在 4000~11000 tokens 之间，
+  // 而 E2 的"未命中前缀缓存"告警有 promptTokens > 4000 的前置条件 —— 假若只报几百，
+  // 那条路径根本触发不到，测了等于没测。
+  const pt = rough(prompt) + 4500;
   return {
     prompt_tokens: pt,
     completion_tokens: rough(content),
@@ -111,12 +121,9 @@ async function handleCompletions(req, res, bodyRaw) {
   }
   if (mode === 'http500') return json(500, { error: { message: 'fake upstream 500' } });
   if (mode === 'quota200') {
-    // 有的服务商把错误塞在 HTTP 200 的响应体里 —— 应用必须也能识别
-    if (!stream) return json(200, { code: '1308', message: '当前用量已达套餐上限' });
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
-    sse(res, { code: '1308', message: '当前用量已达套餐上限' });
-    res.write('data: [DONE]\n\n');
-    return res.end();
+    // 真实形态：上游网关**忽略 stream:true**，照样回 HTTP 200 + 一个 JSON 错误体
+    // （应用的非流式分支只看 data.error，流式分支则要能识别"占位不是 SSE"这一点）
+    return json(200, { error: { code: '1308', message: '当前用量已达套餐上限' } });
   }
   if (mode === 'slow-first-token') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
