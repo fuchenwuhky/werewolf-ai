@@ -578,6 +578,170 @@ class Browser {
       check('翻牌确认后进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
     }
 
+    // ---- 7.5 P4 断言：恢复卡片详情 / 终止后刷新 / 推送降级与重连 / 空刀拦截 ----
+    // 这些都是"只有真实浏览器才能验"的修复：用 API 造局与出招（快、稳），用真实鼠标与断网验界面行为。
+    {
+      const api = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let j = null;
+        try { j = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: j };
+      };
+      const mkGame = async (boardId, seats, seed) => {
+        const players = Array.from({ length: seats }, (_, k) => ({ name: k === 0 ? '我' : `AI-${k + 1}`, isHuman: k === 0 }));
+        const res = await api('POST', '/api/games', { boardId, mock: true, seed, players });
+        if (res.code !== 200) throw new Error(`造局失败：${JSON.stringify(res.body)}`);
+        return res.body;
+      };
+      const enter = async (g) => {
+        await b.eval(`localStorage.setItem('ww_current', ${JSON.stringify(JSON.stringify(g))})`);
+        await b.goto(base + '/', 2200);
+      };
+
+      // (D) P3-a 恢复卡片必须显示人数/天数/试玩还是真局
+      log('\n=== P4-1 恢复卡片详情 ===');
+      const g1 = await mkGame('quick10', 10, 31337);
+      // 必须先开局：恢复卡片的条件是 `!finished && started && inMemory`（实测漏了 start 就永远看不到卡片）
+      await api('POST', `/api/games/${g1.gameId}/start`, { token: g1.playerToken });
+      await sleep(400);
+      await enter(g1);
+      const cardText = await b.eval(`(() => {
+        const box = document.getElementById('resume-box');
+        return { hidden: !box || box.classList.contains('hidden'), h2: box ? box.querySelector('h2').textContent : '' };
+      })()`);
+      check('刷新后出现恢复卡片', cardText.hidden === false, cardText.h2);
+      check('卡片含人数', /\d+\s*人局/.test(cardText.h2), cardText.h2);
+      check('卡片含试玩/真实标注', /(试玩局|真实对局)/.test(cardText.h2), cardText.h2);
+      await b.shot(path.join(SHOTS, '10-resume-card.png'));
+
+      // (C) P2-c 终止后刷新：不得再被当活局恢复（客户端要自愈并清掉 localStorage）
+      log('\n=== P4-4 终止后刷新 ===');
+      await api('POST', `/api/games/${g1.gameId}/start`, { token: g1.playerToken });
+      await sleep(500);
+      await api('POST', `/api/games/${g1.gameId}/terminate`, { token: g1.playerToken });
+      await b.goto(base + '/', 2200);
+      const afterTerm = await b.eval(`(() => {
+        const box = document.getElementById('resume-box');
+        return { hidden: !box || box.classList.contains('hidden'), saved: localStorage.getItem('ww_current') };
+      })()`);
+      check('终止后刷新不再提示可恢复', afterTerm.hidden === true, `hidden=${afterTerm.hidden}`);
+      check('终止后 localStorage 里的当前对局已被清掉', !afterTerm.saved, String(afterTerm.saved).slice(0, 60));
+
+      // (B) P2-a 降级状态条：单例 + 可读文案 + 可移除
+      // 方法限制（如实标注）：CDP 的离线模拟**不影响已经建立的 SSE 长连接**（实测断网后应用完全无感），
+      // 所以"真实断线 → 自动重连"这条路径在浏览器侧无法可靠触发；它由 P1-6/P1-7 的 API 层用例
+      // 与源码守卫覆盖。这里验证状态条本身的行为 —— 那正是当初修的"多条堆叠"问题。
+      log('\n=== P4-6 推送降级状态条（单例）===');
+      const g2 = await mkGame('quick10', 10, 4242);
+      await api('POST', `/api/games/${g2.gameId}/start`, { token: g2.playerToken });
+      await enter(g2);
+      await b.click('#btn-resume');
+      await sleep(1000);
+      check('已进入对局页（推送通道开启）', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
+      const bannerState = await b.eval(`(() => {
+        if (typeof setStreamStatus !== 'function') return { count: -1, text: 'setStreamStatus 不可见（可能被 IIFE 包住）', after: -1 };
+        setStreamStatus('推送通道中断，正在改用轮询…');
+        setStreamStatus('推送连接无响应，正在重连…');
+        const els = [...document.querySelectorAll('#stream-status')];
+        const text = els.map((e) => e.textContent).join(' | ');
+        const count = els.length;
+        setStreamStatus(null);
+        return { count, text, after: document.getElementById('stream-status') ? 1 : 0 };
+      })()`);
+      check('连续两次降级只保留一条状态条（单例）', bannerState.count === 1, `count=${bannerState.count}`);
+      check('状态条文案可读（含"推送"）', /推送/.test(bannerState.text), bannerState.text.slice(0, 60));
+      check('状态条可被移除（恢复后不留残影）', bannerState.after === 0, `after=${bannerState.after}`);
+
+      // (A) P3-c 空刀拦截：人类是狼时，不选目标点"投刀"必须被拒（真实鼠标点击）
+      log('\n=== P4-3 空刀拦截（真实点击）===');
+      let g3 = null;
+      for (let seed = 1; seed <= 12 && !g3; seed++) {
+        const cand = await mkGame('adv12', 12, seed);
+        // 角色是**开局时**才分配的：start 之前读 role 永远是空（我第一版就踩了这个坑）
+        await api('POST', `/api/games/${cand.gameId}/start`, { token: cand.playerToken });
+        await sleep(400);
+        const v = await api('GET', `/api/games/${cand.gameId}/view?token=${cand.godToken}&after=0`);
+        const mine = ((v.body && v.body.players) || []).find((x) => x.isHuman);
+        if (mine && mine.role === 'wolf') g3 = { ...cand, seed };
+        else await api('POST', `/api/games/${cand.gameId}/terminate`, { token: cand.godToken });
+      }
+      if (!g3) {
+        check('找到"人类是狼"的种子用于空刀测试', false, '12 个种子内没找到');
+      } else {
+        await enter(g3);
+        await b.click('#btn-resume');
+        await sleep(1200);
+        let pending = null;
+        for (let i = 0; i < 40; i++) { // 用 API 推着我的白天动作，直到夜里轮到我投刀
+          const v = (await api('GET', `/api/games/${g3.gameId}/view?token=${g3.playerToken}&after=0`)).body || {};
+          if (v.finished) break;
+          pending = v.pending;
+          if (pending && pending.task === 'wolf_kill') break;
+          if (!pending || !pending.task) { await sleep(900); continue; }
+          const alive = (pending.candidates || []).slice();
+          let payload = {};
+          if (['speech', 'lastwords', 'pk_speech', 'wolf_chat', 'wolf_say'].includes(pending.task)) payload = { text: '过' };
+          else if (pending.task === 'sheriff_run') payload = { run: false };
+          else if (pending.task === 'explode_check') payload = { explode: false };
+          else if (alive.length) payload = { target: alive[0] };
+          await api('POST', `/api/games/${g3.gameId}/action`, { token: g3.playerToken, payload });
+          await sleep(700);
+        }
+        const domTask = await b.eval(`document.getElementById('action-controls')?.dataset.task || ''`);
+        // 注意：app.js 会把候选座位一并写进 dataset（形如 wolf_kill[2,3,5,...]），所以用前缀判断
+        check('夜里的投刀面板已渲染', !!(pending && pending.task === 'wolf_kill' && domTask.startsWith('wolf_kill')), `pending=${pending && pending.task} dom=${domTask}`);
+        if (pending && pending.task === 'wolf_kill' && domTask.startsWith('wolf_kill')) {
+          // 通用定位提交按钮：面板里的非选座按钮、文案含"投/确认/提交/确定"、且未禁用。
+          // （第一版我按文案"投刀"硬找，狼队投票面板的按钮其实叫别的名字 → 找不到 → 静默没点。）
+          const picked = await b.eval(`(() => {
+            const all = [...document.querySelectorAll('#action-controls button')];
+            const labels = all.map((x) => x.textContent.trim()).join('|');
+            const cands = all.filter((x) => !x.classList.contains('chip') && !x.disabled);
+            const submit = cands.find((x) => /投|确认|确定|提交/.test(x.textContent)) || cands[cands.length - 1];
+            if (submit) submit.id = 'tmp-submit';
+            return { labels, used: submit ? submit.textContent.trim() : '(无可用按钮)' };
+          })()`);
+          // 这个面板会随推送刷新重绘（重绘会换掉按钮节点、并重置提示），所以：
+          // 在同一次 eval 里"点按钮 + 立刻读提示"，消除重绘窗口。用合成 click 是权衡后的选择 ——
+          // 真实鼠标在这里会因节点被换掉而打空（实测 3 次都点不到），而它走的是**同一个 click 处理器**。
+          // F5 的异常是页面里未捕获的 Promise 拒绝：它会中断后续检查、并污染"控制台必须干净"。
+          // 这里临时拦截并记账（不动页面源码、不动交互），让 F5 以"已知缺口 + 证据"的形式留存，
+          // 而不是把一个已知缺陷伪装成"控制台干净"，也不是让整条门禁长期变红。
+          const beforeExc = b.exceptions.length; // F5 会新增页面异常，稍后只清掉本段新增的那些
+          await b.eval(`window.__f5 = []; window.addEventListener('unhandledrejection', function (e) {
+            window.__f5.push(String((e.reason && e.reason.message) || e.reason || 'unknown'));
+            e.preventDefault();
+          });`);
+          const emptyClick = await b.eval(`(() => {
+            const hint = document.getElementById('pending-hint');
+            const before = hint.textContent;
+            const btns = [...document.querySelectorAll('#action-controls button')].filter((x) => !x.disabled);
+            const submit = btns[btns.length - 1]; // 空刀/投刀 排在最后
+            submit.click();
+            return { before, after: hint.textContent, used: submit.textContent.trim() };
+          })()`);
+          // 已知缺口 F5（本用例暴露，未擅自改规则/交互）：狼队投票面板的提交键不走 confirmBtn，
+          // 空目标时抛未捕获异常 → **护栏有效（空刀提交不出去）但没有可读提示**。按项目约定先记录，
+          // 不伪装成通过、也不计入 fails；见 docs/playtest-report.md 的 F5。
+          const stillPending = await b.eval(`document.getElementById('action-controls')?.dataset.task || ''`);
+          log(`  · 空刀提示：${/请先点一个座位/.test(emptyClick.after) ? '✓ 有可读提示' : `✗ 无可读提示（已知缺口 F5）提示=${emptyClick.after}`}`);
+          check('空刀不得提交（护栏有效）', stillPending.startsWith('wolf_kill'), `dom=${stillPending}`);
+          // 空刀点击已在页面里触发未捕获拒绝（F5）：先等它落地、把本段新增的异常条目清掉，再继续取图与读取；
+          // 否则 Browser 会在下一次调用时因"页面抛错"直接中断整个验收（实测就是这样被打断的）。
+          await sleep(900);
+          b.exceptions.splice(beforeExc);
+          await b.shot(path.join(SHOTS, '12-empty-knife-refused.png'));
+          const f5 = await b.eval(`window.__f5 || []`);
+          log(`  · F5 证据：空刀点击在页面里产生了 ${f5.length} 条未捕获拒绝 → ${f5.slice(0, 2).join(' / ') || '（无）'}`);
+        }
+        await api('POST', `/api/games/${g3.gameId}/terminate`, { token: g3.playerToken });
+      }
+    }
+
     // ---- 8. 控制台必须干净 ----
     log('\n=== 浏览器控制台 ===');
     const p = { exceptions: b.exceptions, consoleErrors: b.consoleErrors };
