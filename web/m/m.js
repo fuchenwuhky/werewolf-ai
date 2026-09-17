@@ -211,7 +211,7 @@ function wireSettings() {
       <label>API Key<input id="ms-key" type="password" placeholder="${cfg.hasKey ? '已保存（' + cfg.apiKeyMasked + '），留空不改' : 'sk-...'}"></label>
       <label>更多 API Key（可选，一行一个；多一把多一条并发通道）
         <textarea id="ms-keys" rows="2" placeholder="${cfg.extraKeys > 0 ? '已保存 ' + cfg.extraKeys + ' 把，留空不改' : '留空则只用上面那一把'}"></textarea></label>
-      <div class="hint">当前 ${cfg.channels || 1} 条并发通道${(cfg.channels || 1) > 1 ? '（多 Key 上限约 -19%，不是减半）' : '（单 Key：AI 之间严格串行，最稳）'}</div>
+      <div class="hint">当前 ${cfg.channels || 1} 条并发通道${(cfg.channels || 1) > 1 ? '（多 Key 上限约 -23%，不是减半）' : '（单 Key：AI 之间严格串行，最稳）'}</div>
       <label>节奏档位（一次设定思考强度/反思频率/上下文）
         <select id="ms-pace">${paceOpts}</select></label>
       <div class="hint" id="ms-pace-hint"></div>

@@ -646,6 +646,11 @@ async function wolfStep(game) {
   }
 
   // ---------- 投刀（多数决，平票随机；人类狼的投票界面在收票开始时就绪，AI 逐个思考） ----------
+  //
+  // 同样是"**同时指刀**"：讨论已经在上面结束了，最后这一票不该被队友的票带节奏。
+  // 旧实现顺序询问 AI 狼、问一个公布一个（`wolf_kill_vote` 只给狼队可见，是队内信息、不算规则泄露，
+  // 但会让后表态的狼"跟着前面的票走"，而且人类狼本来就是"看不到别人票"的 —— 口径不一致）。
+  // 现在统一为"先收完所有票、再按座位公布"，人类狼与 AI 狼的信息条件完全一致，且可以并发。
   const killReq = { task: 'wolf_kill', candidates: prey, allowNone };
   const humanWolf = wolves.find((w) => w.isHuman);
   const humanJob = humanWolf
@@ -655,11 +660,15 @@ async function wolfStep(game) {
       )
     : null;
   const votes = [];
-  for (const w of wolves) {
-    if (w.isHuman) continue;
+  const aiWolfVoters = wolves.filter((w) => !w.isHuman);
+  const askKill = async (w) => {
     const v = await askValidated(game, w.seat, killReq, fb(() => ({ target: allowNone ? 0 : prey[0] })));
     votes.push({ seat: w.seat, target: v.target });
-    game.emit('wolf_kill_vote', { actor: w.seat, visibleTo: vis, data: { target: v.target } });
+  };
+  if (game.parallelLlm && aiWolfVoters.length > 1) {
+    await Promise.all(aiWolfVoters.map(askKill));
+  } else {
+    for (const w of aiWolfVoters) await askKill(w);
   }
   if (humanJob) {
     const r = await humanJob;
@@ -668,8 +677,9 @@ async function wolfStep(game) {
       r.v = { target: 0 };
     }
     votes.push({ seat: humanWolf.seat, target: r.v.target });
-    game.emit('wolf_kill_vote', { actor: humanWolf.seat, visibleTo: vis, data: { target: r.v.target } });
   }
+  votes.sort((a, b) => a.seat - b.seat); // 公布顺序按座位
+  for (const v of votes) game.emit('wolf_kill_vote', { actor: v.seat, visibleTo: vis, data: { target: v.target } });
   const tally = {};
   for (const v of votes) if (v.target) tally[v.target] = (tally[v.target] || 0) + 1;
   let final = 0;
@@ -870,14 +880,30 @@ async function electionPhase(game) {
   if (game.badgeSwallowed) return 'ok';
   game.emit('phase', { data: { title: '警长竞选' } });
   // 1. 上警报名
-  const candidates = [];
-  for (const p of game.alivePlayers()) {
+  //
+  // 真实规则是"**同时举手**"：谁上警不该被别人的选择影响。但旧实现是顺序询问、问一个公布一个，
+  // 于是第 12 位报名者看得到前 11 位谁上警了（`sheriff_run` 不在 NOISE_TYPES 里，是真的进了 AI 上下文）。
+  // 现在**先问完所有人、再统一公布**：既符合规则，又让这些调用可以并发（多 Key 时不再排队）。
+  // 单通道与多通道走同一条"先收集后公布"的路径，保证加不加 Key 都是同一套信息。
+  const alive = game.alivePlayers();
+  const runResults = [];
+  const askRun = async (p) => {
     const v = await askValidated(game, p.seat, { task: 'sheriff_run' }, fb(() => ({ run: false })));
-    if (v.run) {
-      p.everRanSheriff = true;
-      candidates.push(p.seat);
+    runResults.push({ seat: p.seat, run: !!v.run });
+  };
+  if (game.parallelLlm && alive.length > 1) {
+    await Promise.all(alive.map(askRun));
+  } else {
+    for (const p of alive) await askRun(p);
+  }
+  runResults.sort((a, b) => a.seat - b.seat); // 公布顺序仍按座位，保证日志与亮票顺序稳定
+  const candidates = [];
+  for (const r of runResults) {
+    if (r.run) {
+      game.player(r.seat).everRanSheriff = true;
+      candidates.push(r.seat);
     }
-    game.emit('sheriff_run', { actor: p.seat, data: { run: v.run } });
+    game.emit('sheriff_run', { actor: r.seat, data: { run: r.run } });
   }
   game.emit('system', { visibleTo: 'all', text: candidates.length ? `🎩 上警名单：${candidates.join('、')} 号` : '🎩 无人上警，本局没有警长。' });
   // 2. 警上演讲（可退水/自爆）
@@ -968,7 +994,7 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
     // 多 Key（keypool P3）：互不依赖的投票可以扇出。**提交顺序仍是座位顺序**，
     // 每条分支最终都排进同一个调度器（槽位 ↦ Key），所以：
     //   · 单 Key 时这个分支根本不会走到（parallelLlm=false），行为与旧版逐字节一致；
-    //   · 多 Key 时按通道并行（实测 4 通道约 -19%）；
+    //   · 多 Key 时按通道并行（实测 4 通道约 -23%）；
     //   · 无论哪种，票型归集都按座位顺序（见下方 votes 循环），亮票顺序与结果不受影响。
     let done = 0;
     await Promise.all(aiVoters.map(async (p) => {

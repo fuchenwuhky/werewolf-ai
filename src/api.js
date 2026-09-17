@@ -497,19 +497,38 @@ class Api {
     return this.json(res, 200, { ok: true });
   }
 
-  /** 局终经验生成：逐个 AI 复盘 2~3 条教训入经验池（串行，防限流） */
+  /**
+   * 局终经验生成：每个 AI 复盘自己那局、提炼 2~3 条教训入经验池。
+   *
+   * 这些调用**彼此零依赖**（各看各的反思纪要、各写各的教训），所以：
+   *   · 单通道时仍逐个排队（顺序不变）；
+   *   · 多通道时并发跑完 —— 局后处理不影响对局本身，是最"白给"的一块并发收益（11 个 AI 各一次调用）。
+   * `experience.add` 仍然**按座位顺序、串行**提交：它要落盘，并发写同一个文件是自找麻烦。
+   */
   async generateLessons(entry) {
     if (!this.experience || !entry.game.finished || !entry.game.started) return;
     const { game } = entry;
     const agents = [...game._agents.values()].filter((a) => typeof a.generateLessons === 'function');
-    for (const agent of agents) {
+    if (!agents.length) return;
+    const run = async (agent) => {
       try {
-        const lessons = await agent.generateLessons();
-        const added = this.experience.add(lessons);
-        if (added) this.logger.info('api', `${agent.player.seat}号（${agent.player.role}）沉淀 ${added} 条跨局经验`, { gameId: game.id });
+        return { agent, lessons: await agent.generateLessons() };
       } catch (e) {
         this.logger.warn('ai', `${agent.player.seat}号 局终复盘失败（跳过）：${e.message}`, { gameId: game.id });
+        return null;
       }
+    };
+    const results = game.parallelLlm && agents.length > 1
+      ? await Promise.all(agents.map(run))
+      : await (async () => {
+          const out = [];
+          for (const a of agents) out.push(await run(a));
+          return out;
+        })();
+    for (const r of results) {
+      if (!r || !r.lessons) continue;
+      const added = this.experience.add(r.lessons);
+      if (added) this.logger.info('api', `${r.agent.player.seat}号（${r.agent.player.role}）沉淀 ${added} 条跨局经验`, { gameId: game.id });
     }
   }
 

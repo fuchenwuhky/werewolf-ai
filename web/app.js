@@ -408,7 +408,7 @@ async function saveConfig() {
  * 多 Key 通道数提示。
  *
  * 为什么要显示这个：通道数是"每多一把 Key 就多一条并发通道"，但它**不是**线性的提速 ——
- * 实测（docs/fluency-plan.md §1.4）天花板约 -19%，因为语义串行的发言链占 73%。
+ * 实测（docs/fluency-plan.md §1.4）天花板约 -23%，因为语义串行的发言链占 73%。
  * 界面必须如实说清，否则用户会以为"加 Key = 快一倍"，然后觉得功能没用。
  */
 function renderKeyChannels(cfg) {
@@ -424,8 +424,8 @@ function renderKeyChannels(cfg) {
   // 输入框里贴了新 Key 时，预览"保存后会变成几条"；否则显示服务端当前生效的通道数
   const now = local ? local + 1 : channels;
   hint.textContent = local
-    ? `保存后共 ${now} 条并发通道（当前 ${channels} 条）。注意：通道数不是线性提速 —— 发言必须按顺序听，实测多 Key 上限约 -19%。`
-    : `当前 ${channels} 条并发通道（${extra > 0 ? `1 把主 Key + ${extra} 把额外 Key` : '单 Key'}）。多一把 Key 多一条通道；上限约 -19%，不是减半。`;
+    ? `保存后共 ${now} 条并发通道（当前 ${channels} 条）。注意：通道数不是线性提速 —— 发言必须按顺序听，实测多 Key 上限约 -23%。`
+    : `当前 ${channels} 条并发通道（${extra > 0 ? `1 把主 Key + ${extra} 把额外 Key` : '单 Key'}）。多一把 Key 多一条通道；上限约 -23%，不是减半。`;
 }
 
 async function testConfig() {

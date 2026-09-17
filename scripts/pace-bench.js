@@ -37,16 +37,15 @@ const SERIAL_TASKS = new Set([
   'witch',                                                // 女巫必须等狼刀结果（引擎里唯一一条夜内依赖）
   'explode_check', 'duel_check', 'direction',             // 嵌在发言链里的即时询问
   'badge_pass', 'shoot',                                  // 单人一次性裁决
-  // 上警报名虽然"同时决定"，但引擎里是**顺序**询问的：后报名的人能看到前面的 sheriff_run 事件。
-  // 扇出它会改变每个 AI 看到的信息（等于改了游戏语义），所以刻意不做 —— 这里如实标成串行，
-  // 让"天花板"是**可实现**的数字，而不是纸面数字。
-  'sheriff_run',
 ]);
 /** 语义上互不依赖、只因单 Key 被迫串行的调用（引擎已按同一张依赖图扇出） */
 const PARALLEL_TASKS = new Set([
   'vote', 'pk_vote', 'sheriff_vote',                      // 票互相保密且互不依赖
+  // 上警报名与狼队投刀：引擎已改成"先问完所有人、再按座位统一公布"（真实规则就是同时举手/同时指刀），
+  // 所以每个人都处于"盲选"状态 —— 调用彼此独立，可以并行。
+  'sheriff_run', 'wolf_kill',
   'night_guard', 'seer_check', 'night_dream', 'crow_curse',
-  'wolfbeauty_charm', 'wolf_kill', 'admirer_crush',       // 夜晚各步：选完才统一结算
+  'wolfbeauty_charm', 'admirer_crush',                    // 夜晚各步：选完才统一结算
 ]);
 /** 后台任务（低优先级排队偷跑） */
 const isBackground = (task) => /反思|复盘|lessons|reflect/.test(task);

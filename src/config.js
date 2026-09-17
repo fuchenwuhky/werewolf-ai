@@ -10,7 +10,7 @@ const DEFAULT_CONFIG = {
   apiKey: '',
   // 多 Key（keypool）：填了这个就用它，允许逗号/空格/换行分隔多个 Key。
   // 通道数 = Key 数（每 Key 一条通道、通道内严格串行），见 src/ai/scheduler.js。
-  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -19%，不是"减半"，
+  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -23%，不是"减半"，
   // 而且会牺牲服务商侧的 prompt 缓存亲和性 —— 除非你本来就有多个 Key，否则不必为此付费。
   apiKeys: [],
   // 并发通道数：0 = 跟随 Key 数（推荐）；>0 = 强制这么多条通道（同一把 Key 也想试并发时用它，

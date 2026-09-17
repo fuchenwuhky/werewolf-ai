@@ -1,7 +1,7 @@
 /**
  * keypool.test.js — 多 Key 通道池（keypool P1/P2/P3）
  *
- * 先说结论（实测，见 docs/fluency-plan.md §1.4）：多 Key 的天花板约 **-19%**，不是"减半"，
+ * 先说结论（实测，见 docs/fluency-plan.md §1.4）：多 Key 的天花板约 **-23%**，不是"减半"，
  * 因为语义串行的发言链占了 73% 的耗时。所以这一层的定位是"**本来就有多个 Key 时别浪费**"，
  * 不是"买 Key 提速"。默认仍然是单通道。
  *
@@ -194,6 +194,78 @@ test('夜晚并发：多通道下独立步骤重叠，但女巫永远在狼刀�
   const idx = g.events.filter((e) => e.type === 'night_step').map((e) => e.data.index);
   assert.deepStrictEqual(idx, announced.map((_, i) => i + 1), '序号必须是 1..N');
   assert.ok(announced.length >= 4, `夜晚步骤数应为板子里存在的角色数（实际 ${announced})`);
+});
+
+test('上警报名：先问完所有人再公布（真实规则是"同时举手"）', async () => {
+  // 旧实现是"问一个公布一个"：第 12 位报名者看得到前 11 位谁上警了。
+  // sheriff_run 不在 NOISE_TYPES 里，所以那是**真的进了 AI 上下文**的信息泄露。
+  // 现在两种通道数都必须满足：任何人在报名时，事件流里一条 sheriff_run 都还没有。
+  for (const parallel of [false, true]) {
+    const g = makeNightGame(parallel);
+    const seen = [];
+    const orig = g.ask.bind(g);
+    g.ask = async (seat, req) => {
+      if (req.task === 'sheriff_run') seen.push(g.events.filter((e) => e.type === 'sheriff_run').length);
+      return orig(seat, req);
+    };
+    await _internals.electionPhase(g);
+    assert.ok(seen.length >= 2, `应当逐人报名（实际 ${seen.length} 次，parallel=${parallel}）`);
+    assert.deepStrictEqual([...new Set(seen)], [0], `报名时必须"盲选"（parallel=${parallel}，看到过 ${JSON.stringify(seen)}）`);
+    const evs = g.events.filter((e) => e.type === 'sheriff_run');
+    assert.strictEqual(evs.length, seen.length, '问过几个人就公布几条');
+    assert.deepStrictEqual(evs.map((e) => e.actor), evs.map((e) => e.actor).slice().sort((a, b) => a - b), '公布顺序必须按座位');
+  }
+});
+
+test('狼队投刀：先收完所有票再公布（人类狼与 AI 狼的信息条件一致）', async () => {
+  for (const parallel of [false, true]) {
+    const g = makeNightGame(parallel);
+    const seen = [];
+    const orig = g.ask.bind(g);
+    g.ask = async (seat, req) => {
+      if (req.task === 'wolf_kill') seen.push(g.events.filter((e) => e.type === 'wolf_kill_vote').length);
+      return orig(seat, req);
+    };
+    await _internals.nightPhase(g);
+    assert.ok(seen.length >= 2, `两只 AI 狼都要指刀（实际 ${seen.length} 次，parallel=${parallel}）`);
+    assert.deepStrictEqual([...new Set(seen)], [0], `指刀时不能看到队友的票（parallel=${parallel}，看到过 ${JSON.stringify(seen)}）`);
+  }
+});
+
+test('局终经验：多通道时各 AI 并行复盘，但经验池仍按顺序串行入库', async () => {
+  const { Api } = require('../src/api');
+  const added = [];
+  const api = new Api({
+    config: { get: () => ({ apiKey: 'k', journal: false }), save() {} },
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  // Api 构造时会自建经验池（要落盘），测试里换成内存假实现 —— 只验证调用时序
+  api.experience = { add: (l) => { added.push(l[0]); return l.length; } };
+  let started = 0;
+  let peak = 0;
+  const mkAgent = (seat) => ({
+    player: { seat, role: 'villager' },
+    generateLessons: async () => {
+      started++;
+      peak = Math.max(peak, started);
+      await sleep(6); // 没有并发时这个窗口里永远只有 1 个
+      started--;
+      return [`${seat}号的教训`];
+    },
+  });
+  const entry = (parallelLlm) => ({
+    game: {
+      id: 'lessons', finished: true, started: true, parallelLlm,
+      _agents: new Map([1, 2, 3, 4].map((s) => [s, mkAgent(s)])),
+    },
+  });
+  peak = 0;
+  await api.generateLessons(entry(false));
+  assert.strictEqual(peak, 1, '单通道：逐个复盘');
+  peak = 0;
+  await api.generateLessons(entry(true));
+  assert.strictEqual(peak, 4, `多通道：4 个 AI 应同时复盘（实际峰值 ${peak}）`);
+  assert.deepStrictEqual(added, ['1号的教训', '2号的教训', '3号的教训', '4号的教训', '1号的教训', '2号的教训', '3号的教训', '4号的教训'], '入库顺序按座位，与并发无关');
 });
 
 test('夜晚并发：两种路径的事件类型与结算结果一致（并发不改变游戏语义）', async () => {
