@@ -145,28 +145,9 @@
           </div>
         </div>
 
-        <!-- 板子 -->
-        <div class="card" id="card-board">
-          <h2 data-no="②" data-i18n="board.title">板子</h2>
-          <label><span data-i18n="board.template">模板</span>
-            <select id="board-template"></select>
-          </label>
-          <div id="board-editor" class="board-editor"></div>
-          <div class="hint" id="board-total"></div>
-        </div>
-        </div><!-- /左列 -->
-
-        <!-- 右列：③ 规则开关 + ④ 玩家 -->
-        <div class="setup-col">
-        <!-- 规则开关 -->
-        <div class="card" id="card-rules">
-          <h2 data-no="③"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
-          <div id="rules-editor"></div>
-        </div>
-
         <!-- 玩家 -->
         <div class="card" id="card-players">
-          <h2 data-no="④" data-i18n="players.title">玩家</h2>
+          <h2 data-no="③" data-i18n="players.title">玩家</h2>
           <div class="mode-picker">
             <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
             <label class="mode-card"><input type="radio" name="mode" value="watch"> <span class="mode-body"><b data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</b></span></label>
@@ -186,6 +167,30 @@
           <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button></div>
           <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
           <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
+        </div>
+
+        </div><!-- /左列 -->
+
+        <!-- 右列：② 板子 + ④ 规则。
+             卡片按**实测高度**配平（API 1081 / 规则 1333 / 板子 613 / 玩家 725）：
+             {API+玩家=1806} 与 {板子+规则=1946} 差 140px，是四种分法里最平的；
+             原来的 {API+板子} 与 {规则+玩家} 差 364px，左下角会空出一大片。
+             编号走行主序（左上→右上→左下→右下），所以左列是 ① 与 ③、右列是 ② 与 ④。 -->
+        <div class="setup-col">
+        <!-- 板子 -->
+        <div class="card" id="card-board">
+          <h2 data-no="②" data-i18n="board.title">板子</h2>
+          <label><span data-i18n="board.template">模板</span>
+            <select id="board-template"></select>
+          </label>
+          <div id="board-editor" class="board-editor"></div>
+          <div class="hint" id="board-total"></div>
+        </div>
+
+        <!-- 规则开关 -->
+        <div class="card" id="card-rules">
+          <h2 data-no="④"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
+          <div id="rules-editor"></div>
         </div>
         </div><!-- /右列 -->
       </div>
