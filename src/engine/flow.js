@@ -24,6 +24,13 @@ const { claimScan, mergeClaims } = require('./claims');
 const SPEECH_MAX_CHARS = 600;
 
 /**
+ * 单次决策的总时间闸（A3）。
+ * 调用层的"分任务软超时"是 90s（发言）/30s（微决策），但传输层重试与校验层重试会**相乘**：
+ * 一次决策最坏能拖十几分钟，玩家的观感就是"整局卡死"。宁可降级出一手平凡但合法的棋。
+ */
+const DECISION_TOTAL_MS = 180000;
+
+/**
  * 截断发言并留痕（god 可见）。
  * 为什么在这里发事件而不是在调用方：校验器是唯一还知道"原始长度"的地方，
  * 值一旦被裁短，调用方就再也看不出这条发言被砍过。
@@ -254,7 +261,17 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
   }
   let note = '';
   let lastError = '';
+  // 单次决策的总时间闸（A3）：调用层已有"分任务软超时"（发言 90s / 微决策 30s），
+  // 但传输层重试 × 校验层重试会相乘 —— 极端情况一次决策能拖十几分钟，整局看起来就是卡死。
+  // 超过这个总预算就直接走降级（宁可出一手平凡但合法的棋，也不要让全场等一个人）。
+  const deadlineAt = Date.now() + DECISION_TOTAL_MS;
   for (let i = 0; i <= maxRetries; i++) {
+    if (Date.now() > deadlineAt) {
+      lastError = `单次决策总耗时超过 ${Math.round(DECISION_TOTAL_MS / 1000)}s（超时/失败重试累计）`;
+      game.logger.warn('ai', `${seat}号 ${req.task} ${lastError}，停止重试并降级`);
+      game.emit('llm_error', { actor: seat, visibleTo: 'god', data: { task: req.task, attempt: i + 1, error: lastError, timeout: true, degraded: false } });
+      break;
+    }
     const request = note ? { ...req, _retryNote: note } : req;
     const raw = await game.ask(seat, request);
     const v = validatePayload(req.task, raw, req, game, seat);
@@ -904,10 +921,25 @@ async function secretVote(game, { task, voters, candidates, allowNone }) {
   // 这里只播报计数（done/total），不带任何目标或座位 —— 泄露投票方向就是泄露游戏信息。
   // 该事件同时被 context 的 NOISE_TYPES 与 effort 的 CHATTER_TYPES 排除，AI 完全感知不到。
   if (aiVoters.length) game.emit('vote_progress', { data: { done: 0, total: aiVoters.length } });
-  for (const p of aiVoters) {
-    const v = await askValidated(game, p.seat, req, fb(() => ({ target: 0 })));
-    bySeat.set(p.seat, v);
-    game.emit('vote_progress', { data: { done: bySeat.size, total: aiVoters.length } });
+  if (game.parallelLlm && aiVoters.length > 1) {
+    // 多 Key（keypool P3）：互不依赖的投票可以扇出。**提交顺序仍是座位顺序**，
+    // 每条分支最终都排进同一个调度器（槽位 ↦ Key），所以：
+    //   · 单 Key 时这个分支根本不会走到（parallelLlm=false），行为与旧版逐字节一致；
+    //   · 多 Key 时按通道并行（实测 4 通道约 -23%）；
+    //   · 无论哪种，票型归集都按座位顺序（见下方 votes 循环），亮票顺序与结果不受影响。
+    let done = 0;
+    await Promise.all(aiVoters.map(async (p) => {
+      const v = await askValidated(game, p.seat, req, fb(() => ({ target: 0 })));
+      bySeat.set(p.seat, v);
+      done++;
+      game.emit('vote_progress', { data: { done, total: aiVoters.length } });
+    }));
+  } else {
+    for (const p of aiVoters) {
+      const v = await askValidated(game, p.seat, req, fb(() => ({ target: 0 })));
+      bySeat.set(p.seat, v);
+      game.emit('vote_progress', { data: { done: bySeat.size, total: aiVoters.length } });
+    }
   }
   if (humanJob) {
     const r = await humanJob;

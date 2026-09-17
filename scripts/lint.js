@@ -115,16 +115,35 @@ const RULES = [
     },
   },
   {
-    id: 'no-parallel-llm',
-    desc: 'src/ai 内禁止并发原语（硬约束：1 API Key = 1 并发）',
-    scope: (f) => /^src[\\/]ai[\\/]/.test(f),
-    check(stripped, raw) {
+    id: 'llm-must-go-through-scheduler',
+    desc: 'LLM 调用必须经调度器：HTTP 只能在 src/ai/llm.js 里发（那里唯一入队 scheduler）',
+    // 旧规则是"src/ai 内禁止并发原语"，问题有两个：
+    //   ① 它禁止的是**手段**而不是**不变式**：真正要保证的是"每次 LLM 调用都排进 scheduler"
+    //      （调度器负责'每 Key 一条通道、通道内严格串行'）。只要经过 llm.js 就自动入队了。
+    //   ② 它的 scope 只覆盖 src/ai，而并行改造的主战场是 src/engine/flow.js —— 硬约束在主战场上失效。
+    // 现在换成真正的不变式：
+    //   · HTTP 只能在 src/ai/llm.js 里发（`fetch`）——绕过它就等于绕过调度器；
+    //   · 业务层（src/ai 其余文件）不得自己开并发：它们没有"按通道扇出"的语义；
+    //   · **src/engine 允许 Promise.all**：那里的扇出最终都会落到 scheduler 排队，
+    //     这正是多 Key 并行需要的写法（投票/夜晚步骤并行），不要把它当成违规改回去。
+    scope: (f) => /^src[\\/](ai|engine)[\\/]/.test(f),
+    check(stripped, raw, file) {
       const out = [];
+      const norm = String(file || '').split(path.sep).join('/');
+      const isLlm = norm.endsWith('src/ai/llm.js');
+      const isSched = norm.endsWith('src/ai/scheduler.js');
+      const inAi = /^src\/ai\//.test(norm);
       for (const { line, text } of codeLines(stripped)) {
-        const m = /Promise\.(all|allSettled|race|any)\s*\(/.exec(text);
-        if (!m) continue;
         if (isAllowed(raw.split('\n')[line - 1] || '')) continue;
-        out.push({ line, msg: `使用了 Promise.${m[1]}：所有 LLM 调用必须串行走单通道调度器（1 API Key = 1 并发）` });
+        if (!isLlm && /\bfetch\s*\(/.test(text) && !/global\.fetch/.test(text)) {
+          out.push({ line, msg: '直接调用 fetch：HTTP 只能经 src/ai/llm.js（它负责超时/重试/入队 scheduler/用量归一化）。绕过它就等于绕过调度器' });
+        }
+        if (inAi && !isLlm && !isSched) {
+          const m = /Promise\.(all|allSettled|race|any)\s*\(/.exec(text);
+          if (m) {
+            out.push({ line, msg: `src/ai 业务层使用了 Promise.${m[1]}：并发扇出只能由 scheduler 决定（引擎层 src/engine 允许扇出，因为它最终仍会排进 scheduler）` });
+          }
+        }
       }
       return out;
     },

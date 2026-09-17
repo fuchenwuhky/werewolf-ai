@@ -44,7 +44,7 @@ const { makeMockAgentFactory } = require('../scripts/mock-agent');
 const { testConnection } = require('./ai/llm');
 const { maskKey, makeGameLogger } = require('./log');
 const { ALL: NAME_POOL } = require('./names');
-const { PACES, detectPace } = require('./config');
+const { PACES, detectPace, parseApiKeys } = require('./config');
 const { reviewFacts, humanSeatOf } = require('./engine/review');
 const { generateCoachReview, ruleReview } = require('./ai/coach');
 const { extractLiveText } = require('./ai/stream');
@@ -453,7 +453,10 @@ class Api {
     }
 
     applyPersonalities(players, seedRng);
-    const game = new Game({ id: gameId, board, rules, players, agentFactory, logger, seed });
+    // 多 Key 才开启"互不依赖调用扇出"（keypool P3）：单 Key 下扇出没有收益，
+    // 还会让在途提示的区间重叠 —— 所以这里按 Key 数决定，而不是无条件并行。
+    const parallelLlm = parseApiKeys(this.config.get()).length > 1;
+    const game = new Game({ id: gameId, board, rules, players, agentFactory, logger, seed, parallelLlm });
     const entry = {
       game, running: false, error: null,
       // mock 必须存在 entry 上：存档写的就是 entry.mock，恢复时按 doc.mock 决定用 Mock 还是真实 agentFactory。
@@ -700,7 +703,7 @@ class Api {
     // Mock 试玩按定义"不调用 API"：直接给规则点评，避免"试玩却偷偷花了一次真调用"
     if (entry.mock) {
       entry.review = {
-        status: 'done', mode: 'rule', text: ruleReview(facts), seat, at: Date.now(), ms: 0,
+        status: 'done', mode: 'rule', text: ruleReview(facts, game), seat, at: Date.now(), ms: 0,
         fallbackReason: '本局是 Mock 试玩（不调用 API），因此只给规则点评',
       };
       this.saveGame(entry, { force: true }).catch(() => {});

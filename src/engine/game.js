@@ -39,6 +39,9 @@ class Game {
     this.id = opts.id;
     this.board = boardRoles;
     this.rules = mergeRules(opts.rules);
+    // 多 Key（keypool）时才允许"互不依赖的调用扇出"：单 Key 下扇出只是换个写法，
+    // 却会让 beginLive/endLive 的区间重叠（"正在思考"提示会显示错人）。所以默认关，多 Key 才开。
+    this.parallelLlm = !!opts.parallelLlm;
     // 确定性随机源：显式 seed 时"同种子同配置 = 同一局"；否则按 id 派生后掺入时间。
     // 它的 32 位状态会进锚点快照，恢复时精确续上（决策 journal 命中的前提）。
     // 种子显式留档：提示词校验码（spotlight）与"同种子可复现"都依赖它，恢复对局后必须一致

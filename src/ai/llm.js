@@ -9,6 +9,7 @@
 'use strict';
 const { scheduler: defaultScheduler, PRIORITY } = require('./scheduler');
 const { LlmFatalError } = require('../errors');
+const { parseApiKeys } = require('../config');
 
 function buildEndpoint(baseUrl) {
   let u = String(baseUrl || '').trim().replace(/\/+$/, '');
@@ -258,10 +259,14 @@ async function consumeSse(res, onDelta, startedAt) {
  *     cfg.structuredOutput 与进程级自适应级别决定
  * @returns {content, reasoning, usage, latencyMs, ttftMs, attempts, streamed}
  */
-async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, signal, priority, scheduler: sched, onDelta, stream, hardCap, responseFormat } = {}) {
+async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, model, timeoutMs: callTimeoutMs, signal, priority, scheduler: sched, onDelta, stream, hardCap, responseFormat } = {}) {
   const endpoint = buildEndpoint(cfg.baseUrl);
+  // 分层模型（A2）：调用方可为快速任务指定更小的模型，缺省回落 cfg.model
+  const useModel = model || cfg.model;
   const maxRetries = cfg.retries != null ? cfg.retries : 3;
-  const timeoutMs = cfg.timeoutMs || 120000;
+  // 分任务软超时（A3）：调用方可按任务压死上限。360s 的 cfg.timeoutMs 只作兜底 ——
+  // 过去的用法是"所有任务都可能等 6 分钟"，一次卡住的发言就能让整局看起来死掉。
+  const timeoutMs = Number(callTimeoutMs) > 0 ? Number(callTimeoutMs) : (cfg.timeoutMs || 120000);
   const baseMaxTokens = maxTokens || cfg.maxTokens || 16000;
   // 预算翻倍的硬上限：调用方可按任务档位压低（结构化决策不需要 32k 的思考空间）
   const escalationCap = Number(hardCap) > 0 ? Math.max(Number(hardCap), baseMaxTokens) : HARD_OUTPUT_CAP;
@@ -272,7 +277,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
   }
 
   const body = {
-    model: cfg.model,
+    model: useModel,
     messages,
     temperature: cfg.temperature != null ? cfg.temperature : 0.8,
     max_tokens: baseMaxTokens,
@@ -290,11 +295,22 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
   const structEnabled = structPolicy !== 'off' && !!responseFormat;
   const lane = sched || defaultScheduler;
   const label = meta.label || 'chat';
+  // Key 池（keypool）：调度器给每个在途任务分配一个槽位，槽位 i 固定绑定第 i 个 Key ——
+  // 同一条通道的连续请求打同一个 Key，服务商侧的 prompt 缓存才不会因为换 Key 而全部落空。
+  const apiKeys = parseApiKeys(cfg);
+  // 通道数 = Key 数（自动跟随配置，允许运行中改）：单 Key 时恒为 1，行为与旧版一致。
+  // 放在这里而不是启动时同步，是为了避免"配置从哪条路径进来"的时序问题（设置页/环境变量/存档恢复）。
+  if (lane === defaultScheduler) {
+    const want = Math.max(1, apiKeys.length);
+    if (lane.channels !== want) lane.setChannels(want);
+  }
   let usageEstimatedWarned = false;
 
   // 整段"重试 + 退避"都在通道内执行：单并发下退避期间也不该放别的请求出去，
   // 否则等于自己在服务商侧制造并发。
-  const job = async () => {
+  const job = async (slot = 0) => {
+    // 槽位 ↦ Key：单 Key（默认）时恒等于 cfg.apiKey，多 Key 时每个通道打自己的 Key。
+    const apiKey = apiKeys.length > 1 ? apiKeys[slot % apiKeys.length] : (apiKeys[0] || cfg.apiKey);
     if (signal && signal.aborted) {
       const err = new Error('对局已终止，请求取消');
       err.aborted = true;
@@ -303,6 +319,11 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     let attempts = 0;
     let lastErr = null;
     let tokenBudget = baseMaxTokens;
+    // A3 降档重试：超时/截断时**先降思考强度**（minimal）再试，而不是原样重试或直接翻倍预算。
+    // 理由：这两类失败的根因都是"模型在思考里绕太久"，把 effort 压到最低比给更多预算更快也更省；
+    // 只有降档后仍被截断（说明是正文太长而非思考太长）才回退到旧的"翻倍预算"路径。
+    let curEffort = eff;
+    let downgraded = false;
     // 流式协议降级（usage→plain→off）不计入用户的重试预算：
     // 那是协议适配而非失败重试，否则 retries:0 的用户会直接失败而不是优雅降级。
     let streamDown = 0;
@@ -321,6 +342,11 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
       const useStream = wantStream && streamMode !== 'off';
       try {
         const payload = { ...body, max_tokens: tokenBudget };
+        // 降档后按调用级覆盖 effort（body 里的 reasoning_effort 是初始档位）
+        if (curEffort !== eff) {
+          if (curEffort) payload.reasoning_effort = curEffort;
+          else delete payload.reasoning_effort;
+        }
         if (useStream) {
           payload.stream = true;
           if (streamMode === 'usage') payload.stream_options = { include_usage: true };
@@ -335,7 +361,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            Authorization: `Bearer ${cfg.apiKey}`,
+            Authorization: `Bearer ${apiKey}`,
             // keep-alive 默认开：实测串行 5 次调用从"5 条连接"降到"1 条"，省掉每次约 90ms 的 TCP+TLS 握手。
             // 曾经的顾虑是"Windows 下复用长连接会被防火墙静默掐断"，现在由两道保险兜住：
             //   ① keepAlive:false 可一键回到旧行为（发 Connection: close）；
@@ -445,11 +471,25 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
 
         // 服务商返回成功但没有可用回复 → 明确报错并记录可诊断信息
         if (typeof content !== 'string' || !content.trim()) {
-          // 思考模型把 max_tokens 全花在 reasoning 上（finish_reason=length）→ 预算逐步翻倍直至硬上限
+          // ① 先降档：思考模型把预算全花在 reasoning 上（finish_reason=length），
+          //    压到 minimal 通常一次就够，且比翻倍预算更快（A3 实测：这一步就能救回绝大多数截断）
+          if (finishReason === 'length' && !downgraded && baseMaxTokens < escalationCap) {
+            downgraded = true;
+            const fromEffort = curEffort;
+            curEffort = 'minimal';
+            tokenBudget = Math.min(Math.max(Math.round(baseMaxTokens * 1.5), 1000), escalationCap);
+            if (logger) logger.warn('llm', `${label} 回复被截断（思考耗尽）→ 降档重试（effort ${fromEffort || '默认'}→minimal，预算 ${baseMaxTokens}→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
+            const err = new Error('max_tokens 被思考耗尽，降档重试');
+            err.retryable = true;
+            err.noBackoff = true;
+            err.downgraded = true;
+            throw err;
+          }
+          // ② 降档后仍被截断 → 说明是正文本身太长，这时才回退到"逐步翻倍预算"
           if (finishReason === 'length' && tokenBudget < escalationCap) {
             const from = tokenBudget;
             tokenBudget = Math.min(Math.max(tokenBudget, 1000) * 2, escalationCap);
-            if (logger) logger.warn('llm', `${label} 回复被截断（思考耗尽，预算 ${from}）→ 提升至 ${tokenBudget} 重试`, { task: meta.task, seat: meta.seat });
+            if (logger) logger.warn('llm', `${label} 回复被截断（降档后仍不足，预算 ${from}）→ 提升至 ${tokenBudget} 重试`, { task: meta.task, seat: meta.seat });
             const err = new Error(`max_tokens 不足（思考耗尽），预算 ${from} → ${tokenBudget}`);
             err.retryable = true;
             err.noBackoff = true; // 提升预算重试无需退避等待
@@ -487,10 +527,11 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           ttftMs,
           attempts,
           streamed: useStream,
+          downgraded, // A3：这次调用是否发生过"降档重试"（上帝面板/遥测用）
         };
         if (logger) {
           logger.debug('llm', `${label} ok ${out.usage.promptTokens}pt(缓存${out.usage.cachedTokens})/${out.usage.completionTokens}ct ${latencyMs}ms${ttftMs != null ? ` 首字${ttftMs}ms` : ''} 尝试${attempts}${useStream ? ' 流式' : ''}`, {
-            model: cfg.model, task: meta.task, seat: meta.seat,
+            model: useModel, task: meta.task, seat: meta.seat,
           });
         }
         return out;
@@ -499,6 +540,17 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         if (signal && onExternalAbort) signal.removeEventListener('abort', onExternalAbort);
         lastErr = err;
         const externalAbort = !!(signal && signal.aborted); // 外部终止 ≠ 超时：立即退出不重试
+        const timedOut = !externalAbort && err.name === 'AbortError';
+        if (timedOut) err.timedOut = true; // 让上层能区分"超时"与"服务端报错"
+        // 超时先降档（A3）：原样重试大概率再等一个软超时，把 p99 拖成两三倍；压到 minimal 往往能过。
+        if (timedOut && !downgraded && attempts <= maxRetries) {
+          downgraded = true;
+          const fromEffort = curEffort;
+          curEffort = 'minimal';
+          tokenBudget = Math.min(Math.max(Math.round(baseMaxTokens * 0.6), 800), escalationCap);
+          if (logger) logger.warn('llm', `${label} 请求超时（${Math.round(timeoutMs / 1000)}s）→ 降档重试（effort ${fromEffort || '默认'}→minimal，预算→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
+          continue; // 不等待退避：降档本身就是换一种打法，退避只是白等
+        }
         const retryable = !externalAbort && (err.retryable || err.name === 'AbortError' || err.name === 'TypeError');
         const msg = externalAbort ? '对局已终止，请求被中止'
           : err.name === 'AbortError' ? `请求超时（${Math.round(timeoutMs / 1000)}s，思考/生成未完成被中止）` : err.message;

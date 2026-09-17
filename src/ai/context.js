@@ -40,6 +40,32 @@ function taskMaxTokens(task, cfg) {
   return Math.min(cfg.maxTokens || 16000, 12000);
 }
 
+/**
+ * 分任务模型（A2）：快速任务可用更小更快的模型（cfg.modelFast），留空则统一用主模型。
+ *
+ * 为什么值：快速任务（夜晚行动/投票/警竞）决策空间很小，却占掉一半以上的调用次数；
+ * 用大模型跑它们主要是在等首字。它们的输出都要过 enum 校验，模型再弱也不会让引擎出错。
+ * 发言类必须留在主模型上 —— 那是玩家唯一会逐字阅读的东西。
+ */
+function taskModel(task, cfg) {
+  const fast = cfg && cfg.modelFast;
+  return FAST_TASKS.has(task) && fast ? fast : (cfg && cfg.model);
+}
+
+/**
+ * 分任务软超时（A3）：发言类给足、结构化微决策压死。
+ *
+ * 旧配置只有一个 6 分钟的全局上限，等于"每个任务都可能等 6 分钟"——
+ * 实测一次卡住的发言就能让整局观感变成死机。cfg.timeoutMs 保留为硬上限兜底（取 min）。
+ * 反思/纪要类不在 FAST_TASKS 里，按发言档给足（它们在日切后台跑，但同样不该无限等）。
+ */
+function taskTimeoutMs(task, cfg) {
+  const slow = Number(cfg.slowTimeoutMs) > 0 ? Number(cfg.slowTimeoutMs) : 90000;
+  const fast = Number(cfg.fastTimeoutMs) > 0 ? Number(cfg.fastTimeoutMs) : 30000;
+  const hard = Number(cfg.timeoutMs) > 0 ? Number(cfg.timeoutMs) : 360000;
+  return Math.min(FAST_TASKS.has(task) ? fast : slow, hard);
+}
+
 /** 聚合某玩家视角的全部可见事件 → 结构化账本（隔离性由 visibleEvents 保证） */
 function aggregate(game, player) {
   // day 0 = 发牌阶段：身份在 system、队友在私密账本中另行给出，事件本身不进任何上下文分区
@@ -499,7 +525,7 @@ function trimToBudget(game, player, request, state, budgetTokens) {
 }
 
 module.exports = {
-  FAST_TASKS, NOISE_TYPES, taskEffort, taskMaxTokens, estimateTokens, aggregate,
+  FAST_TASKS, NOISE_TYPES, taskEffort, taskMaxTokens, taskTimeoutMs, taskModel, estimateTokens, aggregate,
   renderSnapshot, renderTranscript, renderDigests, skeletonDigest, dayFacts, daySpine,
   privateLedger, memoryQuery, assemble, trimToBudget,
 };

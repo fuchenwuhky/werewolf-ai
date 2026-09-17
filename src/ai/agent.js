@@ -314,6 +314,10 @@ class Agent {
         effort: plan.effort,
         maxTokens: plan.maxTokens,
         hardCap: plan.hardCap, // 没有它，截断后的预算翻倍会让 maxTokens 形同虚设
+        // 分层模型（A2）：快速任务可换更小的模型；未配置 modelFast 时与主模型一致
+        model: ctx.taskModel(request.task, this.llmCfg),
+        // 分任务软超时（A3）：发言 90s / 微决策 30s，超时会在 llm 内部先降档重试一次
+        timeoutMs: ctx.taskTimeoutMs(request.task, this.llmCfg),
         signal: g.abortSignal, // 终止对局时立即中断在途调用
         priority: PRIORITY.decision, // 玩家可见决策：最高优先级
         meta: { label: `${seat}号`, task: request.task, seat },

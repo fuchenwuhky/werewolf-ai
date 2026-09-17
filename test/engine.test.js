@@ -621,19 +621,21 @@ test('公共前缀：全场 AI 的 system 公共段逐字节一致且位于最�
 });
 
 // ---------- LLM 截断自愈链 ----------
-test('llm 截断链：预算翻倍逐步放大直至成功', async () => {
+test('llm 截断链：先降档到 minimal，之后才回退到预算翻倍', async () => {
   const { chatCompletion } = require('../src/ai/llm');
   const seen = [];
+  const efforts = [];
   const origFetch = global.fetch;
   global.fetch = async (url, opts) => {
-    const budget = JSON.parse(opts.body).max_tokens;
-    seen.push(budget);
-    const done = budget >= 16000;
+    const body = JSON.parse(opts.body);
+    seen.push(body.max_tokens);
+    efforts.push(body.reasoning_effort);
+    const done = body.max_tokens >= 16000;
     return {
       ok: true, status: 200,
       json: async () => ({
         choices: [{ finish_reason: done ? 'stop' : 'length', index: 0, message: { content: done ? '{"target":3}' : '', reasoning_content: 'thinking...' } }],
-        usage: { prompt_tokens: 100, completion_tokens: done ? 20 : budget },
+        usage: { prompt_tokens: 100, completion_tokens: done ? 20 : body.max_tokens },
       }),
       text: async () => '',
     };
@@ -641,7 +643,10 @@ test('llm 截断链：预算翻倍逐步放大直至成功', async () => {
   try {
     const out = await chatCompletion({ baseUrl: 'http://x', apiKey: 'k', model: 'm', maxTokens: 1000, retries: 6 }, [{ role: 'user', content: 'hi' }]);
     assert.strictEqual(out.content, '{"target":3}');
-    assert.deepStrictEqual(seen, [1000, 2000, 4000, 8000, 16000], '预算应 1000→2000→4000→8000→16000 翻倍放大');
+    // A3 改动：截断的根因通常是"思考吃光了预算"，所以**第一次重试先降档**（effort→minimal，预算只 ×1.5），
+    // 只有降档后仍被截断（说明是正文本身太长）才回退到旧的翻倍路径。旧行为是一上来就翻倍 → 越截断越慢。
+    assert.deepStrictEqual(seen, [1000, 1500, 3000, 6000, 12000, 24000], '第一步降档 +1.5x，之后翻倍放大');
+    assert.deepStrictEqual(efforts, [undefined, 'minimal', 'minimal', 'minimal', 'minimal', 'minimal'], '第一次重试就必须已经降档');
   } finally { global.fetch = origFetch; }
 });
 

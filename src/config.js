@@ -8,11 +8,24 @@ const fs = require('fs');
 const DEFAULT_CONFIG = {
   baseUrl: 'https://open.deepseek.com/v1',
   apiKey: '',
+  // 多 Key（keypool）：填了这个就用它，允许逗号/空格/换行分隔多个 Key。
+  // 通道数 = Key 数（每 Key 一条通道、通道内严格串行），见 src/ai/scheduler.js。
+  // 注意实测结论（docs/fluency-plan.md §1.4）：多 Key 的天花板约 -23%，不是"减半"，
+  // 而且会牺牲服务商侧的 prompt 缓存亲和性 —— 除非你本来就有多个 Key，否则不必为此付费。
+  apiKeys: [],
   model: 'deepseek-chat',
+  // 分层模型（A2）：快速任务（夜晚行动/投票/警竞等结构化微决策）换用更小更快的模型。
+  // 留空 = 全部用 model。实测快速任务占调用次数的一大半，但决策空间很小 ——
+  // 用大模型跑它们是纯浪费延迟（p50 4s 里大部分是首字前排队）。
+  modelFast: '',
   temperature: 0.8,
   maxTokens: 16000,          // 发言类任务的输出上限：思考模型的 reasoning 计入输出，起步给足防截断
   fastMaxTokens: 8000,       // 快速任务（夜晚/投票等）输出上限：低思考强度下够用，降低最坏延迟
-  timeoutMs: 360000,         // 单次调用上限 6 分钟：开枪/遗言等高决策量调用可能需 150~300s
+  timeoutMs: 360000,         // 硬上限（兜底）：正常情况下不会用到，真正的闸门是下面两个分任务软超时
+  // 分任务软超时（A3）：实测发言 p90 34s、微决策 p50 4s，而旧配置让**所有**任务都可能等 6 分钟 ——
+  // 一次卡住的发言就能让整局看起来死掉。现在发言给足、微决策压死，超时按"降档重试"处理。
+  slowTimeoutMs: 90000,      // 发言/遗言/PK/警上演讲/反思纪要
+  fastTimeoutMs: 30000,      // 夜晚行动/投票/警竞/狼聊等结构化微决策
   cacheControl: false,
   // 连接复用（keep-alive）：实测串行 5 次调用从"5 条连接"降到"1 条"，省掉每次约 90ms 的 TCP+TLS 握手。
   // 若所在网络（典型是 Windows 防火墙/代理）会静默掐断空闲连接，可置 false 回到"每次新连接"。
@@ -96,6 +109,29 @@ function detectPace(data) {
   return 'custom';
 }
 
+/**
+ * 解析 Key 池：`apiKeys`（数组）与 `apiKey`（可含逗号/空格/换行的多个 Key）合并去重。
+ *
+ * 为什么要允许在 apiKey 里写多个：用户手上往往已经有几个 Key，
+ * 让他在同一栏里粘贴就能用，比新增一套 UI 更实际；而 `apiKeys` 数组留给未来的设置页。
+ * 去重很关键 —— 同一个 Key 填两遍会产生两条"通道"，等于自己撞自己的限流。
+ */
+function parseApiKeys(cfg) {
+  const collect = (v, out) => {
+    if (typeof v !== 'string') return out;
+    for (const part of v.split(/[\s,;、]+/)) {
+      const k = part.trim();
+      if (k && !k.includes('****')) out.push(k); // **** 是脱敏占位，不能被当成真 Key
+    }
+    return out;
+  };
+  // 顺序决定"槽位 i 用哪个 Key"，而槽位 0 是单 Key 场景唯一会用到的那个 ——
+  // 所以 apiKey（主字段）排在 apiKeys 数组前面，别让数组里的第二个 Key 抢了主 Key 的位置。
+  const out = collect(cfg && cfg.apiKey, []);
+  if (Array.isArray(cfg && cfg.apiKeys)) for (const k of cfg.apiKeys) collect(k, out);
+  return [...new Set(out)];
+}
+
 function migrateConfig(data) {
   if (LEGACY_MAX_TOKENS.has(Number(data.maxTokens))) data.maxTokens = DEFAULT_CONFIG.maxTokens;
   if (LEGACY_TIMEOUT_MS.has(Number(data.timeoutMs))) data.timeoutMs = DEFAULT_CONFIG.timeoutMs;
@@ -158,4 +194,4 @@ function createConfig(file) {
   };
 }
 
-module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig };
+module.exports = { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, LEGACY_MAX_TOKENS, migrateConfig, createConfig, parseApiKeys };

@@ -38,13 +38,19 @@ test('engine-rng：Math.random() 被拦截，默认参数写法 = Math.random �
   assert.deepStrictEqual(rules('const a = Math.random();', 'src/ai/llm.js'), []);
 });
 
-test('no-parallel-llm：并发原语被拦截（1 API Key = 1 并发）', () => {
-  for (const p of ['all', 'allSettled', 'race', 'any']) {
-    assert.deepStrictEqual(rules(`async function f(){ await Promise.${p}([a, b]); }`, 'src/ai/agent.js'), ['no-parallel-llm'], `Promise.${p} 应被拦截`);
-  }
-  assert.deepStrictEqual(rules('async function f(){ for (const a of agents) await a.ask(); }', 'src/ai/agent.js'), []);
-  // 引擎层不受此规则约束（本层的并发不涉及 API Key）
+test('llm-must-go-through-scheduler：HTTP 只能在 llm.js 发；引擎层允许扇出（它会排进 scheduler）', () => {
+  // 唯一入队 scheduler 的地方是 llm.js；别处直接 fetch 等于绕过调度器
+  const fetchCall = 'async function f(){ const r = await fetch(url, o); return r; }';
+  assert.deepStrictEqual(rules(fetchCall, 'src/engine/flow.js'), ['llm-must-go-through-scheduler']);
+  assert.deepStrictEqual(rules(fetchCall, 'src/ai/agent.js'), ['llm-must-go-through-scheduler']);
+  assert.deepStrictEqual(rules(fetchCall, 'src/ai/llm.js'), [], 'llm.js 是唯一允许发 HTTP 的地方');
+  // AI 业务层不得自己开并发（并发扇出只由 scheduler 决定）
+  assert.deepStrictEqual(rules('async function f(){ await Promise.all([a, b]); }', 'src/ai/agent.js'), ['llm-must-go-through-scheduler']);
+  assert.deepStrictEqual(rules('async function f(){ await Promise.all([a, b]); }', 'src/ai/scheduler.js'), [], '调度器自己就是用来开并发的');
+  // 引擎层允许扇出：每条分支最终都会经 llm.js 排进 scheduler —— 这正是多 Key 并行需要的写法
   assert.deepStrictEqual(rules('async function f(){ await Promise.all([a, b]); }', 'src/engine/flow.js'), []);
+  // 测试里的网络禁令（global.fetch = ...）不算违规
+  assert.deepStrictEqual(rules('global.fetch = async (u) => { throw new Error(u); };', 'src/engine/flow.js'), []);
 });
 
 test('api-no-sync-write：同步写被拦截——注释里出现同名词不应误报', () => {

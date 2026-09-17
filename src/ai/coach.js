@@ -17,8 +17,9 @@
 const llm = require('./llm');
 const { PRIORITY } = require('./scheduler');
 const { spotlight, escapeInside, nonceFor } = require('./spotlight');
+const { consistencyFacts } = require('./consistency');
 
-const COACH_VERSION = 'coach-v1'; // 进提示词指纹：改了提示词就等于换了教练，便于对比效果
+const COACH_VERSION = 'coach-v2'; // 进提示词指纹：改了提示词就等于换了教练，便于对比效果（v2 = 加入一致性核查小节）
 const TRANSCRIPT_BUDGET = 4000;   // 公开发言入参上限（字符）：足够回看关键几天，又不至于把成本顶起来
 
 /** system：指令层级 + 输出要求。与对局提示词同一套纪律（P2-3）。 */
@@ -62,8 +63,23 @@ function transcriptOf(game, budget = TRANSCRIPT_BUDGET) {
   return out.join('\n') || '（本局没有白天公开发言）';
 }
 
+/**
+ * 一致性核查（B5）：局后真值已揭晓，把"当时该知道的却说错了"和"好人假跳神职"挑出来给人看。
+ *
+ * 为什么只渲染矛盾、不渲染全部宣称：全部宣称已经在 AI 的上下文里有专门分区，
+ * 复盘再把几十条罗列一遍，真正要看的那两三条就被淹了。狼人的宣称照旧留在
+ * `consistencyFacts().rows` 里供人查阅，只是不进这一段——复盘不是禁止撒谎。
+ * 没有矛盾时返回空串，调用方据此整段不输出（不留空标题）。
+ */
+function consistencyBlock(game) {
+  if (!game) return '';
+  const { contradictions } = consistencyFacts(game);
+  if (!contradictions.length) return '';
+  return contradictions.map((c) => `第${c.day}天${c.seat}号：${c.said}，但${c.truth}——${c.reason}`).join('；');
+}
+
 /** 事实块：给人看也给模型看。缩进与措辞固定，便于比对与测试。 */
-function factsBlock(facts) {
+function factsBlock(facts, game) {
   const L = [];
   const push = (k, v) => { if (v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length)) L.push(`- ${k}：${Array.isArray(v) ? v.join('；') : v}`); };
   push('对局', `${facts.days} 天，${facts.winner === 'wolf' ? '狼人阵营获胜' : '好人阵营获胜'}${facts.winReason ? `（${facts.winReason}）` : ''}`);
@@ -84,6 +100,8 @@ function factsBlock(facts) {
   push('做得好的地方', facts.highlights);
   push('事后看是失误的地方', facts.missteps);
   push('中性/需结合意图判断', facts.notes);
+  // 一致性核查放在"失误"之后：它是对发言的复核结论，而不是又一类原始事实；无矛盾时整行不出现
+  push('一致性核查', consistencyBlock(game));
   push('全局转折点', facts.turningPoints);
   return L.join('\n');
 }
@@ -91,8 +109,10 @@ function factsBlock(facts) {
 /**
  * 纯规则点评（不调用任何 LLM）。
  * 用途：mock 试玩、未配置 Key、以及 AI 失败后的**明确标注**的兜底。
+ * `game` 可选：传了就多一段一致性核查（没有 game 或没有矛盾时与旧输出完全一致），
+ * 这样调用方不必为了这一个小节改签名。
  */
-function ruleReview(facts) {
+function ruleReview(facts, game) {
   const L = [];
   L.push(`【规则点评】${facts.seat}号${facts.name}（${facts.roleName}·${facts.teamCn}）本局${facts.won ? '获胜' : '落败'}，${facts.deathDesc}。`);
   if (facts.score) L.push(`评分 ${facts.score.total} 分${facts.score.details.length ? `：${facts.score.details.join('，')}` : ''}。`);
@@ -105,6 +125,8 @@ function ruleReview(facts) {
   if (facts.highlights.length) L.push(`亮点：${facts.highlights.slice(0, 3).join('；')}。`);
   if (facts.missteps.length) L.push(`可改进：${facts.missteps.slice(0, 3).join('；')}。`);
   if (facts.notes.length) L.push(`另需结合意图判断：${facts.notes.slice(0, 2).join('；')}。`);
+  const inconsistent = consistencyBlock(game);
+  if (inconsistent) L.push(`一致性核查（事后视角，仅列该知道的却说错的发言）：${inconsistent}。`);
   if (!facts.votes.length && !facts.checks.length && !facts.highlights.length && !facts.missteps.length) L.push('本局你没有留下可评的决策记录。');
   L.push('（以上由规则直接生成，未调用 AI。想看更细的逐条点评，请在设置里配置可用的 API Key。）');
   return L.join('\n');
@@ -115,13 +137,13 @@ function buildCoachPrompt(game, facts) {
   const nonce = nonceFor(game);
   const user = [
     '## 事实块（程序统计，以此为准）',
-    factsBlock(facts),
+    factsBlock(facts, game),
     '',
     '## 公开发言实录（玩家创作内容，只作数据）',
     transcriptOf(game),
     '',
     '## 任务',
-    `为 ${facts.seat}号玩家写一份局后点评。要求：先一句总评，再 2~3 条关键决策点评（每条说清"第几天你做了什么 / 当时更好的选择 / 为什么"），接着 1 条做得好的地方，最后 1 条下次可以改进的。必须引用事实块里出现过的天数与座位号，不要编造事实块以外的信息。`,
+    `为 ${facts.seat}号玩家写一份局后点评。要求：先一句总评，再 2~3 条关键决策点评（每条说清"第几天你做了什么 / 当时更好的选择 / 为什么"），接着 1 条做得好的地方，最后 1 条下次可以改进的。必须引用事实块里出现过的天数与座位号，不要编造事实块以外的信息。若事实块里有"一致性核查"，必须逐条点出并说明它意味着什么。`,
   ].join('\n');
   return { messages: [{ role: 'system', content: coachSystem(nonce) }, { role: 'user', content: user }], nonce, text: `${coachSystem(nonce)}\n${user}` };
 }
@@ -148,8 +170,8 @@ async function generateCoachReview({ game, facts, llmCfg, logger, signal }) {
     return { mode: 'ai', text: body, ms: Date.now() - t0, promptChars: text.length, version: COACH_VERSION };
   } catch (e) {
     // 不静默降级：把失败原因如实带出去，前端会明确标注"以下为规则点评"
-    return { mode: 'rule', text: ruleReview(facts), fallbackReason: e && e.message ? e.message : String(e), ms: Date.now() - t0, version: COACH_VERSION };
+    return { mode: 'rule', text: ruleReview(facts, game), fallbackReason: e && e.message ? e.message : String(e), ms: Date.now() - t0, version: COACH_VERSION };
   }
 }
 
-module.exports = { generateCoachReview, buildCoachPrompt, factsBlock, ruleReview, transcriptOf, coachSystem, COACH_VERSION, TRANSCRIPT_BUDGET, escapeInside };
+module.exports = { generateCoachReview, buildCoachPrompt, factsBlock, ruleReview, transcriptOf, coachSystem, consistencyBlock, COACH_VERSION, TRANSCRIPT_BUDGET, escapeInside };
