@@ -328,17 +328,58 @@ class Browser {
     await sleep(400);
     await b.click('#m-codex-btn');
     await sleep(900);
-    const mc = await b.eval(`({
-      shown: [...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id),
-      cards: document.querySelectorAll('#cdx-grid .cdx-card').length,
-      secs: [...document.querySelectorAll('#cdx-grid .cdx-sec h2')].map((h) => h.textContent.trim()),
-      art: document.querySelectorAll('#cdx-grid img.role-art').length,
-      detail: !!document.querySelector('#m-codex #cdx-detail'),
-    })`);
-    check('手机版图鉴：独立成屏并列出全部身份', mc.shown.includes('m-codex') && mc.cards >= 15 && mc.art === mc.cards, JSON.stringify({ shown: mc.shown, cards: mc.cards, art: mc.art }));
-    check('手机版图鉴：评论区按卡框阵营分四区（含第三方）', mc.secs.length === 4 && mc.secs.some((s) => /第三方/.test(s)), JSON.stringify(mc.secs));
+    const mc = await b.eval(`(() => {
+      const info = window.Codex.pageInfo();
+      const cards = [...document.querySelectorAll('#cdx-grid .cdx-card')];
+      return {
+        shown: [...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id),
+        cards: cards.length, art: document.querySelectorAll('#cdx-grid img.role-art').length,
+        factions: cards.map((c) => c.dataset.faction),
+        detail: !!document.querySelector('#m-codex #cdx-detail'),
+        total: info.total, cap: info.cap, sizes: info.sizes, pageFactions: info.factions,
+        title: (document.querySelector('#cdx-ptitle') || {}).textContent || '',
+        meta: (document.querySelector('#cdx-pmeta') || {}).textContent || '',
+        prevDisabled: document.querySelector('.cdx-prev').disabled,
+      };
+    })()`);
+    check('手机版图鉴：独立成屏并渲染牌面', mc.shown.includes('m-codex') && mc.cards > 0 && mc.art === mc.cards, JSON.stringify({ shown: mc.shown, cards: mc.cards, art: mc.art }));
+    check('手机版图鉴：一页只放一个阵营', mc.factions.length > 0 && new Set(mc.factions).size === 1, JSON.stringify(mc.factions));
+    check('手机版图鉴：每页不超容量、整本可按页翻完', mc.sizes.every((n) => n <= mc.cap) && mc.total >= 4, JSON.stringify({ cap: mc.cap, sizes: mc.sizes, total: mc.total }));
+    check('手机版图鉴：页码条显示阵营与进度', /阵营|第三方/.test(mc.title) && /页/.test(mc.meta) && mc.prevDisabled === true, `${mc.title} / ${mc.meta}`);
     check('手机版图鉴：小屏不放右侧细节栏（走弹层）', mc.detail === false);
     await b.shot(path.join(SHOTS, '06b-mobile-codex.png'));
+    // 逐页翻完，把 15 个身份全部收齐：这才是"一页满了就放下一页"的真凭据
+    const walked = await b.eval(`(() => {
+      const seen = [];
+      const secs = [];
+      for (let i = 0; i < 40; i++) {
+        const info = window.Codex.pageInfo();
+        seen.push(...info.cards);
+        secs.push(info.faction);
+        if (info.page >= info.total - 1) break;
+        window.Codex.turn(1);
+      }
+      return { seen, secs };
+    })()`);
+    const uniq = [...new Set(walked.seen)];
+    check('手机版图鉴：翻完每一页能收齐全部 15 个身份', uniq.length === 15, `${uniq.length} 个 / 共 ${walked.seen.length} 张`);
+    check('手机版图鉴：阵营不会被拆到两页之间（每页只属一个阵营）', walked.secs.every((f, i) => i === 0 || f != null), JSON.stringify(walked.secs));
+    // 翻到"神职"的第一页：验证每个阵营确实另起一页（不是接着上一阵营继续排）
+    const jump = await b.eval(`(() => {
+      const info = window.Codex.pageInfo();
+      const i = info.factions.indexOf('god');
+      window.Codex.goPage(i);
+      const after = window.Codex.pageInfo();
+      return {
+        found: i, page: after.page, faction: after.faction,
+        title: (document.querySelector('#cdx-ptitle') || {}).textContent || '',
+        meta: (document.querySelector('#cdx-pmeta') || {}).textContent || '',
+        cards: document.querySelectorAll('#cdx-grid .cdx-card').length,
+      };
+    })()`);
+    check('手机版图鉴：每个阵营各起一页（神职在自己的页上）', jump.found > 0 && jump.faction === 'god' && /神职/.test(jump.title) && jump.cards > 0, JSON.stringify(jump));
+    check('手机版图鉴：多页阵营标出"本阵营第几页"', /\d\s*\/\s*\d/.test(jump.meta), jump.meta);
+    await b.shot(path.join(SHOTS, '06d-mobile-codex-page2.png'));
     await b.eval(`document.querySelectorAll('#cdx-grid .cdx-card')[0].click()`);
     await sleep(600);
     const ms = await b.eval(`(() => {

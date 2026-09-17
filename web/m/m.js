@@ -335,7 +335,7 @@ function openCodex() {
   showScreen('m-codex');
   window.Codex.mount({
     meta: state.meta,
-    mode: 'sheet',
+    mode: 'pages', // 手机端按阵营分页：每页一屏、满页续下一页，点牌弹层看细节
     artBase: '../assets/roles/', // 手机端在 /m/ 下，立绘要上一层（写死相对路径会 404 成一排碎图）
     // 本局在场：选中的板子里有几张（开局前也能看到，进对局后 view.board 更准）
     counts: () => (state.view && state.view.board && state.view.board.roles) || state.boardCounts || {},

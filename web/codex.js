@@ -22,9 +22,11 @@ window.Codex = (function () {
     { key: 'villager', titleKey: 'codex.secVillager', catKey: 'codex.catVillager' },
     { key: 'third', titleKey: 'codex.secThird', catKey: 'codex.catThird' },
   ];
-  const st = { filter: 'all', q: '', pick: null };
+  const st = { filter: 'all', q: '', pick: null, page: 0, cap: 4 };
   // artBase 必须由调用方给：桌面在 `/`（assets/roles/），手机在 `/m/`（../assets/roles/）。
   // 写死相对路径的话手机端会 404 成一排碎图（踩过一次）。
+  // mode：'panel' = 桌面（一张长列表 + 右侧固定细节栏）；
+  //       'pages' = 手机（按阵营分页，一页放满翻下一页，点牌弹层看细节）。
   let ctx = { meta: null, mode: 'panel', artBase: 'assets/roles/', onInspect: null, onRulebook: null, onPick: null, counts: () => ({}) };
 
   const T = (k, vars) => ((typeof I18N !== 'undefined' && I18N.t && I18N.t(k, vars)) || k);
@@ -53,7 +55,7 @@ window.Codex = (function () {
     const search = $('#cdx-search');
     if (search) {
       search.value = st.q;
-      search.addEventListener('input', () => { st.q = search.value; renderGrid(); });
+      search.addEventListener('input', () => { st.q = search.value; st.page = 0; renderGrid(); });
     }
     const rb = $('#cdx-rulebook');
     if (rb && !rb.dataset.wired) {
@@ -76,6 +78,7 @@ window.Codex = (function () {
         e.preventDefault();
         pick(card.dataset.role);
       });
+      if (ctx.mode === 'pages') wirePager(grid);
     }
     const detail = $('#cdx-detail');
     if (detail && !detail.dataset.wired) {
@@ -88,10 +91,97 @@ window.Codex = (function () {
     render();
   }
 
+  /* ---------- 分页模式（手机）：按阵营分页，一页放满就翻下一页 ----------
+     为什么不是"一条长列表"：15 张牌在小屏上要滑很久才能看到神职，而玩家九成时候只想
+     查某一个身份。分页后每一页都是"一个阵营 + 页码"，翻页比滑动更快找到东西。
+     每页容量按**实测**算（屏幕高度 ÷ 一张牌的高度 × 列数），所以横竖屏、大小屏都合适。 */
+  function pagerEl() { return $('#cdx-pager'); }
+
+  function ensurePager() {
+    const grid = $('#cdx-grid');
+    if (!grid || pagerEl()) return;
+    const bar = el('div', 'cdx-pager');
+    bar.id = 'cdx-pager';
+    bar.innerHTML = '<button class="cdx-prev" type="button" aria-label="上一页">‹</button>'
+      + '<div class="cdx-pagehead"><b id="cdx-ptitle"></b><span id="cdx-pmeta"></span></div>'
+      + '<button class="cdx-next" type="button" aria-label="下一页">›</button>';
+    grid.parentNode.insertBefore(bar, grid);
+    const root = grid.closest('.m-screen') || grid.parentNode;
+    if (root && root.classList) root.classList.add('cdx-paged');
+  }
+
+  /** 一页能放几张：按牌实际占位算，取偶数列（2 列 × N 行）。
+   *  可用高度直接量**网格自己**——分页模式下 .cdx-paged 把整屏设成 flex 列、网格 flex:1 1 auto，
+   *  所以它的 clientHeight 就是"这一页还剩多少地方"，不用拿 innerHeight 去减一堆东西
+   *  （减错过一次：把页码条的高度减了两遍，容量只剩 2 张/页，15 张牌摊成 9 页）。 */
+  function computeCap() {
+    const grid = $('#cdx-grid');
+    if (!grid) return 4;
+    const cols = 2;
+    const gap = 12;
+    const w = grid.clientWidth || (grid.getBoundingClientRect().width) || 340;
+    const avail = grid.clientHeight || Math.max(240, (window.innerHeight || 700) - grid.getBoundingClientRect().top - 16);
+    const cardW = Math.max(80, (w - gap * (cols - 1)) / cols);
+    const cardH = cardW * 1.5; // 卡框是 2:3
+    const rows = Math.max(1, Math.floor((avail + gap) / (cardH + gap)));
+    return Math.max(2, rows * cols);
+  }
+
+  /** 分组 → 切页：每个阵营从新的一页开始，装满就续到下一页；返回 [{sec, ids}] */
+  function buildPages(cs) {
+    const pages = [];
+    for (const sec of SECTIONS) {
+      const ids = Object.keys(roles()).filter((id) => sec.key === factionOf(id) && matches(id, cs));
+      for (let i = 0; i < ids.length; i += st.cap) pages.push({ sec, ids: ids.slice(i, i + st.cap), first: i === 0 });
+    }
+    return pages;
+  }
+
+  function wirePager(grid) {
+    ensurePager();
+    const bar = pagerEl();
+    if (!bar || bar.dataset.wired) return;
+    bar.dataset.wired = '1';
+    bar.querySelector('.cdx-prev').addEventListener('click', () => turn(-1));
+    bar.querySelector('.cdx-next').addEventListener('click', () => turn(1));
+    // 横滑翻页：手机上这是最顺手的操作，按钮是给"不知道能滑"的人留的
+    let x0 = null;
+    let y0 = null;
+    grid.addEventListener('touchstart', (e) => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; }, { passive: true });
+    grid.addEventListener('touchend', (e) => {
+      if (x0 == null) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - x0;
+      const dy = t.clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy)) turn(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    // 转屏 / 改窗口大小会改变每页容量，重算并保持当前页（页码越界会被夹住）
+    let timer = null;
+    window.addEventListener('resize', () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const cap = computeCap();
+        if (cap !== st.cap) { st.cap = cap; renderGrid(); }
+      }, 180);
+    });
+  }
+
+  function pageCount() { return buildPages(counts()).length; }
+
+  function turn(delta) {
+    const total = pageCount();
+    if (total <= 1) return;
+    st.page = Math.min(total - 1, Math.max(0, st.page + delta));
+    renderGrid();
+  }
+
+  function goPage(n) { st.page = Math.max(0, n | 0); renderGrid(); }
+
   function pick(rid) {
     st.pick = rid;
     if (ctx.mode === 'panel') renderGrid();
-    else if (ctx.mode === 'sheet') { ctx.onPick && ctx.onPick(rid); }
+    else { ctx.onPick && ctx.onPick(rid); } // pages/sheet：细节交给调用方（手机走弹层）
   }
 
   function render() { renderSub(); renderFilters(); renderGrid(); }
@@ -116,7 +206,7 @@ window.Codex = (function () {
       const b = el('button', st.filter === key ? 'on' : '', esc(label));
       b.type = 'button';
       b.dataset.filter = key;
-      b.addEventListener('click', () => { st.filter = key; renderFilters(); renderGrid(); });
+      b.addEventListener('click', () => { st.filter = key; st.page = 0; renderFilters(); renderGrid(); });
       box.appendChild(b);
     }
   }
@@ -135,33 +225,73 @@ window.Codex = (function () {
     const grid = $('#cdx-grid');
     if (!grid) return;
     const cs = counts();
-    const visible = [];
     grid.innerHTML = '';
+    const visible = ctx.mode === 'pages' ? renderPaged(grid, cs) : renderAll(grid, cs);
+    if (!visible.length) grid.appendChild(el('div', 'cdx-empty', esc(T('codex.empty'))));
+    if (!st.pick || visible.indexOf(st.pick) < 0) st.pick = visible[0] || null;
+    if (ctx.mode === 'panel') renderDetail();
+  }
+
+  /** 桌面：一条长列表，按阵营分区（不翻页，滚动就好） */
+  function renderAll(grid, cs) {
+    const visible = [];
     for (const sec of SECTIONS) {
       const ids = Object.keys(roles()).filter((id) => sec.key === factionOf(id) && matches(id, cs));
       if (!ids.length) continue;
       const node = el('section', 'cdx-sec');
       node.appendChild(el('h2', null, `${esc(T(sec.titleKey))} <em>${ids.length}</em>`));
       const cards = el('div', 'cdx-cards');
-      for (const id of ids) {
-        const r = roleOf(id);
-        const card = el('div', 'cdx-card', cardHtml(id, cs[id] || 0));
-        // data-role/data-faction 走 CardFrame 原语：手写 dataset.role 会漏掉阵营，徽记永远是狼爪
-        Object.assign(card.dataset, window.CardFrame.roleAttrs(id));
-        card.setAttribute('role', 'button');
-        card.setAttribute('tabindex', '0');
-        card.setAttribute('aria-label', `${r.name}：${r.short}`);
-        card.title = `${r.name} · ${r.short}`;
-        if (st.pick === id) card.classList.add('on');
-        cards.appendChild(card);
-        visible.push(id);
-      }
+      for (const id of ids) cards.appendChild(cardNode(id, cs[id] || 0));
       node.appendChild(cards);
       grid.appendChild(node);
+      visible.push(...ids);
     }
-    if (!visible.length) grid.appendChild(el('div', 'cdx-empty', esc(T('codex.empty'))));
-    if (!st.pick || visible.indexOf(st.pick) < 0) st.pick = visible[0] || null;
-    if (ctx.mode === 'panel') renderDetail();
+    return visible;
+  }
+
+  /** 手机：按阵营分页 —— 每个阵营从新的一页开始，一页装满就续到下一页 */
+  function renderPaged(grid, cs) {
+    ensurePager();
+    st.cap = computeCap();
+    const pages = buildPages(cs);
+    if (st.page > pages.length - 1) st.page = Math.max(0, pages.length - 1);
+    const cur = pages[st.page];
+    const visible = cur ? cur.ids.slice() : [];
+    if (cur) {
+      const cards = el('div', 'cdx-cards');
+      for (const id of cur.ids) cards.appendChild(cardNode(id, cs[id] || 0));
+      grid.appendChild(cards);
+      const sameSec = pages.filter((p) => p.sec.key === cur.sec.key);
+      const idxInSec = sameSec.indexOf(cur) + 1;
+      const title = $('#cdx-ptitle');
+      const meta = $('#cdx-pmeta');
+      // 一个阵营占多页时把"该阵营第几页"和"全局第几页"都写出来，不然翻着翻着不知道在哪
+      if (title) title.textContent = T(cur.sec.titleKey);
+      if (meta) {
+        meta.textContent = sameSec.length > 1
+          ? T('codex.pageOfFaction', { i: idxInSec, n: sameSec.length, p: st.page + 1, t: pages.length })
+          : T('codex.pageOf', { p: st.page + 1, t: pages.length });
+      }
+    }
+    const bar = pagerEl();
+    if (bar) {
+      bar.querySelector('.cdx-prev').disabled = st.page <= 0;
+      bar.querySelector('.cdx-next').disabled = st.page >= pages.length - 1;
+    }
+    return visible;
+  }
+
+  function cardNode(id, inGame) {
+    const r = roleOf(id);
+    const card = el('div', 'cdx-card', cardHtml(id, inGame));
+    // data-role/data-faction 走 CardFrame 原语：手写 dataset.role 会漏掉阵营，徽记永远是狼爪
+    Object.assign(card.dataset, window.CardFrame.roleAttrs(id));
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
+    card.setAttribute('aria-label', `${r.name}：${r.short}`);
+    card.title = `${r.name} · ${r.short}`;
+    if (st.pick === id) card.classList.add('on');
+    return card;
   }
 
   /** 牌面：复用身份牌那套 .card-frame + 同一张立绘；铭牌挂在卡框**内部**（--band* 变量才继承得到） */
@@ -231,6 +361,27 @@ window.Codex = (function () {
     detailHtml,
     renderDetail,
     counts,
+    /** 分页信息（给测试与调试用）：当前页、总页数、每页容量、当前页的阵营与牌 */
+    pageInfo() {
+      const cs = counts();
+      const pages = buildPages(cs);
+      const cur = pages[st.page];
+      const grid = $('#cdx-grid');
+      return {
+        page: st.page,
+        total: pages.length,
+        cap: st.cap,
+        // 量容量的两个输入值也带出来：容量不对时不用猜（曾经把页码条高度减了两遍）
+        avail: grid ? Math.round(grid.clientHeight) : 0,
+        width: grid ? Math.round(grid.clientWidth) : 0,
+        faction: cur ? cur.sec.key : null,
+        cards: cur ? cur.ids.slice() : [],
+        sizes: pages.map((p) => p.ids.length),
+        factions: pages.map((p) => p.sec.key),
+      };
+    },
+    turn,
+    goPage,
     get pick() { return st.pick; },
     get filter() { return st.filter; },
     factionOf,

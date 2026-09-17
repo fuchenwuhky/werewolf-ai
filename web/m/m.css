@@ -403,6 +403,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* ==================== 角色图鉴（手机） ====================
    渲染逻辑在共享模块 ../codex.js，基础外观来自 ../style.css 的 .cdx-* 一节。
    这里只处理小屏差异：整屏自己滚、牌两列、筛选条横滑不换行、细节弹层收紧。 */
+/* 注意：#m-codex 默认滚动，分页模式由 .cdx-paged 覆盖成 flex + overflow:hidden */
 #m-codex { overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom, 0); }
 #m-codex .m-head { position: sticky; top: 0; z-index: 5; background: rgba(8, 12, 22, .94); backdrop-filter: blur(6px); }
 #m-codex .m-head h2 { flex: 1 1 auto; }
@@ -450,3 +451,27 @@ html, body { height: 100%; overscroll-behavior: none; }
 .cdx-sheet .cdx-strat b { color: var(--moon); font-weight: 600; }
 .cdx-sheet .cdx-actions { display: flex; gap: var(--sp-2); }
 .cdx-sheet .cdx-actions .btn { flex: 1 1 0; }
+
+/* 分页模式：整屏不再滚动 —— 每页正好一屏，翻页代替滑动（见 codex.js 的 renderPaged） */
+#m-codex.cdx-paged { overflow: hidden; display: flex; flex-direction: column; }
+/* padding-top 是给"本局 ×N"角标留的位置：它挂在卡框外上方 6px，overflow:hidden 会把第一排的角标切掉 */
+#m-codex.cdx-paged .cdx-grid { flex: 1 1 auto; min-height: 0; overflow: hidden; padding-top: 8px; }
+#m-codex.cdx-paged .cdx-cards { align-content: start; }
+.cdx-pager {
+  flex: none; display: flex; align-items: center; gap: var(--sp-2);
+  margin: 0 var(--sp-4) var(--sp-3);
+  padding: 6px var(--sp-2); border-radius: var(--r-sm);
+  border: 1px solid var(--line); background: linear-gradient(180deg, rgba(24, 34, 60, .72), rgba(12, 18, 34, .72));
+}
+.cdx-pager button {
+  flex: none; width: 40px; height: 34px; border-radius: var(--r-sm); cursor: pointer;
+  border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--gold-bright);
+  font-size: 18px; line-height: 1; font-family: inherit;
+}
+.cdx-pager button:disabled { opacity: .32; cursor: default; }
+.cdx-pager .cdx-pagehead { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+.cdx-pager .cdx-pagehead b {
+  font-family: var(--font-cn-title); font-size: var(--fs-md); letter-spacing: 1px; color: var(--moon);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
+}
+.cdx-pager .cdx-pagehead span { font-size: var(--fs-xs); color: var(--muted); }
