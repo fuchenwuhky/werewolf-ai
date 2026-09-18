@@ -1,6 +1,6 @@
 {
   "name": "werewolf-ai-app",
-  "version": "1.0.0",
+  "version": "1.5.2",
   "private": true,
   "description": "AI 狼人杀 APP 壳（Capacitor + 内嵌 Node 服务端）",
   "dependencies": {

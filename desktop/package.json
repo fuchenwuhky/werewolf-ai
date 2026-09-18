@@ -1,6 +1,6 @@
 {
   "name": "werewolf-ai-desktop",
-  "version": "1.4.0",
+  "version": "1.5.2",
   "private": true,
   "description": "AI 狼人杀 · 电脑版（Electron 桌面应用，内嵌本项目自带的服务端）",
   "author": "werewolf-ai",

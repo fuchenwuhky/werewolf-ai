@@ -113,6 +113,15 @@ werewolf-ai/
   进程退出（Ctrl+C）会先等活动对局落盘再退出（4 秒总闸）。
 - 存档目录可用 `WW_DATA_DIR` / `WW_CONFIG` 指定（APP 内嵌与测试用）。
 
+
+## 版本与发布
+
+- **版本唯一源**：`app/android/app/build.gradle` 的 `versionName` / `versionCode`。
+- 发版前必须同步：`desktop/package.json` 与 `app/package.json` 的 `version`（有自动化测试校验三者一致）。
+- 桌面安装包：`cd desktop && npm run dist`（文件名带 desktop 包自身的 version）。
+- Android 包：`cd app && npx cap sync android && cd android && ./gradlew assembleRelease`。
+- Android 构建需要 **JDK 21**：`JAVA_HOME=D:jdk-21.0.12.1+1`（本机路径；JDK 17 会报"无效的源发行版：21"）。
+
 ## 安卓 APP
 
 已落地：**Capacitor 8 + [capacitor-nodejs](https://github.com/hampoelz/capacitor-nodejs)** 在手机本地内嵌 Node 运行时，同一套服务端随 APP 离线运行，WebView 指向 `127.0.0.1:3210`——安装即用，只需首次填 API Key。

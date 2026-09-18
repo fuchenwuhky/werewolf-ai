@@ -607,3 +607,14 @@ npm audit --omit=dev
 | 阶段 8 人工验收 8 场景 | P1 | 需人工/真机 |
 | Android 构建冒烟 | P1 | 需 Android SDK 环境 |
 | 阶段 5.2 共享前端模块抽取 | P2 | 配对门在两端有少量重复实现，后续抽 api-client |
+
+### 第三批收尾（2026-09-18 深夜）
+
+| 项 | 说明 |
+|---|---|
+| api.js 覆盖率 | 80.2/68.08 → **89.25 行 / 74.51 分支**（行达标 ✅；分支距 75 差 0.49，余量在 buildView 深层三元，已到性价比边界）。新增 meta 形状、getReview done/409/400/cached、狼聊全分支、logs 令牌、tokens 找回、stats 聚合、SSE evicted/ping、Origin 恶意值等 11 个用例 |
+| MAINT-01 版本分散 | ✅ 关闭：唯一源 = Android build.gradle 的 versionName（现 1.5.2）；desktop/app 两处 package.json 已同步；新增一致性测试防止漂移；README 增「版本与发布」 |
+| Android 构建冒烟 | ✅ 关闭：JDK21（D:jdk-21.0.12.1+1）下 assembleDebug **BUILD SUCCESSFUL**（133 tasks）；README 已记 JDK 要求与常见报错 |
+| DEP-02 Capacitor | 维持登记接受（3 moderate 仅构建链） |
+
+终值：lint ✅ · 测试 **500/500** ✅ · 覆盖率门禁 ✅ · 根/桌面审计 0 ✅

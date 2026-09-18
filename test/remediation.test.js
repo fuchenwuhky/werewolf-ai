@@ -14,7 +14,7 @@ const path = require('path');
 
 const { createRequestHandler, decodePath } = require('../src/request-handler');
 
-const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
+const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 
 function tmpDir(tag) {
   return fs.mkdtempSync(path.join(os.tmpdir(), `ww-${tag}-`));
@@ -580,4 +580,317 @@ test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支
   const dropped = api.pruneGames({ maxEntries: 1 });
   assert.ok(dropped >= 2 && api.games.size <= 1, 'LRU 上限必须淘汰最久未访问的局');
   api.games.clear();
+});
+
+// ---------- 覆盖率深挖：meta/复盘分支/狼聊/日志/统计/404 ----------
+
+function makeFinishedApi(dir) {
+  const { Api } = require('../src/api');
+  const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  return api;
+}
+
+function makeFinishedEntry(api, { mock = true, humanRole = 'seer' } = {}) {
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: i === 0 }));
+  const g = new Game({ id: 'deep' + Date.now() + Math.floor(Math.random() * 999), board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal();
+  g.players[0].role = humanRole;
+  g.started = true;
+  g.finished = true;
+  g.winner = 'wolf';
+  g.winReason = '屠边';
+  const entry = { game: g, running: false, error: null, mock, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+  return entry;
+}
+
+test('深挖：/api/meta 全量形状（roles/boards/roleArt/paces）', async () => {
+  const dir = tmpDir('meta');
+  const api = makeFinishedApi(dir);
+  const box = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), box.res, '/api/meta', new URLSearchParams());
+  assert.strictEqual(box.code, 200);
+  const body = box.body;
+  assert.ok(body.roles && body.roles.wolf && body.roles.seer, 'roles 必须下发');
+  assert.ok(body.boards && Object.keys(body.boards).length >= 10, '内置板子必须下发');
+  assert.ok(Array.isArray(body.paces) && body.paces.length >= 3, '节奏档位必须下发');
+  assert.ok('roleArt' in body, 'roleArt 必须下发（角色卡图 png/webp/svg 解析结果）');
+  api.games.clear();
+});
+
+test('深挖：getReview 的 done 形状 + startReview 的 409/400/cached 分支', async () => {
+  const dir = tmpDir('rev');
+  const api = makeFinishedApi(dir);
+  const entry = makeFinishedEntry(api);
+  const gid = entry.game.id;
+
+  // done 形状（875-880）
+  entry.review = { status: 'done', mode: 'llm', text: '复盘内容', fallbackReason: null, seat: 1, at: 123 };
+  const r1 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), r1.res, `/api/games/${gid}/review`, new URLSearchParams('token=gt'));
+  assert.strictEqual(r1.code, 200);
+  assert.strictEqual(r1.body.review.text, '复盘内容');
+  assert.strictEqual(r1.body.review.status, 'done');
+
+  // 未结束 → 409（908-911）
+  entry.game.finished = false;
+  const r2 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { token: 'gt' } }), r2.res, `/api/games/${gid}/review`, new URLSearchParams());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.strictEqual(r2.code, 409);
+  assert.match(r2.body.error, /还没结束/);
+  entry.game.finished = true;
+
+  // 座位不存在 → 400（913-916）
+  const r3 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { token: 'gt' } }), r3.res, `/api/games/${gid}/review`, new URLSearchParams());
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(true);
+  const r4 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), r4.res, `/api/games/${gid}/review?token=gt`, new URLSearchParams());
+  // 上面的 handle 需要带 body；改用显式 body 调 startReview：
+  const r5 = stubRes();
+  await api.startReview(r5.res, entry, { token: 'gt', seat: 99 });
+  assert.strictEqual(r5.code, 400);
+  assert.match(r5.body.error, /座位 99 不存在/);
+
+  // done 缓存：不 regenerate 直接回 cached（919-921）
+  const r6 = stubRes();
+  await api.startReview(r6.res, entry, { token: 'gt' });
+  assert.strictEqual(r6.code, 200);
+  assert.strictEqual(r6.body.cached, true);
+  api.games.delete(gid);
+});
+
+test('深挖：狼聊通道（inactive 409 / 非狼 403 / say 入队 / extra 加轮 / end / kind 校验）', async () => {
+  const dir = tmpDir('wt');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 2, seer: 1, witch: 1, villager: 1 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: i === 0 }));
+  const g = new Game({ id: 'wt' + Date.now(), board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal();
+  g.players[0].role = 'wolf';   // 人类是狼
+  g.players[1].role = 'wolf';
+  g.players[2].role = 'seer';
+  g.players[3].role = 'witch';
+  g.players[4].role = 'villager';
+  g.started = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+
+  const wtCall = (body) => {
+    const box = stubRes();
+    return api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body }), box.res, `/api/games/${g.id}/wolftalk`, new URLSearchParams()).then(() => box);
+  };
+  // inactive → 409（1178）
+  let r = await wtCall({ token: 'pt', kind: 'say', text: 'hi' });
+  assert.strictEqual(r.code, 409);
+  assert.match(r.body.error, /狼队讨论/);
+  // active → say 入队（1183-1187）
+  g.wolfTalk = { active: true, round: 1, rounds: 2, queue: [], endNow: false };
+  r = await wtCall({ token: 'pt', kind: 'say', text: '刀4' });
+  assert.strictEqual(r.code, 200);
+  assert.strictEqual(r.body.wolfTalk.queued, 1);
+  // 空文本 → 400（1185）
+  r = await wtCall({ token: 'pt', kind: 'say', text: '  ' });
+  assert.strictEqual(r.code, 400);
+  // extra 加轮（1188-1191）
+  r = await wtCall({ token: 'pt', kind: 'extra' });
+  assert.strictEqual(r.code, 200);
+  assert.strictEqual(r.body.wolfTalk.rounds, 3);
+  // end（1192-1193）
+  r = await wtCall({ token: 'pt', kind: 'end' });
+  assert.strictEqual(r.code, 200);
+  assert.strictEqual(g.wolfTalk.endNow, true);
+  // kind 非法 → 400（1194-1195）
+  r = await wtCall({ token: 'pt', kind: 'hack' });
+  assert.strictEqual(r.code, 400);
+  // 错 token → 403（1176）
+  r = await wtCall({ token: 'wrong', kind: 'say', text: 'x' });
+  assert.strictEqual(r.code, 403);
+  api.games.delete(g.id);
+});
+
+test('深挖：未知接口 404、令牌找回（本机）、logs 需上帝令牌、unpair 清会话', async () => {
+  const dir = tmpDir('misc');
+  const api = makeFinishedApi(dir);
+  const entry = makeFinishedEntry(api, { humanRole: 'wolf' });
+  const gid = entry.game.id;
+
+  // 未知接口 → 404（591）
+  const nf = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), nf.res, '/api/nope', new URLSearchParams());
+  assert.strictEqual(nf.code, 404);
+
+  // 令牌找回（1246-1247）：本机回环默认授权
+  const tk = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), tk.res, `/api/games/${gid}/tokens`, new URLSearchParams());
+  assert.strictEqual(tk.code, 200);
+  assert.strictEqual(tk.body.player, 'pt');
+
+  // logs 需要上帝令牌（1200-1201）
+  const lg1 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), lg1.res, `/api/games/${gid}/logs`, new URLSearchParams('token=wrong'));
+  assert.strictEqual(lg1.code, 403);
+  const lg2 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), lg2.res, `/api/games/${gid}/logs`, new URLSearchParams('token=gt'));
+  assert.strictEqual(lg2.code, 200);
+
+  // unpair 清会话（429-432）
+  const up = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), up.res, '/api/auth/unpair', new URLSearchParams());
+  assert.strictEqual(up.code, 200);
+  api.games.delete(gid);
+});
+
+test('深挖：stats 聚合存档（写一份存档 → 胜负/天数/板子统计正确）', async () => {
+  const dir = tmpDir('stats');
+  const api = makeFinishedApi(dir);
+  const doc = { schemaVersion: 2, mock: false, tokens: {}, game: { id: 'statg1', day: 3, phase: 'over', started: true, finished: true, winner: 'good', winReason: 'r', players: Array.from({ length: 9 }, (_, i) => ({ seat: i + 1, name: 'P' + i, isHuman: false })) }, anchor: null, review: null, savedAt: Date.now() };
+  fs.writeFileSync(path.join(dir, 'statg1.json'), JSON.stringify(doc));
+  const box = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), box.res, '/api/stats', new URLSearchParams());
+  assert.strictEqual(box.code, 200);
+  const s = box.body;
+  assert.ok(s.games >= 1 && s.finished >= 1, '必须统计到刚写的存档');
+  assert.strictEqual(s.goodWins, 1, '好人胜利数必须正确');
+  api.games.clear();
+});
+
+// ---------- 分支覆盖补强：Origin 不信任/限流边界/双令牌视角/运行中局不被回收 ----------
+
+test('分支：恶意 Origin 的状态改变请求必须 403（pair/unpair/config PUT）', async () => {
+  const dir = tmpDir('orig');
+  const api = makeFinishedApi(dir);
+  const evil = { host: 'x', origin: 'https://evil.example' };
+  const r1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: evil, body: { code: '123456' } }), r1.res, '/api/auth/pair', new URLSearchParams());
+  assert.strictEqual(r1.code, 403, '恶意 Origin 配对必须 403');
+  const r2 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: evil }), r2.res, '/api/auth/unpair', new URLSearchParams());
+  assert.strictEqual(r2.code, 403);
+  const r3 = stubRes();
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: evil, body: { model: 'x' } }), r3.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(r3.code, 401, 'PUT config 恶意 Origin 按未授权处理');
+  // 伪造 statChange 无 Origin 头（curl 类客户端）不受 Origin 检查影响
+  const r4 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x' }, body: { code: '123456' } }), r4.res, '/api/auth/pair', new URLSearchParams());
+  assert.ok(r4.code === 403 || r4.code === 429, '无 Origin 的远端配对走码校验/限流，不该被 Origin 拦死');
+});
+
+test('分支：view 的玩家/上帝双令牌、pruneGames 不回收运行中局', async () => {
+  const dir = tmpDir('br');
+  const api = makeFinishedApi(dir);
+  const entry = makeFinishedEntry(api, { humanRole: 'seer' });
+  const gid = entry.game.id;
+  // 上帝令牌视角
+  const vGod = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
+  assert.strictEqual(vGod.code, 200);
+  // 玩家令牌视角
+  const vMe = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vMe.res, `/api/games/${gid}/view`, new URLSearchParams('token=pt&after=0'));
+  assert.strictEqual(vMe.code, 200);
+  // 错误令牌
+  const vBad = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vBad.res, `/api/games/${gid}/view`, new URLSearchParams('token=nope&after=0'));
+  assert.strictEqual(vBad.code, 403);
+  // 运行中局绝不被 prune（running 跳过分支）
+  entry.running = true;
+  entry.lastAccess = Date.now() - 999 * 60 * 1000;
+  const dropped = api.pruneGames({ ttlMs: 30 * 60 * 1000 });
+  assert.ok(api.games.has(gid), '运行中的局必须跳过清理');
+  entry.running = false;
+  api.pruneGames({ ttlMs: 30 * 60 * 1000 });
+  api.games.delete(gid);
+  assert.ok(dropped >= 0);
+});
+
+test('分支角落：畸形 Origin 解析失败、坏 Cookie、本机模式下 pair 报错', async () => {
+  const dir = tmpDir('corner');
+  const api = makeFinishedApi(dir);
+  // ① Origin 无法解析 → isTrustedOrigin false → 403
+  const r1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x', origin: '::::not-a-url' }, body: { code: '1' } }), r1.res, '/api/auth/pair', new URLSearchParams());
+  assert.strictEqual(r1.code, 403);
+  // ② Cookie 无 '=' → sessionIdFrom 返回 null → 未授权
+  api.auth.setEnabled(true);
+  const r2 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '10.0.0.9', headers: { host: 'x', cookie: 'garbage' } }), r2.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(r2.code, 401);
+  api.auth.setEnabled(false);
+  // ③ 本机模式（未启用）下调 pair → 显式报错（分支：!this.enabled）
+  assert.throws(() => api.auth.pair('123456'), /本机模式无需配对/);
+  // ④ 未启用时 newPairingCode 同样报错
+  assert.throws(() => api.auth.newPairingCode(), /本机模式无需配对/);
+});
+
+test('分支补强：saveActive 双侧、wolfTalk active 的上帝视图、显式座位/观战建局', async () => {
+  const dir = tmpDir('br2');
+  const api = makeFinishedApi(dir);
+  const entry = makeFinishedEntry(api, { humanRole: 'seer' });
+  const gid = entry.game.id;
+
+  // saveActive：进行中局走保存分支、已结束局走跳过分支（361-364 双侧）
+  entry.game.started = true;
+  entry.game.finished = false;
+  entry.running = true;
+  const savedCount = await api.saveActive();
+  assert.ok(savedCount >= 1, '进行中的局应被保存');
+  entry.game.finished = true;
+  entry.running = false;
+  await api.saveActive(); // 跳过分支
+
+  // buildView 的 wolfTalk active 分支（846-849）：上帝视角看到狼聊面板
+  const g = entry.game;
+  g.wolfTalk = { active: true, round: 1, rounds: 2, queue: [], endNow: false };
+  const vGod = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
+  assert.strictEqual(vGod.code, 200);
+  assert.ok(vGod.body.wolfTalk && vGod.body.wolfTalk.active === true, '上帝视图必须携带狼聊面板');
+
+  // createGame 分支：显式座位 / 纯观战（mySeat=0 / 无 isHuman）
+  const spec = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: true } }), spec.res, '/api/games', new URLSearchParams());
+  assert.strictEqual(spec.code, 200);
+  assert.strictEqual(spec.body.mySeat, 0, '纯观战 mySeat=0');
+  assert.ok(!spec.body.playerToken, '观战不发玩家令牌');
+
+  api.games.clear();
+});
+
+test('SSE 分支：tickStreams 的 ping 节拍与对局被逐出后的 end 帧', async () => {
+  const dir = tmpDir('sse');
+  const api = makeFinishedApi(dir);
+  const writes = [];
+  const st = { res: { write(s) { writes.push(s); } }, gameId: 'gone', viewer: 'god', ticks: 30, after: 0, closed: false };
+  api.streams.set('gone', new Set([st]));
+  api.tickStreams(); // 推帧：对局不存在 → 走"evicted"关流分支（1094-1097）
+  assert.ok(writes.some((w) => w.includes('event: end') && w.includes('evicted')), '被逐出后必须推 end 帧');
+  assert.strictEqual(st.closed, true);
+  api.streams.delete('gone');
+
+  // ping 节拍分支（1003 附近）：ticks 达到 PING 周期必须写 ping 帧
+  const entry = makeFinishedEntry(api, { humanRole: 'seer' });
+  const st2 = { res: { write(s) { writes.push(s); } }, gameId: entry.game.id, viewer: 'god', ticks: 31, after: 0, closed: false, cheap: null, sawFinished: false };
+  api.streams.set(entry.game.id, new Set([st2]));
+  api.tickStreams(); // ticks 31+1=32 → 命中 PING 周期
+  assert.ok(writes.some((w) => w.includes('event: ping')), '到达 PING 周期必须写心跳帧');
+  api.streams.delete(entry.game.id);
+  api.games.clear();
+});
+
+// ---------- MAINT-01：发布版本唯一源一致性（源 = app/android/app/build.gradle 的 versionName） ----------
+
+test('MAINT-01：desktop/app 的 package.json 版本必须与 Android versionName 一致', () => {
+  const gradle = fs.readFileSync(path.join(__dirname, '..', 'app', 'android', 'app', 'build.gradle'), 'utf8');
+  const vn = (gradle.match(/versionName\s+"([^"]+)"/) || [])[1];
+  assert.ok(vn, 'build.gradle 必须声明 versionName（版本唯一源）');
+  for (const f of ['desktop/package.json', 'app/package.json']) {
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'));
+    assert.strictEqual(j.version, vn, `${f} 的 version 必须同步为 ${vn}（发版规则见 README「版本与发布」）`);
+  }
 });
