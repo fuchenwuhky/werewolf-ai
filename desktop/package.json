@@ -11,27 +11,56 @@
     "dist": "electron-builder --win portable --x64"
   },
   "devDependencies": {
-    "electron": "^33.4.11",
-    "electron-builder": "^25.1.8"
+    "electron": "^44.4.2",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.werewolfai.desktop",
     "productName": "werewolf-ai-desktop",
     "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}",
-    "directories": { "output": "dist" },
-    "files": ["main.js", "package.json"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
     "extraResources": [
-      { "from": "../server.js", "to": "server/server.js" },
-      { "from": "../package.json", "to": "server/package.json" },
-      { "from": "../src", "to": "server/src" },
-      { "from": "../web", "to": "server/web" },
-      { "from": "../scripts/mock-agent.js", "to": "server/scripts/mock-agent.js" }
+      {
+        "from": "../server.js",
+        "to": "server/server.js"
+      },
+      {
+        "from": "../package.json",
+        "to": "server/package.json"
+      },
+      {
+        "from": "../src",
+        "to": "server/src"
+      },
+      {
+        "from": "../web",
+        "to": "server/web"
+      },
+      {
+        "from": "../scripts/mock-agent.js",
+        "to": "server/scripts/mock-agent.js"
+      }
     ],
     "win": {
-      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "../web/assets/icon-512.png",
       "signAndEditExecutable": false
     },
-    "portable": { "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}" }
+    "portable": {
+      "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}"
+    }
   }
 }
