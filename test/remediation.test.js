@@ -461,3 +461,123 @@ test('CSP：index.html 的内联脚本哈希与 static.js 白名单一致（改�
   assert.ok(st.includes(hash), 'index.html 内联脚本哈希必须在 static.js 的 CSP 白名单里');
   assert.ok(!/onload="|onerror="/.test(html), 'HTML 不得再出现内联事件属性（CSP 会静默拦截）');
 });
+
+// ---------- §1.4 收尾：Content-Type 校验、限流、凭证外带防护 ----------
+
+test('§1.4：声明非 JSON 的 Content-Type → 415；读 JSON 主体不受影响', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('ct');
+  const api = new Api({ config: { get: () => ({ apiKey: 'k', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  const box = stubRes();
+  const req = stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x', 'content-type': 'text/xml' }, body: { a: 1 } });
+  await api.handle(req, box.res, '/api/games', new URLSearchParams());
+  assert.strictEqual(box.code, 415, '声明的 Content-Type 不被支持时必须 415');
+  api.games.delete('x');
+});
+
+test('§1.4：凭证外带防护——改 baseUrl 不重输 Key 后，test/probe 拒绝发凭证', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('rekey');
+  let saved = { apiKey: 'sk-secret', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', journal: false };
+  const api = new Api({ config: { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } }, logger: silentLogger, saveDir: dir });
+  // 旧 Key 保存时的地址基准
+  api.baseUrlNeedsRekey = false;
+
+  // ① 改 baseUrl 且不重输 Key → 置标记
+  const put1 = stubRes();
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'x', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1' } }), put1.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(put1.code, 200);
+  assert.strictEqual(api.baseUrlNeedsRekey, true, '换地址不换 Key 必须标记未验证');
+  // ② test/probe 拒绝
+  const t1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), t1.res, '/api/config/test', new URLSearchParams());
+  assert.strictEqual(t1.code, 400);
+  assert.match(t1.body.error, /重新输入 API Key/);
+  const p1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), p1.res, '/api/config/probe', new URLSearchParams());
+  assert.strictEqual(p1.code, 400);
+  // ③ 重新输入 Key → 解除标记
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'x', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1', apiKey: 'sk-new' } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.strictEqual(api.baseUrlNeedsRekey, false, '重输 Key 后解除');
+  const t2 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), t2.res, '/api/config/test', new URLSearchParams());
+  assert.notStrictEqual(t2.code, 400, '解除后可正常测试（此处因假 Key 返回 502 也算通过）');
+});
+
+test('§1.4：配对/建局限流——超阈值返回 429', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('rate');
+  const api = new Api({ config: { get: () => ({ apiKey: 'k', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  api.auth.setEnabled(true);
+  // 远端设备连点配对 11 次 → 第 11 次必须 429（阈值 10/分钟）
+  let last;
+  for (let i = 0; i < 11; i++) {
+    const box = stubRes();
+    await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x', origin: 'https://localhost' }, body: { code: '000000' } }), box.res, '/api/auth/pair', new URLSearchParams());
+    last = box;
+  }
+  assert.strictEqual(last.code, 429, '配对失败刷接口必须被限流');
+  // 本机回环不受影响（回环自动授权跳过 pair 限流也同理 —— 不同键互不干扰）
+  const local = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), local.res, '/api/auth/pairing', new URLSearchParams());
+  assert.strictEqual(local.code, 200);
+});
+
+// ---------- 覆盖率补强：api.js 管理与操作接口的校验分支 ----------
+
+test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支、LRU 淘汰', async () => {
+  const { Api } = require('../src/api');
+  const { Game } = require('../src/engine/game');
+  const dir = tmpDir('cov');
+  // 注意 apiKey 留空：让「真实局必须先配 Key」的校验分支可达（下面的局全部 mock:true）
+  const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  const call = (pathnameWithQuery, { method = 'GET', body = null, headers = {} } = {}) => {
+    // 与真实服务一致：路径与查询串分开传（之前混在一起会让路由匹配不上 → 假 404）
+    const [p, q] = pathnameWithQuery.split('?');
+    const box = stubRes();
+    return api.handle(stubReq({ method, remote: '127.0.0.1', headers: { host: 'x', ...headers }, body }), box.res, p, new URLSearchParams(q)).then(() => box);
+  };
+  // createGame 校验链（LAN/本机均可达：这里走本机自动授权）
+  const bad1 = await call('/api/games', { method: 'POST', body: { board: { wolf: 9, villager: 0 }, players: [] } });
+  assert.strictEqual(bad1.code, 400, '板子不合法必须 400');
+  const bad2 = await call('/api/games', { method: 'POST', body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: [] } });
+  assert.strictEqual(bad2.code, 400);
+  assert.match(bad2.body.error, /玩家数/);
+  const bad3 = await call('/api/games', { method: 'POST', body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: [{ isHuman: true }, { isHuman: true }, { isHuman: false }, { isHuman: false }, { isHuman: false }] } });
+  assert.strictEqual(bad3.code, 400);
+  assert.match(bad3.body.error, /最多 1 名人类/);
+  const bad4 = await call('/api/games', { method: 'POST', body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: [{ isHuman: false }, { isHuman: false }, { isHuman: false }, { isHuman: false }, { isHuman: false }], mock: false } });
+  assert.strictEqual(bad4.code, 400);
+  assert.match(bad4.body.error, /API Key/);
+
+  // 正常创建一局 Mock 局
+  const ok1 = await call('/api/games', { method: 'POST', body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: [{ isHuman: true }, { isHuman: false }, { isHuman: false }, { isHuman: false }, { isHuman: false }], mock: true } });
+  assert.strictEqual(ok1.code, 200);
+  const gameId = ok1.body.gameId;
+
+  // stats 形状
+  const st = await call('/api/stats');
+  assert.strictEqual(st.code, 200);
+
+  // action：无 pending 409 / 错 token 403
+  const a1 = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
+  assert.ok(a1.code === 409 || a1.code === 403, `未开局 action 应 409/403，实际 ${a1.code}`);
+  // review：GET（无复盘）返回 null review（带上帝令牌；无令牌本来就会 403——见 UX-01）
+  const rv = await call(`/api/games/${gameId}/review?token=${encodeURIComponent(ok1.body.godToken)}`);
+  assert.strictEqual(rv.code, 200);
+  assert.strictEqual(rv.body.review, null);
+  // explode/duel：未开局 409
+  const ex = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: 'ptok' } });
+  assert.ok(ex.code >= 400, '未开局自爆必须报错');
+
+  // LRU 淘汰分支：maxEntries 压到 1 → 旧的被挤出
+  api.games.clear();
+  for (let i = 0; i < 3; i++) {
+    const g = new Game({ id: 'lru' + i, board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, (_, k) => ({ name: 'P' + (k + 1), isHuman: false })), stepPauseMs: 1, logger: silentLogger });
+    g.deal(); g.started = true; g.finished = true;
+    api.games.set(g.id, { game: g, running: false, error: null, mock: true, tokens: { player: 'p', god: 'g' }, createdAt: Date.now(), lastAccess: i * 1000 });
+  }
+  const dropped = api.pruneGames({ maxEntries: 1 });
+  assert.ok(dropped >= 2 && api.games.size <= 1, 'LRU 上限必须淘汰最久未访问的局');
+  api.games.clear();
+});

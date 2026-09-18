@@ -47,7 +47,7 @@ const { ALL: NAME_POOL } = require('./names');
 const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require('./config');
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
-const { AuthManager, isTrustedOrigin } = require('./auth');
+const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
 
 /** 调度器的 Key 池快照（"实际可用并发数"的唯一可信来源，见 /api/config 的 pool 字段） */
 function poolSnapshot() {
@@ -104,6 +104,8 @@ class Api {
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
     this._cleanupStaleTmp();
+    // 轻量限流（整改 §1.4）：远端地址+桶 → 时间戳滑窗。只保护花钱/可暴力的入口。
+    this._rateBuckets = new Map();
     // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
     // server.js 绑定非回环地址（WW_LAN=1 / WW_HOST）时调用 auth.setEnabled(true) 启用门禁。
     this.auth = new AuthManager({ logger });
@@ -137,17 +139,24 @@ class Api {
   }
 
   async readBody(req, limit = 2 * 1024 * 1024) {
+    // 整改 §1.4：只接受声明支持的 Content-Type。声明了但不是 JSON → 415；
+    // 没声明头但内容合法的客户端（curl 等）保持宽容。
+    const ctype = String((req.headers && req.headers['content-type']) || '');
+    const ctl = ctype.toLowerCase();
+    if (ctype && !ctl.includes('application/json') && !ctl.includes('text/plain')) {
+      throw Object.assign(new Error('Content-Type 必须是 application/json'), { code: 415 });
+    }
     return new Promise((resolve, reject) => {
       let size = 0; const chunks = [];
       req.on('data', (c) => {
         size += c.length;
-        if (size > limit) { reject(new Error('请求体过大')); req.destroy(); return; }
+        if (size > limit) { reject(Object.assign(new Error('请求体过大'), { code: 413 })); req.destroy(); return; }
         chunks.push(c);
       });
       req.on('end', () => {
         if (!chunks.length) return resolve({});
         try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-        catch (e) { reject(new Error('JSON 解析失败')); }
+        catch (e) { reject(Object.assign(new Error('JSON 解析失败'), { code: 400 })); }
       });
       req.on('error', reject);
     });
@@ -369,6 +378,21 @@ class Api {
    * 取一局全部令牌、统计。单局玩家/上帝令牌通道不受此矩阵约束——令牌随请求体/查询串
    * 随行，攻击者无从伪造，天然免疫 CSRF；Capacitor 壳（origin=https://localhost）也因此不受影响。
    */
+  /** 滑动窗口限流：超限返回 false。键为 远端地址+桶名，进程内计数（重启即清零，够用） */
+  _rateAllow(req, bucket, max, windowMs = 60 * 1000) {
+    // 本机回环不限流：限流保护的是 LAN 暴露面；本机脚本/测试连创多局是正常用法。
+    // 没有 socket 地址的请求（单元测试桩）也按本机对待。
+    const ra = req.socket && req.socket.remoteAddress;
+    if (!ra || isLoopbackAddress(ra)) return true;
+    const key = bucket + ':' + ra;
+    const now = Date.now();
+    const arr = (this._rateBuckets.get(key) || []).filter((t) => now - t < windowMs);
+    if (arr.length >= max) { this._rateBuckets.set(key, arr); return false; }
+    arr.push(now);
+    this._rateBuckets.set(key, arr);
+    return true;
+  }
+
   _denyManagement(res) {
     this.json(res, 401, { error: '需要管理会话（局域网访问请先配对）', auth: 'pairing' });
     return false;
@@ -389,6 +413,7 @@ class Api {
     }
     if (pathname === '/api/auth/pair' && method === 'POST') {
       if (!isTrustedOrigin(req)) return this.json(res, 403, { error: 'Origin 不受信任' });
+      if (!this._rateAllow(req, 'pair', 10)) return this.json(res, 429, { error: '尝试过于频繁，请稍后再试' });
       return this.readBody(req).then((body) => {
         try {
           const sid = this.auth.pair(body.code);
@@ -454,6 +479,14 @@ class Api {
       if (pathname === '/api/config' && method === 'PUT') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const body = await this.readBody(req);
+        // 整改 §1.4（防凭证外带）：换 baseUrl 却沿用旧 Key → 标记"密钥未对新地址验证"，
+        // /config/test 与 /probe 会拒绝发凭证，直到用户重新输入 Key。否则一个已配对的
+        // 局域网设备就能把机主的 Key 静默送到任意服务器。
+        const prev = this.config.get();
+        const baseUrlChanged = body.baseUrl && body.baseUrl !== prev.baseUrl;
+        const keySupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== '';
+        const keysChanged = Array.isArray(body.apiKeys);
+        this.baseUrlNeedsRekey = baseUrlChanged && !keySupplied && !keysChanged ? true : (keySupplied || keysChanged ? false : this.baseUrlNeedsRekey);
         const saved = this.config.save(body);
         // 通道数变了要对所有在跑的调度器生效：llm.js 每次调用都会校对，这里只记一条日志便于自查
         const channels = resolveChannels(saved);
@@ -470,7 +503,9 @@ class Api {
       }
       if (pathname === '/api/config/test' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        if (!this._rateAllow(req, 'cfgtest', 6)) return this.json(res, 429, { error: '测试过于频繁，请稍后再试' });
         const c = this.config.get();
+        if (this.baseUrlNeedsRekey) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再测试（防止密钥被发往未确认的地址）' });
         if (!c.apiKey) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
         const r = await testConnection(c, this.logger);
         return this.json(res, r.ok ? 200 : 502, r);
@@ -482,6 +517,8 @@ class Api {
        */
       if (pathname === '/api/config/probe' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        if (!this._rateAllow(req, 'probe', 3)) return this.json(res, 429, { error: '探测过于频繁，请稍后再试' });
+        if (this.baseUrlNeedsRekey) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再探测（防止密钥被发往未确认的地址）' });
         const c = this.config.get();
         const keys = parseApiKeys(c);
         if (!keys.length) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
@@ -502,6 +539,7 @@ class Api {
       const gameMatch = pathname.match(/^\/api\/games\/([^/]+)(\/.*)?$/);
       if (pathname === '/api/games' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        if (!this._rateAllow(req, 'create', 10)) return this.json(res, 429, { error: '创建过于频繁，请稍后再试' });
         return this.createGame(res, await this.readBody(req));
       }
       if (pathname === '/api/games' && method === 'GET') {
@@ -553,7 +591,9 @@ class Api {
       return this.json(res, 404, { error: 'not found' });
     } catch (err) {
       this.logger.error('api', `接口异常 ${method} ${pathname}: ${err.message}`, { stack: err.stack });
-      return this.json(res, 500, { error: String(err.message || err) });
+      // 整改 §1.4：携带语义状态码的错误（413/415/400）按码返回，其余 500
+      const code = err && err.code ? Number(err.code) : 500;
+      return this.json(res, Number.isInteger(code) && code >= 400 && code < 500 ? code : 500, { error: String(err.message || err) });
     }
   }
 

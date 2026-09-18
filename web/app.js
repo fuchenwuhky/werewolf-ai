@@ -1572,7 +1572,8 @@ function updateSeats(v) {
     godSel.innerHTML = '';
     for (const p of v.players) {
       if (p.isHuman) continue;
-      godSel.appendChild(el('option', null, `${p.seat}号 ${p.name}`)).value = p.seat;
+      // 安全（SEC-02）：昵称用户可控，option 文本也要转义
+      godSel.appendChild(el('option', null, `${p.seat}号 ${escapeHtml(p.name)}`)).value = p.seat;
     }
   }
   // ---- 圆桌 ----

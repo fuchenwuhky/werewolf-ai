@@ -53,7 +53,7 @@ function createRequestHandler({ api, serveWeb, logger }) {
     if (pathname.startsWith('/api/')) {
       api.handle(req, res, pathname, u.searchParams).catch((e) => {
         const msg = String(e.message || e);
-        const code = /请求体过大/.test(msg) ? 413 : /JSON 解析失败|Content-Type/.test(msg) ? 400 : 500;
+        const code = /请求体过大/.test(msg) ? 413 : /Content-Type 必须是/.test(msg) ? 415 : /JSON 解析失败/.test(msg) ? 400 : 500;
         logger.error('api', `未捕获接口错误: ${msg}`, { stack: e.stack });
         try {
           res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
