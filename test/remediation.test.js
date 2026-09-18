@@ -397,3 +397,30 @@ test('LOGIC-01：复盘归属（teamOf）与经验总结提示词用最终阵营
   const prompt = lessonInstruction(g, g.player(1), '');
   assert.match(prompt, /你所在的阵营.*获胜/, '整改前：经验总结按静态 good 计算 → 提示词会说「失败」');
 });
+
+// ---------- REL-04：读档按当前配置恢复 LLM 并发语义 ----------
+
+test('REL-04：fromJSON 按 opts.parallelLlm 恢复并发配置（整改前永远 false）', () => {
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'rel04', board, players, stepPauseMs: 1, logger: silentLogger, parallelLlm: true });
+  g.deal();
+  g.started = true;
+  const doc = g.toJSON();
+  delete doc.anchor;
+  const resumed = Game.fromJSON(doc, { parallelLlm: true });
+  assert.strictEqual(resumed.parallelLlm, true, '整改前：fromJSON 不传 parallelLlm → 恢复后并发扇出永远关闭，多 Key 提速失效');
+  const resumed2 = Game.fromJSON(doc, { parallelLlm: false });
+  assert.strictEqual(resumed2.parallelLlm, false, '当前配置关闭时恢复也必须关闭');
+});
+
+// ---------- UX-01：移动端复盘带令牌轮询（静态汇点审计） ----------
+
+test('UX-01：移动端复盘 GET 必须携带令牌，轮询收尾不得只读一次', () => {
+  const m = fs.readFileSync(path.join(__dirname, '..', 'web', 'm', 'm.js'), 'utf8');
+  const seg = m.slice(m.indexOf('async function requestReview'), m.indexOf('function showMyCard'));
+  assert.match(seg, /\/review\?token=/, '整改前：POST 后立即无令牌 GET → 稳定 403，复盘永远停在「正在生成」');
+  assert.match(seg, /status === 'done'|review\.status === 'done'/, '必须轮询到 done 才收尾（POST 受理 ≠ 生成完成）');
+  assert.match(seg, /reviewBusy/, '必须有防连点守卫');
+});

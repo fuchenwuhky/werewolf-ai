@@ -304,18 +304,41 @@ async function openSummarySheet() {
  * 请求/查看 AI 复盘（手机端）：与桌面端同一个接口（POST /api/games/:id/review）。
  * 会花一次模型调用，所以做成显式按钮而不是自动触发。
  */
+let reviewBusy = false;
 async function requestReview() {
   const v = state.view;
   if (!v || !state.game) return;
+  if (reviewBusy) return; // 整改 UX-01：防连点造成并发任务（服务端虽会去重，前端也不该刷）
+  reviewBusy = true;
   const box = document.getElementById('m-review-box');
   if (box) box.textContent = '⏳ 正在生成复盘…';
+  // 整改 UX-01：复盘链路整体修复 ——
+  //   ① GET 必须携带玩家令牌（旧行为无令牌 GET → 稳定 403，永远停在"正在生成"）；
+  //   ② POST 返回的是 202 式的"已受理"，生成是异步的 → 轮询到 done/error 才收尾；
+  //   ③ 轮询带退避与总超时（约 90s），超时给出可重试提示而不是无限转圈。
   try {
-    await api('POST', `/api/games/${state.game.gameId}/review`, { token: state.game.playerToken, seat: v.me ? v.me.seat : 0 });
-    const r = await api('GET', `/api/games/${state.game.gameId}/review`);
-    const text = (r && r.review && r.review.text) || '';
-    if (box) box.textContent = text || '复盘生成失败：模型没有返回内容。';
+    const token = state.game.playerToken;
+    const first = await api('POST', `/api/games/${state.game.gameId}/review`, { token, seat: v.me ? v.me.seat : 0 });
+    let review = null;
+    if (first && first.status === 'done') {
+      review = (await api('GET', `/api/games/${state.game.gameId}/review?token=${encodeURIComponent(token)}`) || {}).review;
+    } else {
+      const deadline = Date.now() + 90 * 1000;
+      let delay = 2000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, delay));
+        delay = Math.min(delay + 1000, 5000); // 退避：2s 起步、封顶 5s
+        const r = await api('GET', `/api/games/${state.game.gameId}/review?token=${encodeURIComponent(token)}`);
+        review = r && r.review;
+        if (review && (review.status === 'done' || review.status === 'error' || review.text)) break;
+      }
+    }
+    const text = (review && review.text) || '';
+    if (box) box.textContent = text || (review && review.status === 'running' ? '生成超时了（模型还没回话）。稍后再点一次按钮即可查看/重试。' : '复盘生成失败：模型没有返回内容。');
   } catch (e) {
     if (box) box.textContent = `复盘生成失败：${e.message}`;
+  } finally {
+    reviewBusy = false;
   }
 }
 
