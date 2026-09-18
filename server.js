@@ -5,7 +5,6 @@
 'use strict';
 const http = require('http');
 const path = require('path');
-const { URL } = require('url');
 const { Logger, maskKey } = require('./src/log');
 const { Api } = require('./src/api');
 const { DEFAULT_CONFIG, createConfig } = require('./src/config');
@@ -36,31 +35,10 @@ const api = new Api({ config, logger });
 const { serveStatic } = require('./src/static');
 const serveWeb = (req, res, pathname) => serveStatic(req, res, pathname, { webDir: WEB_DIR });
 
-const server = http.createServer((req, res) => {
-  const u = new URL(req.url, 'http://localhost');
-  const pathname = decodeURIComponent(u.pathname);
-  // 手机访问根路径 → 跳转 APP 端（?desktop=1 可强制桌面版）
-  if (pathname === '/' && !u.searchParams.has('desktop') &&
-      /Android|iPhone|iPad|Mobile|HarmonyOS/i.test(req.headers['user-agent'] || '')) {
-    res.writeHead(302, { Location: '/m/' });
-    return res.end();
-  }
-  if (pathname === '/m') {
-    res.writeHead(302, { Location: '/m/' });
-    return res.end();
-  }
-  if (pathname.startsWith('/api/')) {
-    api.handle(req, res, pathname, u.searchParams).catch((e) => {
-      logger.error('api', `未捕获接口错误: ${e.message}`, { stack: e.stack });
-      try {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: String(e.message) }));
-      } catch (_) { /* ignore */ }
-    });
-    return;
-  }
-  serveWeb(req, res, pathname);
-});
+// 请求入口统一包装在 src/request-handler.js：畸形 URL 解码防护（REL-01）在真实请求级测试覆盖
+const { createRequestHandler } = require('./src/request-handler');
+
+const server = http.createServer(createRequestHandler({ api, serveWeb, logger }));
 
 server.listen(PORT, () => {
   const c = config.get();
