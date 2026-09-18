@@ -476,3 +476,14 @@ html, body { height: 100%; overscroll-behavior: none; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%;
 }
 .cdx-pager .cdx-pagehead span { font-size: var(--fs-xs); color: var(--muted); }
+
+/* 对局内设置弹窗的"本局信息"块（对局 / 进度 / 存活 / 我的身份） */
+.setinfo {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 0 0 var(--sp-3); padding: var(--sp-3);
+  border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: rgba(146, 174, 235, .06);
+}
+.setinfo .set-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-sm); }
+.setinfo .set-row span { flex: none; color: var(--muted); }
+.setinfo .set-row b { color: var(--gold-bright); font-weight: 600; text-align: right; word-break: break-all; }

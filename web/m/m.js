@@ -84,7 +84,7 @@ function openGear() {
     rows.push(['🎴 查看我的身份牌', () => openInspect(v.me.role)]);
   }
   // 规则书已挪到顶栏右上角的专用按钮，齿轮里不再重复列一项
-  rows.push(['⚙ 设置（接口 / 模型 / 节奏）', () => openSettingsModal()]);
+  rows.push(['⚙ 设置', () => openSettingsModal()]);
   rows.push([I18N.t('codex.entry'), () => openCodex()]);
   rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
   if (inGame && !over) {
@@ -124,22 +124,61 @@ function askTerminate() {
   openModal(wrap);
 }
 
-/** 设置弹窗（.mbody 自带滚动；正文再高也不会被切掉） */
+/**
+ * 对局内设置弹窗。
+ *
+ * 旧版这里只有一句"配置在首页改" + 两个按钮，正文极空 —— 用户反馈"点开设置只有一条线"；
+ * 而齿轮里的入口却写着「接口 / 模型 / 节奏」，名不副实。
+ * 现在：① 列出本局信息；② 给真正能立刻用的快捷入口；③ 接口/模型/节奏说明清楚
+ * **为什么**对局中改不了（开局时参数已发给各 AI），并给一条真路（回首页改，本局会保存）。
+ */
 function openSettingsModal() {
+  const v = state.view;
+  const inGame = !!(state.game && state.game.gameId);
   const wrap = el('div', 'modal');
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const body = el('div', 'mbody');
-  body.appendChild(el('p', 'hint', '接口 / 模型 / 节奏等配置在首页的「⚙ 设置」里修改；这里可以快速切换语言与查看本局信息。'));
-  if (state.view && state.view.game) {
-    body.appendChild(el('p', null, `当前对局：${state.view.game.gameId}（第 ${state.view.day || 0} 天）`));
+
+  if (inGame && v) {
+    const alive = (v.players || []).filter((p) => p.alive).length;
+    const me = v.me || {};
+    const r = me.role ? roleInfo(me.role) : null;
+    body.appendChild(el('div', 'setinfo', [
+      `<div class="set-row"><span>对局</span><b>${escapeHtml(String(state.game.gameId))}</b></div>`,
+      `<div class="set-row"><span>进度</span><b>第 ${v.day || 0} 天${v.finished ? ' · 已结算' : ''}</b></div>`,
+      `<div class="set-row"><span>存活</span><b>${alive} 人</b></div>`,
+      r ? `<div class="set-row"><span>我的身份</span><b>${escapeHtml(`${me.seat}号 ${r.name}`)}</b></div>` : '',
+    ].join('')));
+  } else {
+    body.appendChild(el('p', 'hint', '当前不在对局中。'));
   }
+
+  const list = el('div', 'gear-list');
+  const add = (label, fn, danger) => {
+    const b = el('button', 'gear-item' + (danger ? ' danger' : ''), label);
+    b.addEventListener('click', () => { $('#m-modal').innerHTML = ''; fn(); });
+    list.appendChild(b);
+  };
+  add(I18N.t('codex.entry'), () => openCodex());
+  if (inGame && v && v.me && v.me.role) add('🎴 查看我的身份牌', () => openInspect(v.me.role));
+  add(`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang());
+  // 这条是"真路"而不是假开关：回首页 = 重载页面，本局存在浏览器里（mww_current），
+  // 首页会出现"继续对局"卡片，所以可以放心去改设置再回来。
+  add('⚙ 去首页改接口 / 模型 / 节奏（本局会保存）', () => { location.reload(); });
+  body.appendChild(list);
+
+  body.appendChild(el('p', 'hint', '接口 / 模型 / 节奏是服务端配置：各 AI 的参数在开局时就已经发给它，所以对局中改动不会影响正在进行的这一局（这就是它"看起来失效"的原因）。要调整请回首页设置 —— 本局会保存，随时能继续。'));
   wrap.appendChild(body);
+
   const row = el('div', 'btnrow');
-  const lang = el('button', 'btn', `🌐 切换到${I18N.getLang() === 'en' ? '中文' : 'English'}`);
-  lang.addEventListener('click', () => { $('#m-modal').innerHTML = ''; toggleLang(); });
-  const home = el('button', 'btn danger', '🏠 退出到首页');
-  home.addEventListener('click', () => { localStorage.removeItem('mww_current'); location.reload(); });
-  row.append(lang, home);
+  if (inGame && !(v && v.finished)) {
+    const end = el('button', 'btn danger', '⏹ 结束本局');
+    end.addEventListener('click', () => { $('#m-modal').innerHTML = ''; askTerminate(); });
+    row.appendChild(end);
+  }
+  const home = el('button', 'btn danger', '🏠 退出到首页（放弃本局）');
+  home.addEventListener('click', () => { $('#m-modal').innerHTML = ''; localStorage.removeItem('mww_current'); location.reload(); });
+  row.appendChild(home);
   wrap.appendChild(row);
   openModal(wrap);
 }

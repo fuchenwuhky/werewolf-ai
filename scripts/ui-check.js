@@ -797,6 +797,25 @@ class Browser {
       check('手机端渲染座位与流程', mobGame.seats >= 8 && mobGame.flow >= 1, `座位=${mobGame.seats} 流程=${mobGame.flow} ${mobGame.day}/${mobGame.phase}`);
       check('手机端有待办面板或明确提示', mobGame.dialogBtns >= 1 || mobGame.hint.length > 0, `按钮=${mobGame.dialogBtns} 提示="${mobGame.hint.slice(0, 40)}"`);
       await b.shot(path.join(SHOTS, '13-mobile-game.png'));
+      // 对局内设置：旧版点开只有一句"配置在首页改" + 两个按钮，用户反馈"设置失效、只有一条线"；
+      // 而齿轮入口却写着「接口 / 模型 / 节奏」，名不副实。现在必须有本局信息 + 可用入口 + 真路。
+      await b.click('#m-gear');
+      await sleep(500);
+      const gearItems = await b.eval(`[...document.querySelectorAll('#m-modal .gear-item')].map((x) => x.textContent.trim())`);
+      check('手机端齿轮：设置入口不再谎报"可改接口/模型/节奏"', gearItems.includes('⚙ 设置'), JSON.stringify(gearItems));
+      await b.eval(`(() => { const t = [...document.querySelectorAll('#m-modal .gear-item')].find((x) => x.textContent.trim() === '⚙ 设置'); if (t) t.click(); })()`);
+      await sleep(500);
+      const setPanel = await b.eval(`(() => ({
+        rows: [...document.querySelectorAll('#m-modal .setinfo .set-row')].map((r) => r.textContent.trim()),
+        controls: document.querySelectorAll('#m-modal .gear-item, #m-modal .btn').length,
+        hint: (document.querySelector('#m-modal .hint') || {}).textContent || '',
+        home: !!([...document.querySelectorAll('#m-modal button')].find((x) => /去首页改/.test(x.textContent))),
+      }))()`);
+      check('手机端对局内设置：显示本局信息（对局/进度/存活/身份）', setPanel.rows.length >= 3 && /第 \d+ 天/.test(setPanel.rows.join(' ')), JSON.stringify(setPanel.rows));
+      check('手机端对局内设置：入口可用（≥5 个控件）', setPanel.controls >= 5, `控件=${setPanel.controls}`);
+      check('手机端对局内设置：说明为何局中改不了并给出回首页改的真路', /开局时/.test(setPanel.hint) && setPanel.home, `home=${setPanel.home} hint="${setPanel.hint.slice(0, 24)}"`);
+      await b.shot(path.join(SHOTS, '13b-mobile-gear-settings.png'));
+      await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
       await api('POST', `/api/games/${g4.gameId}/terminate`, { token: g4.playerToken });
       await b.setViewport(1280, 900, false);
     }
