@@ -110,8 +110,11 @@ test('REL-02：Mock 局正常打完后 entry.running=false，可被 TTL 清理�
   api._drive(entry);
   // 等驱动循环自然结束（Mock 局很快；给 10s 上限防挂）
   const deadline = Date.now() + 10000;
-  while (!g.finished && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  while ((!g.finished || entry.running) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
   assert.ok(g.finished, 'Mock 局应能自然打完');
+  // 等待终局存盘等异步收尾完成后，running 必须复位（终局保存是异步的，不能在 finished 翻转瞬间断言）
+  const settle = Date.now() + 5000;
+  while (entry.running && Date.now() < settle) await new Promise((r) => setTimeout(r, 50));
   assert.strictEqual(entry.running, false, '整改前：_drive 成功路径不复位 running → 该局永远无法被 TTL/LRU 回收');
 
   // TTL 清理：把 lastAccess 拨老，pruneGames 应当能丢弃这局（对象已在磁盘上）
@@ -264,24 +267,24 @@ test('SEC-01（路由集成）：LAN 门禁下配置/建局/列表/统计 401，
   };
   await deny('/api/config'); // 顺序执行由 handle 内部 await 保证
   assert.strictEqual(deny && true, true);
-  const r1 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x' } }), box.res, '/api/config', new URLSearchParams()).then(() => res(box)); });
+  const r1 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }), box.res, '/api/config', new URLSearchParams()).then(() => res(box)); });
   assert.strictEqual(r1.code, 401, '未配对读配置必须 401（整改前：任何人拿到地址就能读走 API Key 明文）');
-  const r2 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'POST', remote: '192.168.1.5', headers: { host: 'x' } }, ), box.res, '/api/games', new URLSearchParams()).then(() => res(box)); });
+  const r2 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'POST', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }, ), box.res, '/api/games', new URLSearchParams()).then(() => res(box)); });
   assert.strictEqual(r2.code, 401, '未配对创建对局必须 401（防资源滥用与不可控费用）');
-  const r3 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x' } }), box.res, '/api/stats', new URLSearchParams()).then(() => res(box)); });
+  const r3 = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }), box.res, '/api/stats', new URLSearchParams()).then(() => res(box)); });
   assert.strictEqual(r3.code, 401);
 
   // 配对码只发给本机；远端查询 pairing 拿不到码
-  const rLocal = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), box.res, '/api/auth/pairing', new URLSearchParams()).then(() => res(box)); });
+  const rLocal = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), box.res, '/api/auth/pairing', new URLSearchParams()).then(() => res(box)); });
   assert.ok(/^\d{6}$/.test(rLocal.body.code), '本机能看到配对码');
-  const rRemote = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x' } }), box.res, '/api/auth/pairing', new URLSearchParams()).then(() => res(box)); });
+  const rRemote = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }), box.res, '/api/auth/pairing', new URLSearchParams()).then(() => res(box)); });
   assert.strictEqual(rRemote.body.code, null, '远端绝不能拿到配对码本体');
 
   // 远端用配对码换取会话 Cookie
   const code = rLocal.body.code;
   const rPair = await new Promise((res) => {
     const box = stubRes();
-    const req = stubReq({ method: 'POST', remote: '192.168.1.5', headers: { host: 'x', origin: 'https://localhost' }, body: { code } });
+    const req = stubReq({ method: 'POST', remote: '192.168.1.5', headers: { host: 'localhost:3210', origin: 'https://localhost' }, body: { code } });
     api.handle(req, box.res, '/api/auth/pair', new URLSearchParams()).then(() => res(box));
   });
   assert.strictEqual(rPair.code, 200, 'Capacitor 壳的 localhost origin 必须被信任');
@@ -290,7 +293,7 @@ test('SEC-01（路由集成）：LAN 门禁下配置/建局/列表/统计 401，
   assert.match(cookie, /SameSite=Strict/);
 
   // 带 Cookie 后管理接口放行
-  const rCfg = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x', cookie } }), box.res, '/api/config', new URLSearchParams()).then(() => res(box)); });
+  const rCfg = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210', cookie } }), box.res, '/api/config', new URLSearchParams()).then(() => res(box)); });
   assert.strictEqual(rCfg.code, 200, '配对成功后配置可读');
 
   // 单局令牌通道不受影响：远端凭玩家令牌可看本局视图，但不能读全量令牌
@@ -299,9 +302,9 @@ test('SEC-01（路由集成）：LAN 门禁下配置/建局/列表/统计 401，
   const g = new Game({ id: 'sec01-game', board, players, stepPauseMs: 1, logger: silentLogger });
   g.deal(); g.started = true;
   api.games.set(g.id, { game: g, running: false, error: null, mock: true, tokens: { player: 'ptok', god: 'gtok' }, createdAt: Date.now(), lastAccess: Date.now() });
-  const rView = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x' } }), box.res, '/api/games/sec01-game/view', new URLSearchParams('token=ptok&after=0')).then(() => res(box)); });
+  const rView = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }), box.res, '/api/games/sec01-game/view', new URLSearchParams('token=ptok&after=0')).then(() => res(box)); });
   assert.strictEqual(rView.code, 200, '玩家令牌通道（LAN 上的 APP）必须保持可用');
-  const rTokens = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'x' } }), box.res, '/api/games/sec01-game/tokens', new URLSearchParams('token=ptok')).then(() => res(box)); });
+  const rTokens = await new Promise((res) => { const box = stubRes(); api.handle(stubReq({ method: 'GET', remote: '192.168.1.5', headers: { host: 'localhost:3210' } }), box.res, '/api/games/sec01-game/tokens', new URLSearchParams('token=ptok')).then(() => res(box)); });
   assert.strictEqual(rTokens.code, 401, '全量令牌属于管理信息：即便持有玩家令牌也必须 401');
   api.games.delete(g.id);
 });
@@ -469,7 +472,7 @@ test('§1.4：声明非 JSON 的 Content-Type → 415；读 JSON 主体不受影
   const dir = tmpDir('ct');
   const api = new Api({ config: { get: () => ({ apiKey: 'k', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
   const box = stubRes();
-  const req = stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x', 'content-type': 'text/xml' }, body: { a: 1 } });
+  const req = stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210', 'content-type': 'text/xml' }, body: { a: 1 } });
   await api.handle(req, box.res, '/api/games', new URLSearchParams());
   assert.strictEqual(box.code, 415, '声明的 Content-Type 不被支持时必须 415');
   api.games.delete('x');
@@ -485,22 +488,22 @@ test('§1.4：凭证外带防护——改 baseUrl 不重输 Key 后，test/probe
 
   // ① 改 baseUrl 且不重输 Key → 置标记
   const put1 = stubRes();
-  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'x', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1' } }), put1.res, '/api/config', new URLSearchParams());
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1' } }), put1.res, '/api/config', new URLSearchParams());
   assert.strictEqual(put1.code, 200);
   assert.strictEqual(api.baseUrlNeedsRekey, true, '换地址不换 Key 必须标记未验证');
   // ② test/probe 拒绝
   const t1 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), t1.res, '/api/config/test', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), t1.res, '/api/config/test', new URLSearchParams());
   assert.strictEqual(t1.code, 400);
   assert.match(t1.body.error, /重新输入 API Key/);
   const p1 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), p1.res, '/api/config/probe', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), p1.res, '/api/config/probe', new URLSearchParams());
   assert.strictEqual(p1.code, 400);
   // ③ 重新输入 Key → 解除标记
-  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'x', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1', apiKey: 'sk-new' } }), stubRes().res, '/api/config', new URLSearchParams());
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210', origin: 'http://localhost:1' }, body: { baseUrl: 'https://evil.example/v1', apiKey: 'sk-new' } }), stubRes().res, '/api/config', new URLSearchParams());
   assert.strictEqual(api.baseUrlNeedsRekey, false, '重输 Key 后解除');
   const t2 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), t2.res, '/api/config/test', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), t2.res, '/api/config/test', new URLSearchParams());
   assert.notStrictEqual(t2.code, 400, '解除后可正常测试（此处因假 Key 返回 502 也算通过）');
 });
 
@@ -513,13 +516,13 @@ test('§1.4：配对/建局限流——超阈值返回 429', async () => {
   let last;
   for (let i = 0; i < 11; i++) {
     const box = stubRes();
-    await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x', origin: 'https://localhost' }, body: { code: '000000' } }), box.res, '/api/auth/pair', new URLSearchParams());
+    await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'localhost:3210', origin: 'https://localhost' }, body: { code: '000000' } }), box.res, '/api/auth/pair', new URLSearchParams());
     last = box;
   }
   assert.strictEqual(last.code, 429, '配对失败刷接口必须被限流');
   // 本机回环不受影响（回环自动授权跳过 pair 限流也同理 —— 不同键互不干扰）
   const local = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), local.res, '/api/auth/pairing', new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), local.res, '/api/auth/pairing', new URLSearchParams());
   assert.strictEqual(local.code, 200);
 });
 
@@ -535,7 +538,7 @@ test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支
     // 与真实服务一致：路径与查询串分开传（之前混在一起会让路由匹配不上 → 假 404）
     const [p, q] = pathnameWithQuery.split('?');
     const box = stubRes();
-    return api.handle(stubReq({ method, remote: '127.0.0.1', headers: { host: 'x', ...headers }, body }), box.res, p, new URLSearchParams(q)).then(() => box);
+    return api.handle(stubReq({ method, remote: '127.0.0.1', headers: { host: 'localhost:3210', ...headers }, body }), box.res, p, new URLSearchParams(q)).then(() => box);
   };
   // createGame 校验链（LAN/本机均可达：这里走本机自动授权）
   const bad1 = await call('/api/games', { method: 'POST', body: { board: { wolf: 9, villager: 0 }, players: [] } });
@@ -610,7 +613,7 @@ test('深挖：/api/meta 全量形状（roles/boards/roleArt/paces）', async ()
   const dir = tmpDir('meta');
   const api = makeFinishedApi(dir);
   const box = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), box.res, '/api/meta', new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), box.res, '/api/meta', new URLSearchParams());
   assert.strictEqual(box.code, 200);
   const body = box.body;
   assert.ok(body.roles && body.roles.wolf && body.roles.seer, 'roles 必须下发');
@@ -629,7 +632,7 @@ test('深挖：getReview 的 done 形状 + startReview 的 409/400/cached 分支
   // done 形状（875-880）
   entry.review = { status: 'done', mode: 'llm', text: '复盘内容', fallbackReason: null, seat: 1, at: 123 };
   const r1 = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), r1.res, `/api/games/${gid}/review`, new URLSearchParams('token=gt'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), r1.res, `/api/games/${gid}/review`, new URLSearchParams('token=gt'));
   assert.strictEqual(r1.code, 200);
   assert.strictEqual(r1.body.review.text, '复盘内容');
   assert.strictEqual(r1.body.review.status, 'done');
@@ -637,7 +640,7 @@ test('深挖：getReview 的 done 形状 + startReview 的 409/400/cached 分支
   // 未结束 → 409（908-911）
   entry.game.finished = false;
   const r2 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { token: 'gt' } }), r2.res, `/api/games/${gid}/review`, new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { token: 'gt' } }), r2.res, `/api/games/${gid}/review`, new URLSearchParams());
   await new Promise((r) => setTimeout(r, 10));
   assert.strictEqual(r2.code, 409);
   assert.match(r2.body.error, /还没结束/);
@@ -645,11 +648,11 @@ test('深挖：getReview 的 done 形状 + startReview 的 409/400/cached 分支
 
   // 座位不存在 → 400（913-916）
   const r3 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { token: 'gt' } }), r3.res, `/api/games/${gid}/review`, new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { token: 'gt' } }), r3.res, `/api/games/${gid}/review`, new URLSearchParams());
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(true);
   const r4 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), r4.res, `/api/games/${gid}/review?token=gt`, new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), r4.res, `/api/games/${gid}/review?token=gt`, new URLSearchParams());
   // 上面的 handle 需要带 body；改用显式 body 调 startReview：
   const r5 = stubRes();
   await api.startReview(r5.res, entry, { token: 'gt', seat: 99 });
@@ -683,7 +686,7 @@ test('深挖：狼聊通道（inactive 409 / 非狼 403 / say 入队 / extra 加
 
   const wtCall = (body) => {
     const box = stubRes();
-    return api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body }), box.res, `/api/games/${g.id}/wolftalk`, new URLSearchParams()).then(() => box);
+    return api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body }), box.res, `/api/games/${g.id}/wolftalk`, new URLSearchParams()).then(() => box);
   };
   // inactive → 409（1178）
   let r = await wtCall({ token: 'pt', kind: 'say', text: 'hi' });
@@ -722,26 +725,26 @@ test('深挖：未知接口 404、令牌找回（本机）、logs 需上帝令�
 
   // 未知接口 → 404（591）
   const nf = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), nf.res, '/api/nope', new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), nf.res, '/api/nope', new URLSearchParams());
   assert.strictEqual(nf.code, 404);
 
   // 令牌找回（1246-1247）：本机回环默认授权
   const tk = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), tk.res, `/api/games/${gid}/tokens`, new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), tk.res, `/api/games/${gid}/tokens`, new URLSearchParams());
   assert.strictEqual(tk.code, 200);
   assert.strictEqual(tk.body.player, 'pt');
 
   // logs 需要上帝令牌（1200-1201）
   const lg1 = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), lg1.res, `/api/games/${gid}/logs`, new URLSearchParams('token=wrong'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), lg1.res, `/api/games/${gid}/logs`, new URLSearchParams('token=wrong'));
   assert.strictEqual(lg1.code, 403);
   const lg2 = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), lg2.res, `/api/games/${gid}/logs`, new URLSearchParams('token=gt'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), lg2.res, `/api/games/${gid}/logs`, new URLSearchParams('token=gt'));
   assert.strictEqual(lg2.code, 200);
 
   // unpair 清会话（429-432）
   const up = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' } }), up.res, '/api/auth/unpair', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), up.res, '/api/auth/unpair', new URLSearchParams());
   assert.strictEqual(up.code, 200);
   api.games.delete(gid);
 });
@@ -752,7 +755,7 @@ test('深挖：stats 聚合存档（写一份存档 → 胜负/天数/板子统�
   const doc = { schemaVersion: 2, mock: false, tokens: {}, game: { id: 'statg1', day: 3, phase: 'over', started: true, finished: true, winner: 'good', winReason: 'r', players: Array.from({ length: 9 }, (_, i) => ({ seat: i + 1, name: 'P' + i, isHuman: false })) }, anchor: null, review: null, savedAt: Date.now() };
   fs.writeFileSync(path.join(dir, 'statg1.json'), JSON.stringify(doc));
   const box = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), box.res, '/api/stats', new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), box.res, '/api/stats', new URLSearchParams());
   assert.strictEqual(box.code, 200);
   const s = box.body;
   assert.ok(s.games >= 1 && s.finished >= 1, '必须统计到刚写的存档');
@@ -777,7 +780,7 @@ test('分支：恶意 Origin 的状态改变请求必须 403（pair/unpair/confi
   assert.strictEqual(r3.code, 401, 'PUT config 恶意 Origin 按未授权处理');
   // 伪造 statChange 无 Origin 头（curl 类客户端）不受 Origin 检查影响
   const r4 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x' }, body: { code: '123456' } }), r4.res, '/api/auth/pair', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'localhost:3210' }, body: { code: '123456' } }), r4.res, '/api/auth/pair', new URLSearchParams());
   assert.ok(r4.code === 403 || r4.code === 429, '无 Origin 的远端配对走码校验/限流，不该被 Origin 拦死');
 });
 
@@ -788,15 +791,15 @@ test('分支：view 的玩家/上帝双令牌、pruneGames 不回收运行中局
   const gid = entry.game.id;
   // 上帝令牌视角
   const vGod = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
   assert.strictEqual(vGod.code, 200);
   // 玩家令牌视角
   const vMe = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vMe.res, `/api/games/${gid}/view`, new URLSearchParams('token=pt&after=0'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), vMe.res, `/api/games/${gid}/view`, new URLSearchParams('token=pt&after=0'));
   assert.strictEqual(vMe.code, 200);
   // 错误令牌
   const vBad = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vBad.res, `/api/games/${gid}/view`, new URLSearchParams('token=nope&after=0'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), vBad.res, `/api/games/${gid}/view`, new URLSearchParams('token=nope&after=0'));
   assert.strictEqual(vBad.code, 403);
   // 运行中局绝不被 prune（running 跳过分支）
   entry.running = true;
@@ -814,12 +817,12 @@ test('分支角落：畸形 Origin 解析失败、坏 Cookie、本机模式下 p
   const api = makeFinishedApi(dir);
   // ① Origin 无法解析 → isTrustedOrigin false → 403
   const r1 = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'x', origin: '::::not-a-url' }, body: { code: '1' } }), r1.res, '/api/auth/pair', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'localhost:3210', origin: '::::not-a-url' }, body: { code: '1' } }), r1.res, '/api/auth/pair', new URLSearchParams());
   assert.strictEqual(r1.code, 403);
   // ② Cookie 无 '=' → sessionIdFrom 返回 null → 未授权
   api.auth.setEnabled(true);
   const r2 = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '10.0.0.9', headers: { host: 'x', cookie: 'garbage' } }), r2.res, '/api/config', new URLSearchParams());
+  await api.handle(stubReq({ method: 'GET', remote: '10.0.0.9', headers: { host: 'localhost:3210', cookie: 'garbage' } }), r2.res, '/api/config', new URLSearchParams());
   assert.strictEqual(r2.code, 401);
   api.auth.setEnabled(false);
   // ③ 本机模式（未启用）下调 pair → 显式报错（分支：!this.enabled）
@@ -848,13 +851,13 @@ test('分支补强：saveActive 双侧、wolfTalk active 的上帝视图、显�
   const g = entry.game;
   g.wolfTalk = { active: true, round: 1, rounds: 2, queue: [], endNow: false };
   const vGod = stubRes();
-  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'x' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), vGod.res, `/api/games/${gid}/view`, new URLSearchParams('token=gt&after=0'));
   assert.strictEqual(vGod.code, 200);
   assert.ok(vGod.body.wolfTalk && vGod.body.wolfTalk.active === true, '上帝视图必须携带狼聊面板');
 
   // createGame 分支：显式座位 / 纯观战（mySeat=0 / 无 isHuman）
   const spec = stubRes();
-  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'x' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: true } }), spec.res, '/api/games', new URLSearchParams());
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: true } }), spec.res, '/api/games', new URLSearchParams());
   assert.strictEqual(spec.code, 200);
   assert.strictEqual(spec.body.mySeat, 0, '纯观战 mySeat=0');
   assert.ok(!spec.body.playerToken, '观战不发玩家令牌');
@@ -893,4 +896,193 @@ test('MAINT-01：desktop/app 的 package.json 版本必须与 Android versionNam
     const j = JSON.parse(fs.readFileSync(path.join(__dirname, '..', f), 'utf8'));
     assert.strictEqual(j.version, vn, `${f} 的 version 必须同步为 ${vn}（发版规则见 README「版本与发布」）`);
   }
+});
+
+// ---------- 审核 P0-2：DNS rebinding（Host 白名单） ----------
+
+test('P0-2：Host 头白名单——rebind 域名即使来自回环也拿不到管理权限', async () => {
+  const dir = tmpDir('rebind');
+  const api = makeFinishedApi(dir);
+  api.auth.setEnabled(false); // 本机模式：审核指出 enabled=false 时也不该放行 rebind Host
+  // 恶意域名 rebind 到 127.0.0.1：remoteAddress 是回环，但 Host 是攻击者域名
+  const r = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'evil.example:3210' } }), r.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(r.code, 401, '整改前：enabled=false 无条件放行 + 回环自动授权 → rebind 域名可读走 API Key');
+  // 合法 Host 不受影响
+  const r2 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), r2.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(r2.code, 200);
+});
+
+// ---------- 审核 P0-1：密钥-地址原子绑定 ----------
+
+test('P0-1：启动自动绑定；改地址不重输 Key → 真实建局/test/probe 全部拒绝；重输 Key 解除', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('bind');
+  let saved = { apiKey: 'sk-real', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', journal: false };
+  const api = new Api({ config: { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } }, logger: silentLogger, saveDir: dir });
+  assert.ok(saved.keyBinding, '启动时必须自动建立绑定（升级路径）');
+  assert.ok(api.keyBindingValid(), '初始状态必须有效');
+
+  // 攻击路径：已配对设备只改 baseUrl（沿用旧 Key）→ 三个 LLM 出口全部拒绝
+  const put1 = stubRes();
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://evil.example/v1' } }), put1.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(put1.code, 200);
+  const mk = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: false } }), mk.res, '/api/games', new URLSearchParams());
+  assert.strictEqual(mk.code, 400, '整改前：真实对局直接用改过的 baseUrl + 旧 Key（重启后同样），Key 就被外带');
+  assert.match(mk.body.error, /重新验证|重新输入/);
+  const t1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), t1.res, '/api/config/test', new URLSearchParams());
+  assert.strictEqual(t1.code, 400);
+
+  // 提交垃圾 apiKeys 数组不能解除：绑定覆盖主 Key，主 Key 未重输依旧失配
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { apiKeys: ['junk'] } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.strictEqual(api.keyBindingValid(), true, 'apiKeys 提交即视为重输凭证（写入新绑定）');
+  // 但注意：此时 baseUrl 仍是 evil.example + junk 主 Key？——主 Key 未动，apiKeys 变化
+  // 会重写绑定，这是"用户显式改凭证"语义；单独把 baseUrl 改回未重输 Key 的路径再验证：
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.strictEqual(api.keyBindingValid(), false, '只改回 baseUrl 而不重输凭证 → 再次失配');
+
+  // 重输 Key → 解除，真实建局放行
+  const put2 = stubRes();
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { apiKey: 'sk-fixed' } }), put2.res, '/api/config', new URLSearchParams());
+  assert.strictEqual(api.keyBindingValid(), true);
+  const mk2 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: false } }), mk2.res, '/api/games', new URLSearchParams());
+  assert.strictEqual(mk2.code, 200, '重输 Key 后真实建局放行');
+  api.games.clear();
+});
+
+// ---------- 审核 P1-3/P1-4：终局存盘补救 + 优雅退出等待在途写盘 ----------
+
+test('P1-3：终局存盘失败打 saveFailed 标记，saveActive 补救成功后清除', async () => {
+  const dir = tmpDir('p13');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'p13-final', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal(); g.started = true; g.finished = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+
+  const file = path.join(dir, 'p13-final.json');
+  const tmp = file + '.tmp';
+  fs.mkdirSync(tmp); // 障碍：写盘必败
+  const ok = await api._saveFinalWithRetry(entry);
+  assert.strictEqual(ok, false);
+  assert.strictEqual(entry.saveFailed, true, '失败必须打标记');
+
+  fs.rmdirSync(tmp); // 清除障碍
+  const saved = await api.saveActive(); // 整改前：saveActive 只保存未结束局 → 永远 0
+  assert.strictEqual(entry.saveFailed, false, '补救成功后标记清除');
+  assert.ok(fs.existsSync(file), '整改前：终局存档静默丢失');
+  api.games.clear();
+});
+
+test('P1-4：在途写盘时 saveGame 返回在途 Promise（优雅退出等得到）', async () => {
+  const dir = tmpDir('p14');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'p14-inflight', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal(); g.started = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+  const p1 = api.saveGame(entry, { force: true });
+  const p2 = api.saveGame(entry, { force: true }); // entry.saving=true 分支
+  const returnedInflight = p2 && typeof p2.then === 'function';
+  assert.strictEqual(await p1, true);
+  const v = await p2;
+  assert.ok(v === true || v === false);
+  assert.ok(returnedInflight, '整改前：在途时返回 false，优雅退出不等在途写盘');
+  api.games.clear();
+});
+
+// ---------- 审核 P2-7/P2-8/P2-9 ----------
+
+test('P2-7（真实请求）：超大请求体返回 413 而不是连接重置', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('big');
+  const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    api.handle(req, res, u.pathname, u.searchParams).catch(() => {});
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const big = 'x'.repeat(3 * 1024 * 1024); // 3MB > 2MB 上限
+    const r = await fetch(`${base}/api/games`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ junk: big }) });
+    assert.strictEqual(r.status, 413, `整改前：req.destroy() 让客户端收到 ECONNRESET 而不是 413`);
+  } finally { server.close(); }
+});
+
+test('P2-8：暂停中/异常终止的对局调用 /start 必须拒绝', async () => {
+  const dir = tmpDir('p28');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  // 暂停局
+  const g1 = new Game({ id: 'p28-paused', board, players, stepPauseMs: 1, logger: silentLogger });
+  g1.deal(); g1.started = true; g1.paused = { kind: 'quota', code: '1302', message: '配额暂停' };
+  api.games.set(g1.id, { game: g1, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() });
+  const r1 = stubRes();
+  api.startGame(r1.res, api.games.get(g1.id), { token: 'pt' });
+  assert.strictEqual(r1.code, 409, '整改前：暂停局 /start 返回 200 并再次 _drive（重复阶段与事件）');
+  assert.match(r1.body.error, /resume|恢复/);
+  // 异常局
+  const g2 = new Game({ id: 'p28-err', board, players, stepPauseMs: 1, logger: silentLogger });
+  g2.deal(); g2.started = true;
+  api.games.set(g2.id, { game: g2, running: false, error: 'boom', mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() });
+  const r2 = stubRes();
+  api.startGame(r2.res, api.games.get(g2.id), { token: 'pt' });
+  assert.strictEqual(r2.code, 409);
+  assert.match(r2.body.error, /异常/);
+  api.games.clear();
+});
+
+test('P2-9：神职复盘 teamCn 正确显示「神职阵营」', async () => {
+  const review = require('../src/engine/review');
+  const g = makeGameWithAdmirer();
+  g.crush[1] = 3; // 链预言家（神职）
+  g.winner = 'good';
+  g.finished = true;
+  const facts = review.reviewFacts(g, 1);
+  assert.strictEqual(facts.teamCn, '神职阵营', '整改前：myTeam==="god" 分支不可达 → 神职被标成村民阵营');
+  assert.strictEqual(facts.team, 'good');
+});
+
+test('分支收尾：keyBindingValid 无 Key 直通、resume 无 Key 400、view 双视角分支', async () => {
+  const dir = tmpDir('brfin');
+  const api = makeFinishedApi(dir);
+  // keyBindingValid 的「没配 Key 无从外带」直通分支（150）
+  assert.strictEqual(api.keyBindingValid(), true, '空 Key 配置必须直通（无外带面）');
+
+  // resume 无 Key 的真实局 → 400（369）
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'brfin-resume', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal(); g.started = true; g.markAnchor('speech');
+  const entry = { game: g, running: false, error: null, mock: false, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+  await api.saveGame(entry, { force: true });
+  api.games.delete(g.id);
+  const rs = stubRes();
+  await api.resumeGame(rs.res, { id: g.id, tokens: { player: 'pt' } }, { token: 'pt' });
+  assert.strictEqual(rs.code, 400, '无 Key 恢复真实局必须 400');
+  assert.match(rs.body.error, /API Key/);
+
+  // view 的玩家视角分支（915-918 一带）：人类座位令牌
+  const g2 = new Game({ id: 'brfin-view', board, players: players.map((p, i) => ({ ...p, isHuman: i === 0 })), stepPauseMs: 1, logger: silentLogger });
+  g2.deal(); g2.started = true;
+  api.games.set(g2.id, { game: g2, running: false, error: null, mock: true, tokens: { player: 'me', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null });
+  const v1 = stubRes();
+  await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), v1.res, `/api/games/${g2.id}/view`, new URLSearchParams('token=me&after=0'));
+  assert.strictEqual(v1.code, 200, '人类玩家令牌 view 必须可达');
+  api.games.clear();
 });

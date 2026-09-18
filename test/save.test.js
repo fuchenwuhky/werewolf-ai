@@ -125,9 +125,13 @@ test('并发保护：同一对局不会并发写（避免两个 .tmp 互相覆�
     const g = makeGame(ids[0]);
     const entry = entryFor(g);
     const p1 = api.saveGame(entry, { force: true });   // 在飞
-    const second = await api.saveGame(entry, { force: true }); // 撞上在飞的写
-    assert.strictEqual(second, false, '在飞期间的第二次调用不应并排写');
+    const secondP = api.saveGame(entry, { force: true }); // 撞上在飞的写
+    // 整改（审核 P1-4）：在飞期间的第二次调用返回在途 Promise（优雅退出等得到），
+    // 且登记一次待补写 —— 并排写仍然被禁止
+    assert.ok(secondP && typeof secondP.then === 'function', '第二次调用必须返回在途 Promise');
     assert.strictEqual(entry.pendingSave, true, '应登记一次待补写');
+    const second = await secondP;
+    assert.strictEqual(second, true);
     await p1;
     await new Promise((r) => setTimeout(r, 20)); // 等 pendingSave 的补写落地
     assert.strictEqual(entry.saving, false);

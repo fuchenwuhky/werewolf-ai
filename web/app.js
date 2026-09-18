@@ -6,6 +6,8 @@
 // ---------------- 全局状态 ----------------
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, html) => { const d = document.createElement(tag); if (cls) d.className = cls; if (html != null) d.innerHTML = html; return d; };
+// 整改（计划 §2.1 / 审核 P1-5）：不可信内容（模型输出、昵称、服务端消息）专用 —— 永远 textContent
+const elText = (tag, cls, text) => { const d = document.createElement(tag); if (cls) d.className = cls; if (text != null) d.textContent = String(text); return d; };
 
 /**
  * 推送看门狗阈值：服务端心跳约 16s（src/api.js 的 STREAM_TICK_MS × STREAM_PING_TICKS），
@@ -2392,17 +2394,19 @@ function renderCoach(v) {
     return;
   }
   if (r.status === 'error') {
-    box.appendChild(el('div', 'coach-body coach-warn', `点评失败：${r.fallbackReason || '未知原因'}`));
+    box.appendChild(elText('div', 'coach-body coach-warn', `点评失败：${r.fallbackReason || '未知原因'}`));
     const retry = el('button', 'btn', '重试');
     retry.addEventListener('click', () => requestCoach(true));
     box.appendChild(retry);
     return;
   }
-  box.appendChild(el('div', 'coach-body', r.text || '（空点评）'));
+  // 安全（审核 P1-5）：复盘文本是模型输出，必须 textContent；el() 的第三参走 innerHTML
+  box.appendChild(elText('div', 'coach-body', r.text || '（空点评）'));
   const tag = r.mode === 'ai'
     ? '由 AI 生成；事实来自服务端统计，不含推测。'
     : `规则点评，未使用 AI${r.fallbackReason ? `（原因：${r.fallbackReason}）` : ''}。`;
-  box.appendChild(el('div', `coach-tag${r.mode === 'ai' ? '' : ' coach-warn'}`, tag));
+  // tag 含 fallbackReason（服务端详情）→ 也走 textContent
+  box.appendChild(elText('div', `coach-tag${r.mode === 'ai' ? '' : ' coach-warn'}`, tag));
 }
 
 async function requestCoach(regenerate) {

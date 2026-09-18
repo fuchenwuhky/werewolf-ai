@@ -15,7 +15,9 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const DEFAULT_THRESHOLDS = { line: 88, branch: 80, funcs: 78 };
+// 整改（审核 P2-10）：门槛对齐计划 §8.1 —— 全局 92/84/86，api.js 单文件 85/75
+const DEFAULT_THRESHOLDS = { line: 92, branch: 84, funcs: 86 };
+const API_THRESHOLDS = { line: 85, branch: 75 };
 
 function argOf(name, dflt) {
   const hit = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -76,6 +78,17 @@ const main = () => {
     const ok = val + 1e-9 >= t;
     if (!ok) bad++;
     console.log(`  ${ok ? '✓' : '✖'} ${label.padEnd(6)} ${fmt(val).padStart(7)}  阈值 ${String(t).padStart(3)}%`);
+  }
+
+  // 整改（审核 P2-10）：api.js 单文件门禁（计划 §8.1：行 85 / 分支 75）
+  const apiFile = (cov.perFile || []).find((f) => f.file === 'api.js');
+  if (apiFile) {
+    for (const [key, t] of Object.entries(API_THRESHOLDS)) {
+      const val = apiFile[key];
+      const ok = val + 1e-9 >= t;
+      if (!ok) bad++;
+      console.log(`  ${ok ? '✓' : '✖'} ${`api.js ${key === 'line' ? '行' : '分支'}`.padEnd(6)} ${fmt(val).padStart(7)}  阈值 ${String(t).padStart(3)}%`);
+    }
   }
 
   if (process.argv.includes('--report')) {

@@ -85,6 +85,11 @@ function roleArtMap() {
 }
 
 function tokenId() { return crypto.randomBytes(16).toString('hex'); }
+function keyBindingOf(cfg) {
+  return crypto.createHash('sha256').update(
+    [`${cfg.baseUrl || ''}`, String(cfg.apiKey || ''), (cfg.apiKeys || []).join('|')].join('§')
+  ).digest('hex');
+}
 
 class Api {
   constructor({ config, logger, saveDir = null }) {
@@ -109,6 +114,13 @@ class Api {
     // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
     // server.js 绑定非回环地址（WW_LAN=1 / WW_HOST）时调用 auth.setEnabled(true) 启用门禁。
     this.auth = new AuthManager({ logger });
+    // 密钥-地址原子绑定（审核 P0-1）：baseUrl 与 Key 必须成对可信。
+    // 磁盘上没有绑定时自动绑定一次（升级路径，信任磁盘现状）；此后任何"只改地址不重输
+    // Key"的保存都会让绑定失配，所有 LLM 出口（建真实局/test/probe）拒绝发凭证。
+    if (!this.config.get().keyBinding && (this.config.get().apiKey || (this.config.get().apiKeys || []).length)) {
+      this.config.save({ keyBinding: keyBindingOf(this.config.get()) });
+      this.logger.info('api', '已建立密钥-地址绑定（升级自动绑定）');
+    }
     // 定时持久化进行中的对局
     this._saveTimer = setInterval(() => this.saveActive(), 4000);
     this._saveTimer.unref && this._saveTimer.unref();
@@ -132,6 +144,13 @@ class Api {
     } catch (_) { /* 目录不可读等：不影响启动 */ }
   }
 
+  /** 密钥-地址绑定是否有效（审核 P0-1）：baseUrl 与 Key 任一变动未重输凭证即失配 */
+  keyBindingValid() {
+    const c = this.config.get();
+    if (!c.apiKey && !(c.apiKeys || []).length) return true; // 没配 Key 无从外带
+    return !!c.keyBinding && c.keyBinding === keyBindingOf(c);
+  }
+
   json(res, code, data) {
     const body = JSON.stringify(data);
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -148,12 +167,20 @@ class Api {
     }
     return new Promise((resolve, reject) => {
       let size = 0; const chunks = [];
+      let over = false;
       req.on('data', (c) => {
         size += c.length;
-        if (size > limit) { reject(Object.assign(new Error('请求体过大'), { code: 413 })); req.destroy(); return; }
-        chunks.push(c);
+        if (size > limit && !over) {
+          // 整改（审核 P2-7）：不再 destroy 连接——那会让客户端收到 ECONNRESET 而不是
+          // 承诺的 413。改为丢弃后续数据、保持连接，让上层把 413 响应真正写回去。
+          over = true;
+          reject(Object.assign(new Error('请求体过大'), { code: 413 }));
+          return;
+        }
+        if (!over) chunks.push(c);
       });
       req.on('end', () => {
+        if (over) return; // 已因超限 reject
         if (!chunks.length) return resolve({});
         try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
         catch (e) { reject(Object.assign(new Error('JSON 解析失败'), { code: 400 })); }
@@ -186,10 +213,16 @@ class Api {
     const game = entry.game;
     const stamp = `${game.seq}|${game.day}|${game.phase}|${game.finished ? 1 : 0}|${game.paused ? 1 : 0}|${game.winner || ''}`;
     if (!force && entry.savedStamp === stamp) return false; // 脏标记：没有变化，一次磁盘都不碰
-    if (entry.saving) { entry.pendingSave = true; return false; } // 同一对局不并发写（避免 tmp 互相覆盖）
+    if (entry.saving) {
+      // 整改（审核 P1-4）：在途写盘不静默放弃 —— 返回在途 Promise 让优雅退出真正等得到；
+      // pendingSave 仍会安排一次补写。
+      entry.pendingSave = true;
+      return entry.savePromise || false;
+    }
     // 注意：savedStamp 绝不能在写盘前推进（整改 REL-03）。旧行为在这里先盖戳，
     // 一旦 writeFile/rename 失败，4s 周期保存会因"戳没变"永远跳过 → 数据静默丢失。
     entry.saving = true;
+    entry.savePromise = (async () => {
     let doc;
     try {
       // 令牌一并存档：本地单机应用，浏览器丢失会话时可从存档恢复对局
@@ -214,6 +247,7 @@ class Api {
       await fs.promises.writeFile(tmp, doc);
       await fs.promises.rename(tmp, file); // 原子替换：读到的永远是完整存档
       entry.savedStamp = stamp; // 只有真正落盘成功才推进脏标记
+      entry.saveFailed = false; // 审核 P1-3：补救成功后清除标记（saveActive 路径同样生效）
     } catch (e) {
       this.logger.warn('api', `存档失败 ${game.id}: ${e.message}`);
       return false; // 保持脏状态：savedStamp 未推进，下一轮周期保存会自动重试
@@ -222,6 +256,8 @@ class Api {
       if (entry.pendingSave) { entry.pendingSave = false; this.saveGame(entry).catch(() => {}); }
     }
     return true;
+    })();
+    return entry.savePromise;
   }
 
   /**
@@ -285,7 +321,7 @@ class Api {
         this.logger.warn('api', `对局 ${game.id} 已暂停（${game.paused.kind}/${game.paused.code}）：${game.paused.message}`, { gameId: game.id });
         return; // 不关按局日志、不生成经验：对局尚未结束，恢复后继续
       }
-      await this.saveGame(entry, { force: true });
+      await this._saveFinalWithRetry(entry);
       // 生命周期收口（整改 REL-02）：正常结束必须复位 running，否则 pruneGames/TTL 永远
       // 跳过这局（"已结束却无法回收"），且 entry.running=true 会让状态语义说谎。
       entry.running = false;
@@ -299,9 +335,24 @@ class Api {
       entry.error = String(err.stack || err.message || err);
       entry.running = false;
       this.logger.error('engine', `对局 ${game.id} 异常终止`, { stack: err.stack });
-      await this.saveGame(entry, { force: true });
+      await this._saveFinalWithRetry(entry);
     });
     return entry;
+  }
+
+  /**
+   * 终局存盘：失败时有界重试（审核 P1-3）。仍失败则打 saveFailed 标记 ——
+   * saveActive 会把带标记的已结束对局一并纳入补救，直到真正落盘成功。
+   */
+  async _saveFinalWithRetry(entry) {
+    let ok = await this.saveGame(entry, { force: true });
+    for (let i = 0; !ok && i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 300 * (i + 1)));
+      ok = await this.saveGame(entry, { force: true });
+    }
+    if (ok) { entry.saveFailed = false; }
+    else { entry.saveFailed = true; this.logger.error('api', `终局存盘多次失败 ${entry.game.id}，已标记待补救`); }
+    return ok;
   }
 
   /** 断点恢复（服务重启后）：从存档锚点重建对局，重放锚点标记的阶段并继续驱动 */
@@ -361,8 +412,9 @@ class Api {
     this.pruneGames(); // 内存治理与定时落盘同一个节拍：4s 一次
     const jobs = [];
     for (const entry of this.games.values()) {
-      if (entry.game.started && !entry.game.finished) {
-        jobs.push(this.saveGame(entry).catch((e) => {
+      // 整改（审核 P1-3）：终局存盘失败的对局（saveFailed）也要纳入补救，否则数据静默丢失
+      if (entry.game.started && (!entry.game.finished || entry.saveFailed)) {
+        jobs.push(this.saveGame(entry, { force: !!entry.saveFailed }).catch((e) => {
           this.logger.warn('api', `定时存档失败 ${entry.game.id}: ${e.message}`);
           return false;
         }));
@@ -486,8 +538,15 @@ class Api {
         const baseUrlChanged = body.baseUrl && body.baseUrl !== prev.baseUrl;
         const keySupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== '';
         const keysChanged = Array.isArray(body.apiKeys);
-        this.baseUrlNeedsRekey = baseUrlChanged && !keySupplied && !keysChanged ? true : (keySupplied || keysChanged ? false : this.baseUrlNeedsRekey);
         const saved = this.config.save(body);
+        // 整改（审核 P0-1）：只有"重新输入了凭证"才重写密钥-地址绑定；只改地址的保存
+        // 会让绑定失配 → 所有 LLM 出口拒绝发凭证，直到用户重输 Key。
+        if (keySupplied || keysChanged) {
+          this.config.save({ keyBinding: keyBindingOf(this.config.get()) });
+          this.baseUrlNeedsRekey = false;
+        } else {
+          this.baseUrlNeedsRekey = !this.keyBindingValid();
+        }
         // 通道数变了要对所有在跑的调度器生效：llm.js 每次调用都会校对，这里只记一条日志便于自查
         const channels = resolveChannels(saved);
         this.logger.info('api', 'API 配置已更新', {
@@ -505,7 +564,7 @@ class Api {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         if (!this._rateAllow(req, 'cfgtest', 6)) return this.json(res, 429, { error: '测试过于频繁，请稍后再试' });
         const c = this.config.get();
-        if (this.baseUrlNeedsRekey) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再测试（防止密钥被发往未确认的地址）' });
+        if (!this.keyBindingValid()) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再测试（防止密钥被发往未确认的地址）' });
         if (!c.apiKey) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
         const r = await testConnection(c, this.logger);
         return this.json(res, r.ok ? 200 : 502, r);
@@ -518,7 +577,7 @@ class Api {
       if (pathname === '/api/config/probe' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         if (!this._rateAllow(req, 'probe', 3)) return this.json(res, 429, { error: '探测过于频繁，请稍后再试' });
-        if (this.baseUrlNeedsRekey) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再探测（防止密钥被发往未确认的地址）' });
+        if (!this.keyBindingValid()) return this.json(res, 400, { ok: false, error: '接口地址已变更：请重新输入 API Key 再探测（防止密钥被发往未确认的地址）' });
         const c = this.config.get();
         const keys = parseApiKeys(c);
         if (!keys.length) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
@@ -611,6 +670,11 @@ class Api {
     const rules = mergeRules({ ...(boardDef && boardDef.rules || {}), ...(body.rules || {}) });
     const useMock = !!body.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key（或在设置中勾选 Mock 试玩）' });
+    // 整改（审核 P0-1）：真实对局的 LLM 出口也必须校验密钥-地址绑定（内存标记重启即失，
+    // 不能作为唯一防线）
+    if (!useMock && !this.keyBindingValid()) {
+      return this.json(res, 400, { error: '接口地址或密钥已变更但未重新验证：请在设置中重新保存 API Key', auth: 'rekey' });
+    }
 
 
     const gameId = 'g' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
@@ -667,9 +731,13 @@ class Api {
   }
 
   startGame(res, entry, body) {
-    // 整改 REL-02：不能只用 running 挡重复启动——已结束的对局（running=false）也必须拒绝重开
+    // 整改 REL-02 + 审核 P2-8：完整状态守卫——running/finished/started/paused/error 都不许
+    // 重复驱动。暂停局必须走 /resume（恢复锚点），直接 /start 会跳过锚点重放。
     if (entry.running) return this.json(res, 409, { error: '对局已开始' });
     if (entry.game.finished) return this.json(res, 409, { error: '对局已结束，不能重新开始' });
+    if (entry.game.paused) return this.json(res, 409, { error: '对局处于暂停态，请走断点恢复（resume）' });
+    if (entry.error) return this.json(res, 409, { error: '对局上次异常终止，请从存档恢复' });
+    if (entry.game.started) return this.json(res, 409, { error: '对局已开始' });
     if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
       return this.json(res, 403, { error: 'token 无效' });
     }

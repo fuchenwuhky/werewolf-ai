@@ -41,7 +41,7 @@ const fakeReq = (method, body) => {
 /** 造一个"能创建对局"的 Api（不需要真 key：mock 局不走 LLM）；数据目录见文件头 */
 function makeApi() {
   return new Api({
-    config: { get: () => ({ apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }), save() {} },
+    config: (() => { const cfg = { apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }; return { get: () => cfg, save(b) { Object.assign(cfg, b); } }; })(),
     logger: silentLogger,
   });
 }

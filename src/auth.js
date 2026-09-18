@@ -16,6 +16,7 @@
  */
 'use strict';
 const crypto = require('crypto');
+const os = require('os');
 
 const CODE_TTL_MS = 5 * 60 * 1000;
 const CODE_REUSE_INTERVAL_MS = 60 * 1000;
@@ -68,6 +69,9 @@ class AuthManager {
    * @param opts.forceRemote 测试注入：把回环连接也按远端对待（验证 LAN 门禁本身）
    */
   isManagement(req, { forceRemote = false } = {}) {
+    // DNS rebinding 防护（审核 P0-2）：Host 头必须命中本机地址白名单。
+    // 恶意域名 rebind 到 127.0.0.1 时，请求源地址确实是回环，但 Host 是攻击者域名 → 拒绝。
+    if (!isTrustedHostHeader(req.headers && req.headers.host)) return false;
     if (!this.enabled) return true; // 本机模式：与旧版行为一致，全放行
     if (!forceRemote && isLoopbackAddress(req.socket && req.socket.remoteAddress)) return true;
     const sid = this.sessionIdFrom(req);
@@ -171,7 +175,28 @@ function isTrustedOrigin(req) {
   return false;
 }
 
-module.exports = { AuthManager, isLoopbackAddress, isTrustedOrigin, sha256, resolveListenHost };
+/** Host 头白名单：localhost/回环/本机所有网卡地址（含端口剥离）。rebind 域名不在表内 */
+function isTrustedHostHeader(host, now = Date.now()) {
+  if (!host) return true; // 非浏览器客户端（curl、Electron 主进程、HTTP/1.0）
+  let h = String(host).trim().toLowerCase();
+  if (h.includes('@')) return false; // user-info 形式直接拒绝
+  if (h.startsWith('[')) { const end = h.indexOf(']'); if (end !== -1) h = h.slice(1, end); }
+  else h = h.replace(/:[0-9]+$/, '');
+  if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return true;
+  // 本机网卡地址（缓存 5s，避免每请求枚举）
+  if (!isTrustedHostHeader._ifs || now - isTrustedHostHeader._ifs.at > 5000) {
+    const set = new Set();
+    try {
+      for (const list of Object.values(os.networkInterfaces())) {
+        for (const it of list || []) set.add(String(it.address).toLowerCase());
+      }
+    } catch (_) { /* ignore */ }
+    isTrustedHostHeader._ifs = { at: now, set };
+  }
+  return isTrustedHostHeader._ifs.set.has(h);
+}
+
+module.exports = { AuthManager, isLoopbackAddress, isTrustedOrigin, isTrustedHostHeader, sha256, resolveListenHost };
 
 /**
  * 监听地址解析（整改 SEC-01 的 3.1 决策）：

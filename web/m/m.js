@@ -267,6 +267,7 @@ async function openSummarySheet() {
     : v.winner === 'wolf' ? '🐺 狼人阵营获胜'
       : v.winner === 'draw' ? '🤝 平局（未分胜负）' : '⏹ 对局终止';
   const rname = (rid) => (roleInfo(rid) || {}).name || rid;
+  // 安全（审核 P1-5）：复盘正文是模型输出 —— 单独用 textContent 渲染，不进 innerHTML
   body.appendChild(el('div', 'setinfo', [
     `<div class="set-row"><span>结果</span><b>${escapeHtml(result)}</b></div>`,
     `<div class="set-row"><span>天数</span><b>第 ${v.day || 0} 天</b></div>`,
@@ -306,7 +307,8 @@ async function openSummarySheet() {
   }
 
   // AI 复盘文本（桌面端若已生成过就直接显示；否则按需生成 —— 会花一次模型调用，所以不自动跑）
-  const rev = el('p', 'hint', (v.review && v.review.text) || '');
+  // 安全（审核 P1-5）：复盘文本是模型输出，必须 textContent
+  const rev = elText('p', 'hint', (v.review && v.review.text) || '');
   rev.id = 'm-review-box';
   body.appendChild(rev);
   wrap.appendChild(body);

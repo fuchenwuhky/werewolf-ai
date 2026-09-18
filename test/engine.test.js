@@ -1663,15 +1663,19 @@ test('断点恢复：锚点快照 + fromJSON 重建 + resume 继续运行', asyn
 test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接口续跑', async () => {
   const fs = require('fs');
   const path = require('path');
+  const os = require('os');
   const { Api } = require('../src/api');
-  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger });
+  // 整改（计划阶段 0）：存档目录注入临时目录 —— 不写正式 saves/，也根除并行测试
+  // 进程通过共享 saves/ 目录互相干扰导致的偶发失败。
+  const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-resume-'));
+  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger, saveDir });
   const g = makeGame({ id: 'resume-api-test', humanSeat: null });
   assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'villager', 4: 'witch', 5: 'villager' });
   g.started = true;
   g.markAnchor('speech');
   const entry = { game: g, tokens: { player: 'pt', god: 'gt' }, running: false, mock: true };
   await api.saveGame(entry); // 存档已改为异步 + 原子替换，测试需 await 才能看到文件
-  const saveFile = path.join('saves', 'resume-api-test.json');
+  const saveFile = path.join(saveDir, 'resume-api-test.json');
   try {
     assert.ok(fs.existsSync(saveFile), '存档应写入');
     const doc = JSON.parse(fs.readFileSync(saveFile, 'utf8'));
@@ -1697,6 +1701,7 @@ test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接�
     assert.ok(api.games.get('resume-api-test').game.finished, '恢复对局应已结算');
   } finally {
     fs.rmSync(saveFile, { force: true });
+    fs.rmSync(saveDir, { recursive: true, force: true });
   }
 });
 
