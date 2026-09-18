@@ -86,20 +86,22 @@ function roleArtMap() {
 function tokenId() { return crypto.randomBytes(16).toString('hex'); }
 
 class Api {
-  constructor({ config, logger }) {
+  constructor({ config, logger, saveDir = null }) {
     this.config = config;      // {get(), save(partial)}
     this.logger = logger;
+    // 存档目录可注入（整改 REL-03 的测试隔离要求）；默认行为与以前完全一致
+    this.saveDir = saveDir || SAVE_DIR;
     this.games = new Map();    // gameId → {game, tokens:{player,god}, running, error, saveTimer}
-    this.experience = new ExperienceStore(SAVE_DIR, logger); // 跨局经验池（按角色沉淀 AI 复盘教训）
+    this.experience = new ExperienceStore(this.saveDir, logger); // 跨局经验池（按角色沉淀 AI 复盘教训）
     // 决策 journal：恢复重放时命中磁盘答案 → 零重复 LLM 调用、逐字复现（P1-1/P1-2）
-    this.journalDir = path.join(SAVE_DIR, 'journal');
+    this.journalDir = path.join(this.saveDir, 'journal');
     this.journal = new DecisionJournal(this.journalDir, {
       enabled: this.config.get().journal !== false,
       logger,
     });
     const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
-    if (!fs.existsSync(SAVE_DIR)) fs.mkdirSync(SAVE_DIR, { recursive: true });
+    if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
     // 定时持久化进行中的对局
     this._saveTimer = setInterval(() => this.saveActive(), 4000);
     this._saveTimer.unref && this._saveTimer.unref();
@@ -158,7 +160,8 @@ class Api {
     const stamp = `${game.seq}|${game.day}|${game.phase}|${game.finished ? 1 : 0}|${game.paused ? 1 : 0}|${game.winner || ''}`;
     if (!force && entry.savedStamp === stamp) return false; // 脏标记：没有变化，一次磁盘都不碰
     if (entry.saving) { entry.pendingSave = true; return false; } // 同一对局不并发写（避免 tmp 互相覆盖）
-    entry.savedStamp = stamp;
+    // 注意：savedStamp 绝不能在写盘前推进（整改 REL-03）。旧行为在这里先盖戳，
+    // 一旦 writeFile/rename 失败，4s 周期保存会因"戳没变"永远跳过 → 数据静默丢失。
     entry.saving = true;
     let doc;
     try {
@@ -177,13 +180,15 @@ class Api {
       this.logger.warn('api', `存档序列化失败 ${game.id}: ${e.message}`);
       return false;
     }
-    const file = path.join(SAVE_DIR, `${game.id}.json`);
+    const file = path.join(this.saveDir, `${game.id}.json`);
     const tmp = `${file}.tmp`;
     try {
       await fs.promises.writeFile(tmp, doc);
       await fs.promises.rename(tmp, file); // 原子替换：读到的永远是完整存档
+      entry.savedStamp = stamp; // 只有真正落盘成功才推进脏标记
     } catch (e) {
       this.logger.warn('api', `存档失败 ${game.id}: ${e.message}`);
+      return false; // 保持脏状态：savedStamp 未推进，下一轮周期保存会自动重试
     } finally {
       entry.saving = false;
       if (entry.pendingSave) { entry.pendingSave = false; this.saveGame(entry).catch(() => {}); }
@@ -221,7 +226,7 @@ class Api {
 
   loadSaveDoc(id) {
     try {
-      return JSON.parse(fs.readFileSync(path.join(SAVE_DIR, `${id}.json`), 'utf8'));
+      return JSON.parse(fs.readFileSync(path.join(this.saveDir, `${id}.json`), 'utf8'));
     } catch (_) { return null; }
   }
 
@@ -252,6 +257,10 @@ class Api {
         return; // 不关按局日志、不生成经验：对局尚未结束，恢复后继续
       }
       await this.saveGame(entry, { force: true });
+      // 生命周期收口（整改 REL-02）：正常结束必须复位 running，否则 pruneGames/TTL 永远
+      // 跳过这局（"已结束却无法回收"），且 entry.running=true 会让状态语义说谎。
+      entry.running = false;
+      entry.finishedAt = Date.now();
       this.logger.closeGameLog(game.id);
       // 局终复盘：AI 拿"当时的判断"对照"终局真相"提炼经验，存入跨局经验池（mock 对局/失败静默跳过）
       this.generateLessons(entry).catch((e) => {
@@ -527,7 +536,9 @@ class Api {
   }
 
   startGame(res, entry, body) {
+    // 整改 REL-02：不能只用 running 挡重复启动——已结束的对局（running=false）也必须拒绝重开
     if (entry.running) return this.json(res, 409, { error: '对局已开始' });
+    if (entry.game.finished) return this.json(res, 409, { error: '对局已结束，不能重新开始' });
     if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
       return this.json(res, 403, { error: 'token 无效' });
     }
@@ -1110,10 +1121,10 @@ class Api {
     try {
       const agg = { games: 0, finished: 0, goodWins: 0, wolfWins: 0, avgDays: 0, boards: {}, experiences: this.experience.stats() };
       let daysSum = 0;
-      const files = fs.readdirSync(SAVE_DIR).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
+      const files = fs.readdirSync(this.saveDir).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
       for (const f of files) {
         try {
-          const j = JSON.parse(fs.readFileSync(path.join(SAVE_DIR, f), 'utf8'));
+          const j = JSON.parse(fs.readFileSync(path.join(this.saveDir, f), 'utf8'));
           const g = j.game || j;
           agg.games++;
           if (g.finished) {
@@ -1136,10 +1147,10 @@ class Api {
 
   listSaves(res) {
     try {
-      const files = fs.readdirSync(SAVE_DIR).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
+      const files = fs.readdirSync(this.saveDir).filter((f) => f.endsWith('.json') && f !== 'experiences.json');
       const rows = files.map((f) => {
         try {
-          const j = JSON.parse(fs.readFileSync(path.join(SAVE_DIR, f), 'utf8'));
+          const j = JSON.parse(fs.readFileSync(path.join(this.saveDir, f), 'utf8'));
           const g = j.game || j; // 兼容新旧存档格式
           return {
             id: g.id, day: g.day, phase: g.phase, finished: g.finished, started: !!g.started, inMemory: this.games.has(g.id),
@@ -1148,7 +1159,7 @@ class Api {
             mock: !!j.mock, // 让界面能标出"试玩局"，也便于排查"恢复后是否还走 Mock"
             // 服务重启后（不在内存）或内存中处于暂停态的对局，都可以从锚点续跑
             resumable: !!(j.anchor && g.started && !g.finished && (!this.games.has(g.id) || !!g.paused)),
-            seats: g.players.length, date: fs.statSync(path.join(SAVE_DIR, f)).mtime,
+            seats: g.players.length, date: fs.statSync(path.join(this.saveDir, f)).mtime,
           };
         } catch (_) { return null; }
       }).filter(Boolean).sort((a, b) => new Date(b.date) - new Date(a.date));

@@ -84,3 +84,89 @@ test('VAL-01（真实请求）：API 层抛出的"请求体过大/JSON 解析失
     assert.strictEqual((await fetch(`${base}/api/other`, { method: 'POST' })).status, 500);
   } finally { server.close(); }
 });
+
+// ---------- REL-02：正常结束必须复位生命周期 ----------
+
+test('REL-02：Mock 局正常打完后 entry.running=false，可被 TTL 清理；finished 局拒绝重开', async () => {
+  const { Api } = require('../src/api');
+  const { Game } = require('../src/engine/game');
+  const { makeMockAgentFactory } = require('../scripts/mock-agent');
+  const dir = tmpDir('rel02');
+  const api = new Api({
+    config: { get: () => ({ apiKey: 'k', journal: false }), save() {} },
+    logger: silentLogger,
+    saveDir: dir,
+  });
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({
+    id: 'rel02-finish', board, players, stepPauseMs: 1, logger: silentLogger,
+    agentFactory: makeMockAgentFactory(Math.random, { explodeRate: 0 }),
+  });
+  g.deal();
+  g.started = true;
+  const entry = { game: g, running: true, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
+  api.games.set(g.id, entry);
+  api._drive(entry);
+  // 等驱动循环自然结束（Mock 局很快；给 10s 上限防挂）
+  const deadline = Date.now() + 10000;
+  while (!g.finished && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  assert.ok(g.finished, 'Mock 局应能自然打完');
+  assert.strictEqual(entry.running, false, '整改前：_drive 成功路径不复位 running → 该局永远无法被 TTL/LRU 回收');
+
+  // TTL 清理：把 lastAccess 拨老，pruneGames 应当能丢弃这局（对象已在磁盘上）
+  entry.lastAccess = Date.now() - 31 * 60 * 1000;
+  const dropped = api.pruneGames({ ttlMs: 30 * 60 * 1000 });
+  assert.ok(dropped >= 1, '已结束的对局必须可被清理');
+  assert.ok(!api.games.has('rel02-finish'));
+
+  // 已结束的对局拒绝重新开始
+  const box = { res: { writeHead(code) { box.code = code; }, end(b) { box.body = JSON.parse(b); } } };
+  const entry2 = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
+  api.games.set(g.id, entry2);
+  api.startGame(box.res, entry2, { token: 'pt' });
+  assert.strictEqual(box.code, 409, '整改前：只查 running，已结束对局可被二次 _drive');
+  assert.match(box.body.error, /已结束/);
+  api.games.delete(g.id);
+});
+
+// ---------- REL-03：存盘失败必须可重试 ----------
+
+test('REL-03：写盘失败时不推进 savedStamp（保持脏），障碍清除后下一次保存真正落盘', async () => {
+  const { Api } = require('../src/api');
+  const { Game } = require('../src/engine/game');
+  const dir = tmpDir('rel03');
+  const api = new Api({
+    config: { get: () => ({ apiKey: 'k', journal: false }), save() {} },
+    logger: silentLogger,
+    saveDir: dir,
+  });
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'rel03-save', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal();
+  g.started = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
+  api.games.set(g.id, entry);
+
+  const file = path.join(dir, 'rel03-save.json');
+  const tmp = file + '.tmp';
+  // 障碍：把 tmp 路径预先占成一个目录 → writeFile 必然 EISDIR
+  fs.mkdirSync(tmp);
+
+  const first = await api.saveGame(entry, { force: true });
+  assert.strictEqual(first, false, '第一次保存应失败');
+  assert.strictEqual(fs.existsSync(file), false, '失败时不得留下"已保存"的假象');
+  assert.strictEqual(entry.savedStamp, undefined, '整改前：savedStamp 在写盘前就被推进 → 之后周期保存永远跳过 → 数据静默丢失');
+
+  // 清除障碍后，不强制 force：脏标记仍在，下一次保存必须真正写盘
+  fs.rmdirSync(tmp);
+  const second = await api.saveGame(entry);
+  assert.strictEqual(second, true, '脏状态下第二次保存应真正落盘');
+  assert.ok(fs.existsSync(file), '整改前：因 savedStamp 已被错误推进，这次保存会被跳过、文件永远写不出来');
+
+  // 落盘成功后再保存（无变化）→ 脏标记生效，跳过写入
+  const third = await api.saveGame(entry);
+  assert.strictEqual(third, false, '没有变化时不应重复写盘');
+  api.games.delete(g.id);
+});
