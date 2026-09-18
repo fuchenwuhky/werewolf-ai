@@ -141,20 +141,28 @@ async function createWindow() {
     title: 'AI 狼人杀',
     icon: APP_ICON,
     autoHideMenuBar: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, spellcheck: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
   });
   Menu.setApplicationMenu(buildMenu());
 
   win.once('ready-to-show', () => win.show());
-  // 站内链接留在窗口内；外链（角色图等）交给系统浏览器，别把应用窗口导航走
+  // 站内链接留在窗口内；外链（角色图等）交给系统浏览器，别把应用窗口导航走。
+  // 安全（整改 SEC-03）：可信来源用 URL 解析后的精确 origin 比较 —— 旧的字符串 includes
+  // 判断可被 http://evil.com/?127.0.0.1:3210 这类构造绕过，把外链误当站内导航。
+  const internalOrigin = `http://127.0.0.1:${port}`;
+  const isInternalUrl = (url) => {
+    try { return new URL(url).origin === internalOrigin; } catch (_) { return false; }
+  };
+  // 拒绝一切权限请求（通知/摄像头/定位等）：本应用用不到
+  win.webContents.session.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/.test(url) && !url.includes(`127.0.0.1:${port}`)) shell.openExternal(url);
+    if (/^https?:/.test(url) && !isInternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
   win.webContents.on('will-navigate', (e, url) => {
-    if (!url.includes(`127.0.0.1:${port}`)) {
+    if (!isInternalUrl(url)) {
       e.preventDefault();
-      shell.openExternal(url);
+      if (/^https?:/.test(url)) shell.openExternal(url);
     }
   });
 

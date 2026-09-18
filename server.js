@@ -70,9 +70,20 @@ server.listen(PORT, HOST, () => {
   }
 });
 
-process.on('SIGINT', () => {
-  logger.info('server', '正在关闭…');
-  api.saveActive();
-  server.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 1500);
-});
+let closing = false;
+async function shutdown() {
+  if (closing) return process.exit(0); // 第二次信号：立即退出
+  closing = true;
+  logger.info('server', '正在关闭…（等待活动对局落盘）');
+  server.close();
+  try {
+    const saved = await Promise.race([
+      api.saveActive(),
+      new Promise((r) => setTimeout(() => r(-1), 4000)), // 总闸：4s 内必须退出
+    ]);
+    logger.info('server', saved >= 0 ? `活动对局已落盘（${saved} 局）` : '落盘等待超时，强制退出');
+  } catch (_) { /* ignore */ }
+  process.exit(0);
+}
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);

@@ -23,9 +23,45 @@ const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff:
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401 && data.auth === 'pairing') showPairingGate(); // LAN 模式未配对（SEC-01）
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
   return data;
 }
+
+// ---------------- 局域网配对门（整改 SEC-01 的前端半边） ----------------
+// LAN 模式下未配对的管理请求会拿到 401 {auth:'pairing'}：弹配对码输入层，
+// 配对成功写会话 Cookie 后自动刷新。配对码显示在服务本机的设置页上。
+let pairingGateShown = false;
+function showPairingGate() {
+  if (pairingGateShown) return;
+  pairingGateShown = true;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(2,4,10,.88);display:flex;align-items:center;justify-content:center';
+  wrap.innerHTML = '<div style="background:#0d1322;border:1px solid #2a3552;border-radius:12px;padding:22px 26px;max-width:340px;text-align:center">' +
+    '<h3 style="margin:0 0 8px;color:#e8c56a">🌐 局域网配对</h3>' +
+    '<p style="margin:0 0 12px;color:#9fb0d0;font-size:13px">这台设备尚未与管理会话配对。请查看<b style="color:#e8c56a">服务本机</b>设置页顶部的 6 位配对码，在下方输入（5 分钟内有效）。</p>' +
+    '<input id="pair-code" inputmode="numeric" maxlength="6" placeholder="6 位配对码" style="width:100%;box-sizing:border-box;text-align:center;font-size:22px;letter-spacing:8px;padding:8px;background:#0a0f1c;border:1px solid #2a3552;border-radius:8px;color:#fff">' +
+    '<div style="display:flex;gap:8px;margin-top:12px"><button id="pair-go" style="flex:1;padding:8px;background:#c9a227;border:0;border-radius:8px;font-weight:700">配对</button><button id="pair-cancel" style="padding:8px 12px;background:#1a2338;border:1px solid #2a3552;border-radius:8px;color:#9fb0d0">取消</button></div>' +
+    '<p id="pair-err" style="color:#ff8080;font-size:12px;min-height:16px;margin:8px 0 0"></p></div>';
+  document.body.appendChild(wrap);
+  const done = () => location.reload();
+  wrap.querySelector('#pair-cancel').addEventListener('click', () => wrap.remove());
+  const go = async () => {
+    const code = wrap.querySelector('#pair-code').value.trim();
+    try {
+      const r = await fetch('/api/auth/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+      if (r.ok) return done();
+      const j = await r.json().catch(() => ({}));
+      wrap.querySelector('#pair-err').textContent = j.error || '配对失败';
+    } catch (e) { wrap.querySelector('#pair-err').textContent = e.message; }
+  };
+  wrap.querySelector('#pair-go').addEventListener('click', go);
+  wrap.querySelector('#pair-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  wrap.querySelector('#pair-code').focus();
+}
+
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const roleInfo = (rid) => state.meta.roles[rid];
 // 安全（整改 SEC-02）：昵称是用户可控输入，seatLabel 的返回值只用于 innerHTML 模板，源头转义

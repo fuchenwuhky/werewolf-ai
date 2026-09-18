@@ -331,14 +331,21 @@ class Api {
     return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
   }
 
-  saveActive() {
+  /** 保存所有进行中的对局。返回 Promise（整改阶段 3.2：优雅退出需要等待落盘完成），
+   *  兑现为成功写入的局数；脏标记在 saveGame 内部判定：没有新事件的节拍一次磁盘都不碰 */
+  async saveActive() {
     this.pruneGames(); // 内存治理与定时落盘同一个节拍：4s 一次
+    const jobs = [];
     for (const entry of this.games.values()) {
       if (entry.game.started && !entry.game.finished) {
-        // 脏标记在 saveGame 内部判定：没有新事件的节拍一次磁盘都不碰
-        this.saveGame(entry).catch((e) => this.logger.warn('api', `定时存档失败 ${entry.game.id}: ${e.message}`));
+        jobs.push(this.saveGame(entry).catch((e) => {
+          this.logger.warn('api', `定时存档失败 ${entry.game.id}: ${e.message}`);
+          return false;
+        }));
       }
     }
+    const results = await Promise.all(jobs);
+    return results.filter(Boolean).length;
   }
 
   // ---------- 路由 ----------

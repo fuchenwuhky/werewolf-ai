@@ -43,8 +43,43 @@ async function api(method, url, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (res.status === 401 && data.auth === 'pairing') showPairingGate(); // LAN 模式未配对（SEC-01）
+    throw new Error(data.error || `HTTP ${res.status}`);
+  }
   return data;
+}
+
+// ---------------- 局域网配对门（整改 SEC-01 的前端半边） ----------------
+// LAN 模式下未配对的管理请求会拿到 401 {auth:'pairing'}：弹配对码输入层，
+// 配对成功写会话 Cookie 后自动刷新。配对码显示在服务本机的设置页上。
+let pairingGateShown = false;
+function showPairingGate() {
+  if (pairingGateShown) return;
+  pairingGateShown = true;
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(2,4,10,.88);display:flex;align-items:center;justify-content:center';
+  wrap.innerHTML = '<div style="background:#0d1322;border:1px solid #2a3552;border-radius:12px;padding:22px 26px;max-width:340px;text-align:center">' +
+    '<h3 style="margin:0 0 8px;color:#e8c56a">🌐 局域网配对</h3>' +
+    '<p style="margin:0 0 12px;color:#9fb0d0;font-size:13px">这台设备尚未与管理会话配对。请查看<b style="color:#e8c56a">服务本机</b>设置页顶部的 6 位配对码，在下方输入（5 分钟内有效）。</p>' +
+    '<input id="pair-code" inputmode="numeric" maxlength="6" placeholder="6 位配对码" style="width:100%;box-sizing:border-box;text-align:center;font-size:22px;letter-spacing:8px;padding:8px;background:#0a0f1c;border:1px solid #2a3552;border-radius:8px;color:#fff">' +
+    '<div style="display:flex;gap:8px;margin-top:12px"><button id="pair-go" style="flex:1;padding:8px;background:#c9a227;border:0;border-radius:8px;font-weight:700">配对</button><button id="pair-cancel" style="padding:8px 12px;background:#1a2338;border:1px solid #2a3552;border-radius:8px;color:#9fb0d0">取消</button></div>' +
+    '<p id="pair-err" style="color:#ff8080;font-size:12px;min-height:16px;margin:8px 0 0"></p></div>';
+  document.body.appendChild(wrap);
+  const done = () => location.reload();
+  wrap.querySelector('#pair-cancel').addEventListener('click', () => wrap.remove());
+  const go = async () => {
+    const code = wrap.querySelector('#pair-code').value.trim();
+    try {
+      const r = await fetch('/api/auth/pair', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+      if (r.ok) return done();
+      const j = await r.json().catch(() => ({}));
+      wrap.querySelector('#pair-err').textContent = j.error || '配对失败';
+    } catch (e) { wrap.querySelector('#pair-err').textContent = e.message; }
+  };
+  wrap.querySelector('#pair-go').addEventListener('click', go);
+  wrap.querySelector('#pair-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  wrap.querySelector('#pair-code').focus();
 }
 
 // ---------------- 设置页 ----------------
@@ -65,6 +100,18 @@ async function initSetup() {
   renderPaceSelect(cfg.pace);
   if (cfg.hasKey) $('#cfg-key').placeholder = `已保存（${cfg.apiKeyMasked}），留空则不修改`;
   renderKeyChannels(cfg);
+
+  // LAN 模式下，本机设置页展示当前配对码（整改 SEC-01：手机等设备要用它配对）
+  api('GET', '/api/auth/pairing').then((p) => {
+    if (!p || !p.needed || !p.code) return;
+    const card = document.querySelector('#cfg-key') && document.querySelector('#cfg-key').closest('div');
+    const tip = document.createElement('p');
+    tip.className = 'hint';
+    tip.style.color = '#e8c56a';
+    tip.textContent = `🌐 局域网配对码：${p.code}（${Math.ceil((p.expiresInMs || 0) / 1000)}s 内有效；手机打开本页会要求输入它）`;
+    if (card && card.parentElement) card.parentElement.insertBefore(tip, card.nextSibling);
+    else document.body.insertBefore(tip, document.body.firstChild);
+  }).catch(() => {});
 
   state.setup.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
   state.setup.mySeat = savedSeatChoice(); // 恢复上次的座位偏好（含 'random'），默认随机

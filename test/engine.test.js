@@ -1685,11 +1685,15 @@ test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接�
     assert.strictEqual(rres.code, 200, `resume 应成功：${rres.body}`);
     assert.ok(JSON.parse(rres.body).resumed);
     assert.ok(api.games.has('resume-api-test'));
-    // 恢复的对局用默认 stepPauseMs（夜晚停顿 2s），mock 速度可能未跑完 → 主动终止并等停顿周期走完
+    // 恢复的对局用默认 stepPauseMs（夜晚停顿 2s），mock 速度可能未跑完 → 主动终止并等停顿周期走完。
+    // 整改 REL-04 后恢复局按当前配置可能走并行路径，固定睡眠会偶发不够 → 轮询等待结算。
     await new Promise((r) => setTimeout(r, 150));
     const live = api.games.get('resume-api-test');
     if (live && !live.game.finished) live.game.terminate('测试收尾');
-    await new Promise((r) => setTimeout(r, 2600));
+    const deadline = Date.now() + 6000;
+    while (!api.games.get('resume-api-test').game.finished && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
     assert.ok(api.games.get('resume-api-test').game.finished, '恢复对局应已结算');
   } finally {
     fs.rmSync(saveFile, { force: true });
