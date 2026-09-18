@@ -47,6 +47,7 @@ const { ALL: NAME_POOL } = require('./names');
 const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require('./config');
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
+const { AuthManager, isTrustedOrigin } = require('./auth');
 
 /** 调度器的 Key 池快照（"实际可用并发数"的唯一可信来源，见 /api/config 的 pool 字段） */
 function poolSnapshot() {
@@ -102,6 +103,9 @@ class Api {
     const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
+    // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
+    // server.js 绑定非回环地址（WW_LAN=1 / WW_HOST）时调用 auth.setEnabled(true) 启用门禁。
+    this.auth = new AuthManager({ logger });
     // 定时持久化进行中的对局
     this._saveTimer = setInterval(() => this.saveActive(), 4000);
     this._saveTimer.unref && this._saveTimer.unref();
@@ -337,9 +341,56 @@ class Api {
   }
 
   // ---------- 路由 ----------
+  /**
+   * 管理会话门禁（SEC-01 权限矩阵）：配置读写、测试/探测、创建对局、列全部对局、
+   * 取一局全部令牌、统计。单局玩家/上帝令牌通道不受此矩阵约束——令牌随请求体/查询串
+   * 随行，攻击者无从伪造，天然免疫 CSRF；Capacitor 壳（origin=https://localhost）也因此不受影响。
+   */
+  _denyManagement(res) {
+    this.json(res, 401, { error: '需要管理会话（局域网访问请先配对）', auth: 'pairing' });
+    return false;
+  }
+
+  /** 认证相关端点。返回 null 表示不是认证路由，继续走业务路由 */
+  _authEndpoints(req, res, pathname) {
+    const method = req.method;
+    if (pathname === '/api/auth/pairing' && method === 'GET') {
+      // 本机管理会话：给出可展示的配对码（给局域网设备输入用）；
+      // 远端未配对：只告知"需要配对"，绝不回显配对码。
+      if (this.auth.isManagement(req)) {
+        try { this.auth.newPairingCode(); } catch (_) { /* 节流窗口内沿用当前有效码 */ }
+        const cur = this.auth.currentCode();
+        return this.json(res, 200, { needed: this.auth.enabled, code: cur ? cur.code : null, expiresInMs: cur ? cur.expiresInMs : null });
+      }
+      return this.json(res, 200, { needed: this.auth.enabled, code: null });
+    }
+    if (pathname === '/api/auth/pair' && method === 'POST') {
+      if (!isTrustedOrigin(req)) return this.json(res, 403, { error: 'Origin 不受信任' });
+      return this.readBody(req).then((body) => {
+        try {
+          const sid = this.auth.pair(body.code);
+          res.setHeader('Set-Cookie', this.auth.sessionCookie(sid));
+          return this.json(res, 200, { ok: true });
+        } catch (e) {
+          return this.json(res, 403, { error: e.message, auth: 'pairing' });
+        }
+      });
+    }
+    if (pathname === '/api/auth/unpair' && method === 'POST') {
+      if (!isTrustedOrigin(req)) return this.json(res, 403, { error: 'Origin 不受信任' });
+      this.auth.revoke(this.auth.sessionIdFrom(req));
+      res.setHeader('Set-Cookie', 'ww_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0');
+      return this.json(res, 200, { ok: true });
+    }
+    return null;
+  }
+
   async handle(req, res, pathname, query) {
     const method = req.method;
     try {
+      const authRoute = this._authEndpoints(req, res, pathname);
+      if (authRoute !== null) return authRoute;
+      const mgmt = this.auth.isManagement(req);
       if (pathname === '/api/meta' && method === 'GET') return this.json(res, 200, {
         roles: ROLES,
         boards: BOARDS,
@@ -354,6 +405,7 @@ class Api {
       });
 
       if (pathname === '/api/config' && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
         const c = this.config.get();
         // 直接下发全部配置项（只摘掉密钥），而不是手工维护一份白名单。
         // 白名单曾经漏掉 keepAlive：设置页把它读成 undefined → 复选框永远显示"已勾选"，
@@ -377,6 +429,7 @@ class Api {
         });
       }
       if (pathname === '/api/config' && method === 'PUT') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const body = await this.readBody(req);
         const saved = this.config.save(body);
         // 通道数变了要对所有在跑的调度器生效：llm.js 每次调用都会校对，这里只记一条日志便于自查
@@ -393,6 +446,7 @@ class Api {
         });
       }
       if (pathname === '/api/config/test' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const c = this.config.get();
         if (!c.apiKey) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
         const r = await testConnection(c, this.logger);
@@ -404,6 +458,7 @@ class Api {
        * 主动探一次能直接把起始值放对。代价是每档 n 个 max_tokens=8 的极短请求 —— 必须由用户点击触发。
        */
       if (pathname === '/api/config/probe' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const c = this.config.get();
         const keys = parseApiKeys(c);
         if (!keys.length) return this.json(res, 400, { ok: false, error: '请先填写 API Key' });
@@ -422,9 +477,18 @@ class Api {
       }
 
       const gameMatch = pathname.match(/^\/api\/games\/([^/]+)(\/.*)?$/);
-      if (pathname === '/api/games' && method === 'POST') return this.createGame(res, await this.readBody(req));
-      if (pathname === '/api/games' && method === 'GET') return this.listSaves(res);
-      if (pathname === '/api/stats' && method === 'GET') return this.stats(res);
+      if (pathname === '/api/games' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        return this.createGame(res, await this.readBody(req));
+      }
+      if (pathname === '/api/games' && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
+        return this.listSaves(res);
+      }
+      if (pathname === '/api/stats' && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
+        return this.stats(res);
+      }
       if (gameMatch) {
         const id = gameMatch[1];
         const sub = gameMatch[2] || '';
@@ -447,7 +511,11 @@ class Api {
         if (sub === '/terminate' && method === 'POST') return this.terminateGame(res, entry, await this.readBody(req));
         if (sub === '/view' && method === 'GET') return this.view(res, entry, query);
         if (sub === '/stream' && method === 'GET') return this.stream(req, res, entry, query);
-        if (sub === '/tokens' && method === 'GET') return this.tokens(res, entry);
+        if (sub === '/tokens' && method === 'GET') {
+          // 整改 SEC-01：一局的完整令牌（玩家+上帝）属于管理信息，不允许仅凭"知道 gameId"获取
+          if (!mgmt) return this._denyManagement(res);
+          return this.tokens(res, entry);
+        }
         if (sub === '/action' && method === 'POST') return this.action(res, entry, await this.readBody(req));
         if (sub === '/review' && method === 'POST') return this.startReview(res, entry, await this.readBody(req));
         if (sub === '/review' && method === 'GET') return this.getReview(res, entry, query);
