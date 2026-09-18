@@ -484,6 +484,8 @@ class Game {
       id: data.id, board: data.board, rules: data.rules, players: playersMeta,
       agentFactory: opts.agentFactory || null, logger: opts.logger, stepPauseMs: opts.stepPauseMs,
       seed: data.seed, // 恢复种子：提示词校验码由 id+seed 派生，必须与原局一致
+      // 整改 REL-04：并发执行策略是"当前服务器配置"而非存档固有属性，读档时由调用方注入
+      parallelLlm: !!opts.parallelLlm,
     });
     g.promptNonce = data.promptNonce || null;
     g.players.forEach((p, i) => { if (data.players[i]) Object.assign(p, data.players[i]); });

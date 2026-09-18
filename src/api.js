@@ -239,7 +239,8 @@ class Api {
    * 服务重启续跑与配额暂停恢复共用这一条路径——两者都只是"锚点从磁盘来"还是"从内存来"的区别。
    */
   _rebuildFromAnchor({ id, anchor, mock, tokens, logger, agentFactory, review = null }) {
-    const game = Game.fromJSON(anchor, { agentFactory, logger });
+    // 整改 REL-04：读档/恢复按当前服务配置决定 LLM 并发语义（可并行时夜晚/投票才扇出）
+    const game = Game.fromJSON(anchor, { agentFactory, logger, parallelLlm: canFanOut(this.config.get()) });
     for (const [seat, st] of Object.entries(anchor.agentStates || {})) {
       game.restoreAgentState(Number(seat), st);
     }
