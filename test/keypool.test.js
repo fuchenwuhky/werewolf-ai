@@ -286,8 +286,10 @@ test('狼队投刀：先收完所有票再公布（人类狼与 AI 狼的信息�
 test('局终经验：多通道时各 AI 并行复盘，但经验池仍按顺序串行入库', async () => {
   const { Api } = require('../src/api');
   const added = [];
+  // keyBinding 必须按服务端同一算法计算（baseUrl|apiKey|apiKeys 的 SHA-256）
+  const kb = require('crypto').createHash('sha256').update('§k§').digest('hex');
   const api = new Api({
-    config: { get: () => ({ apiKey: 'k', journal: false }), save() {} },
+    config: { get: () => ({ apiKey: 'k', journal: false, keyBinding: kb }), save() {} },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
   });
   // Api 构造时会自建经验池（要落盘），测试里换成内存假实现 —— 只验证调用时序

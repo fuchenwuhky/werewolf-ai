@@ -19,6 +19,11 @@ const zlib = require('zlib');
 const ROOT = path.join(__dirname, '..');
 /** APK 内服务端文件的存放前缀（Capacitor 把 app/www 放进 assets/public） */
 const APK_PREFIX = 'assets/public/nodejs/';
+// 审核 P2-5：图标是发布资产的一部分（PWA/主屏/书签），只查存在会放过"包里是旧图标"
+const CONTENT_BINARIES = new Set([
+  'web/assets/icon.svg', 'web/assets/icon-512.png', 'web/assets/icon-192.png',
+  'web/assets/icon-maskable-512.png', 'web/assets/apple-touch-icon.png',
+]);
 
 /** 读出版本号（与电脑版打包脚本同一来源，保证两边一致） */
 function readVersion() {
@@ -93,6 +98,15 @@ function compareTree(label, map, problems) {
   for (const rel of sourceFiles()) {
     const packed = map.get(rel);
     if (packed === undefined) { problems.push(`${label}: 包里缺少 ${rel}`); continue; }
+    // 审核 P2-5：图标资产按哈希比对内容 —— 只查存在会放过"包里是整改前的旧图标"
+    if (CONTENT_BINARIES.has(rel)) {
+      const crypto = require('crypto');
+      const srcHash = crypto.createHash('sha256').update(fs.readFileSync(path.join(ROOT, rel))).digest('hex');
+      const pkgHash = crypto.createHash('sha256').update(packed).digest('hex');
+      if (srcHash !== pkgHash) problems.push(`${label}: ${rel} 与当前源码不一致（图标是旧版本）`);
+      else checked++;
+      continue;
+    }
     if (!TEXT_EXT.has(path.extname(rel))) { binary++; continue; }
     const src = fs.readFileSync(path.join(ROOT, rel));
     if (norm(packed.toString('utf8')) !== norm(src.toString('utf8'))) {

@@ -63,6 +63,8 @@ function showPairingGate() {
 }
 
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// 整改（审核 P1-3）：不可信内容专用 textContent 创建器 —— 结算弹层的复盘文本靠它
+const elText = (tag, cls, text) => { const d = document.createElement(tag); if (cls) d.className = cls; if (text != null) d.textContent = String(text); return d; };
 const roleInfo = (rid) => state.meta.roles[rid];
 // 安全（整改 SEC-02）：昵称是用户可控输入，seatLabel 的返回值只用于 innerHTML 模板，源头转义
 const seatLabel = (seat) => { const raw = state.seatNames[seat] || ''; const n = escapeHtml(raw); return `${seat}号${n && n !== `${seat}号` ? ' ' + n : ''}`; };

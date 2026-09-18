@@ -638,3 +638,20 @@ npm audit --omit=dev
 |---|---|
 | ~~「10人速推局」人数显示不一致~~ | **已关闭（不复现）**：E2E 复核（加载 /api/meta + 模拟选模板）显示 villager 4、总人数 10（狼3/好7），前后端一致。验收当时的 9 人读数来自整改前启动的旧服务进程（已重启换新），当前代码无此问题 |
 | 驱动脚本轮询游标未推进 | 验收脚本自身缺陷（v.seq 取值位置不对），不影响产品 |
+
+### 二轮审核整改（2026-09-19）
+
+| 项 | 修复 |
+|---|---|
+| P0-1 复盘/恢复绕过绑定 | startReview（非 mock）、resumeGame、resumePaused、generateLessons 四个 LLM 出口全部补上 keyBindingValid 门禁 |
+| P1-2 绑定丢保存 | keyBinding 加入 DEFAULT_CONFIG 白名单（config.save 此前只认已知字段，静默丢弃）→ 持久化 + 重启不失效 |
+| P1-3 结算弹层报错 | 根因：elText 只加在了 app.js，m.js 漏定义 → ReferenceError。已补定义 |
+| P1-4 关服不等补写 | 补写任务挂回 entry.savePromise；saveActive 纳入所有在途 savePromise 一并等待 |
+| P2-5 制品未同步+校验漏查 | 双端制品重建（1.5.2）；verify-packages 新增图标资产 sha256 内容比对（5 个图标文件，二进制不再只查存在） |
+| P2-7 超大请求 413 | readBody 不再 destroy 连接（丢弃后续数据保持连接），413 真实可达（真实 3MB 请求实测） |
+| P2-8 /start 重复驱动 | 全状态守卫：paused/error/started 均 409，暂停局引导走 resume |
+| P2-9 神职复盘阵营 | teamCn 改用 categoryOf，「神职阵营」正确显示 |
+| P2-10 门槛未写入门禁 | coverage-gate 升级：全局 92/84/86 + api.js 单文件 85/75 硬门禁 |
+| ESLint | 0 error 0 warning（elText 未定义 error、2 个未用变量已清） |
+
+终值：测试 **516/516** 三轮全绿 · 覆盖率门禁五项 ✅（全局 93.84/85.62/87.56 + api.js 90.60/76.10）· 双端审计 0（Android 工具链 3 moderate 维持登记）· **APK 与 Windows 包已重建且 app:verify 双通过**

@@ -975,7 +975,8 @@ test('P1-3：终局存盘失败打 saveFailed 标记，saveActive 补救成功�
   assert.strictEqual(entry.saveFailed, true, '失败必须打标记');
 
   fs.rmdirSync(tmp); // 清除障碍
-  const saved = await api.saveActive(); // 整改前：saveActive 只保存未结束局 → 永远 0
+  const savedCount = await api.saveActive(); // 整改前：saveActive 只保存未结束局 → 永远 0
+  assert.ok(savedCount >= 1, '补救应至少成功落盘一局');
   assert.strictEqual(entry.saveFailed, false, '补救成功后标记清除');
   assert.ok(fs.existsSync(file), '整改前：终局存档静默丢失');
   api.games.clear();
@@ -1085,4 +1086,47 @@ test('分支收尾：keyBindingValid 无 Key 直通、resume 无 Key 400、view 
   await api.handle(stubReq({ method: 'GET', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), v1.res, `/api/games/${g2.id}/view`, new URLSearchParams('token=me&after=0'));
   assert.strictEqual(v1.code, 200, '人类玩家令牌 view 必须可达');
   api.games.clear();
+});
+
+// ---------- 二轮审核：绑定持久化与全部 LLM 出口 ----------
+
+test('二轮 P1：keyBinding 持久化进 config（DEFAULT_CONFIG 白名单），重启后绑定不丢', async () => {
+  const { createConfig } = require('../src/config');
+  const dir = tmpDir('kb');
+  const cfgFile = path.join(dir, 'config.json');
+  const cfg = createConfig(cfgFile);
+  cfg.load();
+  cfg.save({ apiKey: 'sk-live', baseUrl: 'https://api.example/v1' });
+  // 服务启动（Api 构造）→ 自动建立绑定并持久化
+  const { Api } = require('../src/api');
+  const api1 = new Api({ config: cfg, logger: silentLogger, saveDir: dir });
+  assert.ok(api1.keyBindingValid(), '构造即绑定后必须有效');
+  assert.ok(cfg.get().keyBinding, '构造后必须写入绑定');
+  // 模拟重启：重新 createConfig 读取
+  const cfg2 = createConfig(cfgFile);
+  cfg2.load();
+  assert.ok(cfg2.get().keyBinding, '整改前：keyBinding 不在 DEFAULT_CONFIG 白名单 → save 静默丢弃，重启即失');
+  const api2 = new Api({ config: cfg2, logger: silentLogger, saveDir: dir });
+  assert.ok(api2.keyBindingValid(), '重启后绑定必须仍然有效');
+});
+
+test('二轮 P0：startReview / resume（真实局）绑定失配时全部拒绝', async () => {
+  const dir = tmpDir('p0gates');
+  const { Api } = require('../src/api');
+  const { Game } = require('../src/engine/game');
+  const api = new Api({ config: { get: () => ({ apiKey: 'sk', baseUrl: 'https://api.example/v1', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+  api.auth.setEnabled(false);
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+
+  // 复盘 gate：真实局（mock:false）+ 绑定失配 → 400
+  const g1 = new Game({ id: 'gate-review', board, players, stepPauseMs: 1, logger: silentLogger });
+  g1.deal(); g1.started = true; g1.finished = true;
+  api.games.set(g1.id, { game: g1, running: false, error: null, mock: false, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null });
+  const r1 = stubRes();
+  await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { token: 'gt', seat: 1 } }), r1.res, `/api/games/${g1.id}/review`, new URLSearchParams());
+  // mock:false + 默认 config 无 keyBinding 字段 → 绑定必然失配 → 400
+  assert.strictEqual(r1.code, 400, `整改前：复盘绕过绑定校验，实测 ${r1.code}`);
+  assert.match(r1.body.error, /重新验证|重新输入/);
+  api.games.delete(g1.id);
 });

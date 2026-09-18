@@ -253,7 +253,12 @@ class Api {
       return false; // 保持脏状态：savedStamp 未推进，下一轮周期保存会自动重试
     } finally {
       entry.saving = false;
-      if (entry.pendingSave) { entry.pendingSave = false; this.saveGame(entry).catch(() => {}); }
+      if (entry.pendingSave) {
+        entry.pendingSave = false;
+        // 审核 P1-4：补写任务必须挂回 savePromise —— 否则优雅退出等不到它，最终快照丢失
+        const retry = this.saveGame(entry).catch(() => false);
+        entry.savePromise = retry;
+      }
     }
     return true;
     })();
@@ -367,6 +372,10 @@ class Api {
     if (doc.game && doc.game.finished) return this.json(res, 409, { error: '对局已结束' });
     const useMock = !!doc.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key，无法恢复真实 AI 对局' });
+    // 审核 P0-1：恢复真实局会继续产生 LLM 调用，绑定失配必须拒绝
+    if (!useMock && !this.keyBindingValid()) {
+      return this.json(res, 400, { error: '接口地址或密钥已变更但未重新验证：请在设置中重新保存 API Key', auth: 'rekey' });
+    }
     const logger = makeGameLogger(this.logger, id);
     if (typeof logger.openGameLog === 'function') logger.openGameLog(id); // 服务重启后按局日志流需重新打开
     const newEntry = this._rebuildFromAnchor({
@@ -392,6 +401,10 @@ class Api {
       return this.json(res, 403, { error: 'token 无效' });
     }
     if (!game.paused) return this.json(res, 409, { error: '对局未处于暂停状态' });
+    // 审核 P0-1：恢复真实局会继续产生 LLM 调用，绑定失配必须拒绝
+    if (!entry.mock && !this.keyBindingValid()) {
+      return this.json(res, 400, { error: '接口地址或密钥已变更但未重新验证：请在设置中重新保存 API Key', auth: 'rekey' });
+    }
     const anchor = game._anchor;
     if (!anchor) return this.json(res, 409, { error: '没有可恢复的锚点（对局尚未到过白天/夜晚边界）' });
     const logger = makeGameLogger(this.logger, id); // 进程未重启，按局日志流仍在
@@ -419,6 +432,10 @@ class Api {
           return false;
         }));
       }
+    }
+    // 审核 P1-4：把各局在途/补写中的 savePromise 也纳入等待
+    for (const entry of this.games.values()) {
+      if (entry.savePromise) jobs.push(entry.savePromise.then(() => true).catch(() => false));
     }
     const results = await Promise.all(jobs);
     return results.filter(Boolean).length;
@@ -534,8 +551,6 @@ class Api {
         // 整改 §1.4（防凭证外带）：换 baseUrl 却沿用旧 Key → 标记"密钥未对新地址验证"，
         // /config/test 与 /probe 会拒绝发凭证，直到用户重新输入 Key。否则一个已配对的
         // 局域网设备就能把机主的 Key 静默送到任意服务器。
-        const prev = this.config.get();
-        const baseUrlChanged = body.baseUrl && body.baseUrl !== prev.baseUrl;
         const keySupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== '';
         const keysChanged = Array.isArray(body.apiKeys);
         const saved = this.config.save(body);
@@ -756,6 +771,10 @@ class Api {
    */
   async generateLessons(entry) {
     if (!this.experience || !entry.game.finished || !entry.game.started) return;
+    if (!entry.mock && !this.keyBindingValid()) {
+      this.logger.warn('api', `跳过局后经验提炼：${entry.game.id} 密钥绑定失配（改地址未重输 Key）`);
+      return;
+    }
     const { game } = entry;
     const agents = [...game._agents.values()].filter((a) => typeof a.generateLessons === 'function');
     if (!agents.length) return;
@@ -976,6 +995,10 @@ class Api {
     const viewer = this.viewerOf(entry, body.token);
     if (viewer == null) return this.json(res, 403, { error: 'token 无效' });
     const game = entry.game;
+    // 审核 P0-1：AI 复盘是 LLM 出口，绑定失配（改地址未重输 Key）必须拒绝
+    if (!entry.mock && !this.keyBindingValid()) {
+      return this.json(res, 400, { error: '接口地址或密钥已变更但未重新验证：请在设置中重新保存 API Key', auth: 'rekey' });
+    }
     if (!game.finished) return this.json(res, 409, { error: '对局还没结束，打完了再来点评' });
     // 显式指定座位时先校验：报"座位 99 不存在"比笼统说"没有人类玩家座位"有用得多
     const requested = body.seat === undefined || body.seat === null ? null : Number(body.seat);
