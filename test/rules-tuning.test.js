@@ -90,3 +90,49 @@ test('平局：game_over 文案渲染为"平局"，不再显示成狼人/好人�
   assert.match(line, /平局/, `实际渲染：${line}`);
   assert.ok(!/狼人阵营获胜|好人阵营获胜/.test(line), `平局不该渲染成某方获胜：${line}`);
 });
+
+test('对局层僵局护栏（整局级）：全场无人出局时判平局，而不是无限打下去', async () => {
+  // 为什么需要这条：纯函数测试测不到"接线"——在主循环哪个位置比较存活人数、结算分支有没有真的 break。
+  // 护栏失效的表现形式恰好是"对局卡死"，所以必须有一条真正跑完 runGame 的测试守住它。
+  const { Game } = require('../src/engine/game');
+  const { runGame } = require('../src/engine/flow');
+  const silent = { debug() {}, info() {}, warn() {}, error() {} };
+  global.fetch = async (url) => { throw new Error(`测试禁止真实网络请求：${url}`); };
+
+  // 一个"谁都别死"的脚本化智能体：狼队空刀、女巫不用药、全员弃票、自爆/开枪/决斗一律否。
+  // 载荷形状对齐 src/ai/schemas.js（放逐与 PK 投票的 allowNone 为 true → target:0 是合法弃票）。
+  const peacefulFactory = (player, game) => ({
+    async decide(req) {
+      const others = game.aliveSeats().filter((s) => s !== player.seat);
+      const first = others.length ? others[0] : 0;
+      switch (req.task) {
+        case 'speech': case 'sheriff_speech': case 'pk_speech':
+          return { text: '过。', explode: false, target: 0, withdraw: false, claims: [] };
+        case 'wolf_chat': return { text: '过。', target: 0 };
+        case 'wolf_propose': case 'wolf_say': case 'lastwords': return { text: '过。' };
+        case 'wolf_kill': case 'vote': case 'pk_vote': case 'sheriff_vote': case 'badge_pass': case 'shoot':
+          return { target: 0 };
+        case 'witch': return { antidote: false, poison: 0 };
+        case 'sheriff_run': return { run: false };
+        case 'direction': return { direction: 'cw' };
+        case 'duel_check': return { duel: false, target: first };
+        case 'explode_check': return { explode: false, target: first };
+        case 'seer_check': case 'night_guard': case 'night_dream': case 'crow_curse':
+        case 'wolfbeauty_charm': case 'admirer_crush':
+          return { target: first };
+        default: return { text: '过。', target: 0 };
+      }
+    },
+  });
+
+  const board = { wolf: 2, seer: 1, witch: 1, villager: 3 };
+  const players = Array.from({ length: 7 }, (_, i) => ({ name: `P${i + 1}` }));
+  const g = new Game({ id: 'stale-guard', board, players, agentFactory: peacefulFactory, stepPauseMs: 0, logger: silent });
+  await runGame(g);
+
+  assert.strictEqual(g.aliveSeats().length, 7, '这一局的前提是"没人出局"');
+  assert.ok(g.finished, '对局必须结束（护栏失效就会无限打下去）');
+  assert.strictEqual(g.winner, 'draw', `无人出局必须判平局，实际 ${g.winner}`);
+  assert.match(g.winReason, /无人出局/, `结算原因要写清是僵局护栏：${g.winReason}`);
+  assert.ok(g.day <= STALE_DAYS + 1, `应在 ${STALE_DAYS} 天左右结算，实际打到第 ${g.day} 天`);
+});
