@@ -27,6 +27,21 @@
     e.preventDefault();
     e.stopPropagation();
   }, true);
+  // 卡背图回退（原为内联 onload/onerror，CSP 收紧后并入本脚本；整改阶段 2.2）：
+  //   · 图加载成功 → 隐藏文字提示；· 加载失败 → 移除 img 只留文字。
+  //   .complete 分支处理"脚本执行时缓存图已加载完"的情况（事件不会再触发）。
+  function bindCardBackFallback(img) {
+    const settle = () => {
+      const txt = img.nextElementSibling;
+      if (img.complete && img.naturalWidth > 0) { if (txt) txt.style.display = 'none'; }
+    };
+    img.addEventListener('load', settle);
+    img.addEventListener('error', () => img.remove());
+    settle();
+  }
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.cb-img').forEach(bindCardBackFallback);
+  });
 })();
 </script>
 
@@ -393,7 +408,7 @@
   <div class="flip-wrap">
     <div class="flip-card" id="flip-card">
       <div class="flip-inner">
-        <div class="flip-back"><img class="cb-img" src="assets/roles/card_back.png" alt="" onload="this.nextElementSibling.style.display='none'" onerror="this.remove()"><span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span></div>
+        <div class="flip-back"><img class="cb-img" src="assets/roles/card_back.png" alt=""><span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span></div>
         <div class="flip-front" id="flip-front"></div>
       </div>
     </div>

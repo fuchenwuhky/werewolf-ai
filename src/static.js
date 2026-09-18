@@ -54,6 +54,24 @@ function looksLikeAsset(pathname) {
  * @param {string} pathname URL 路径（已解码）
  * @param {object} opts { webDir }
  */
+// HTML 文档的安全响应头（整改阶段 2.2）。
+// script-src 用"内联守卫脚本"的 sha256 哈希白名单（两端的初始化守卫），不用 unsafe-inline；
+// style-src 暂需 unsafe-inline：界面大量使用 style 属性做昼夜/位置渲染 —— 已登记为迁移债务。
+const HTML_SECURITY_HEADERS = {
+  'Content-Security-Policy': [
+    "default-src 'self'",
+    "script-src 'self' 'sha256-I43HymuDTCZT8ZYOm44OS9WzPkl7623/8xAv+p6wsOE=' 'sha256-wkqcyVTYd8Z8BWcuwv3o1BcjRMpIuKgop6GIZOedqJ4='",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+  ].join('; '),
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'X-Frame-Options': 'DENY',
+};
+
 function serveStatic(req, res, pathname, opts) {
   const webDir = opts.webDir;
   const file = pathname === '/' ? '/index.html' : pathname;
@@ -78,19 +96,21 @@ function serveStatic(req, res, pathname, opts) {
       const index = path.join(webDir, 'index.html');
       return fs.readFile(index, (e2, d2) => {
         if (e2) { res.writeHead(404); return res.end('not found'); }
-        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache' });
+        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ...HTML_SECURITY_HEADERS });
         res.end(d2);
       });
     }
     const etag = etagOf(stat);
     if (req.headers['if-none-match'] === etag) { res.writeHead(304); return res.end(); }
     const ext = path.extname(target);
-    res.writeHead(200, {
+    const headers = {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Cache-Control': cacheControlFor(ext, path.basename(target)),
       ETag: etag,
       'X-Content-Type-Options': 'nosniff', // 防止把 HTML 当脚本执行
-    });
+    };
+    if (ext === '.html') Object.assign(headers, HTML_SECURITY_HEADERS); // CSP 只约束文档
+    res.writeHead(200, headers);
     fs.readFile(target, (e3, data) => {
       if (e3) { res.writeHead(404); return res.end('not found'); }
       res.end(data);

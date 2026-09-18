@@ -103,6 +103,7 @@ class Api {
     const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
+    this._cleanupStaleTmp();
     // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
     // server.js 绑定非回环地址（WW_LAN=1 / WW_HOST）时调用 auth.setEnabled(true) 启用门禁。
     this.auth = new AuthManager({ logger });
@@ -116,6 +117,19 @@ class Api {
   }
 
   // ---------- 工具 ----------
+  /**
+   * 启动时清理残留的 *.json.tmp（整改阶段 3.3 崩溃一致性）。
+   * 写入是"临时文件 + rename"，进程在任何时刻被杀，tmp 都只是半截数据——
+   * 正式存档（rename 后）永远是完整份，所以 tmp 可以安全删除，绝不覆盖有效存档。
+   */
+  _cleanupStaleTmp() {
+    try {
+      const stale = fs.readdirSync(this.saveDir).filter((f) => f.endsWith('.json.tmp'));
+      for (const f of stale) fs.rmSync(path.join(this.saveDir, f), { force: true });
+      if (stale.length) this.logger.info('api', `清理残留临时存档 ${stale.length} 个（${stale.map((f) => f.replace('.json.tmp', '')).join('、')}）`);
+    } catch (_) { /* 目录不可读等：不影响启动 */ }
+  }
+
   json(res, code, data) {
     const body = JSON.stringify(data);
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -171,6 +185,7 @@ class Api {
     try {
       // 令牌一并存档：本地单机应用，浏览器丢失会话时可从存档恢复对局
       doc = JSON.stringify({
+        schemaVersion: 2, // 整改阶段 3.2：v1 = 无版本号（兼容读取）；新增字段一律向后兼容
         tokens: entry.tokens,
         mock: !!entry.mock,
         game: this._saveMeta(game),

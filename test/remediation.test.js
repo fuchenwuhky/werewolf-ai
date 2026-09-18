@@ -424,3 +424,40 @@ test('UX-01：移动端复盘 GET 必须携带令牌，轮询收尾不得只读�
   assert.match(seg, /status === 'done'|review\.status === 'done'/, '必须轮询到 done 才收尾（POST 受理 ≠ 生成完成）');
   assert.match(seg, /reviewBusy/, '必须有防连点守卫');
 });
+
+// ---------- 阶段 2.2：HTML 文档安全响应头（CSP 等） ----------
+
+test('CSP：HTML 响应带 Content-Security-Policy（内联守卫脚本哈希白名单）与 Referrer-Policy', async () => {
+  const { serveStatic } = require('../src/static');
+  const WEB = path.join(__dirname, '..', 'web');
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    serveStatic(req, res, decodeURIComponent(u.pathname), { webDir: WEB });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const home = await fetch(`${base}/`);
+    assert.strictEqual(home.status, 200);
+    const csp = home.headers.get('content-security-policy');
+    assert.ok(csp, '必须下发 CSP');
+    assert.match(csp, /default-src 'self'/);
+    assert.match(csp, /script-src 'self' 'sha256-/, '内联守卫脚本必须走哈希白名单而非 unsafe-inline');
+    assert.doesNotMatch(csp, /script-src[^;]*unsafe-inline/, 'script-src 不得出现 unsafe-inline');
+    assert.match(csp, /frame-ancestors 'none'/);
+    assert.strictEqual(home.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+    // SPA 兜底路由同样要有 CSP
+    const spa = await fetch(`${base}/some-route`);
+    assert.ok(spa.headers.get('content-security-policy'), 'SPA 兜底返回的 HTML 也要带 CSP');
+  } finally { server.close(); }
+});
+
+test('CSP：index.html 的内联脚本哈希与 static.js 白名单一致（改脚本必须同步改 CSP）', () => {
+  const crypto = require('crypto');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
+  const inline = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const hash = 'sha256-' + crypto.createHash('sha256').update(inline).digest('base64');
+  const st = fs.readFileSync(path.join(__dirname, '..', 'src', 'static.js'), 'utf8');
+  assert.ok(st.includes(hash), 'index.html 内联脚本哈希必须在 static.js 的 CSP 白名单里');
+  assert.ok(!/onload="|onerror="/.test(html), 'HTML 不得再出现内联事件属性（CSP 会静默拦截）');
+});
