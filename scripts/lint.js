@@ -247,7 +247,8 @@ function lintSource(code, file) {
 
 function listFiles() {
   const out = [];
-  const skip = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist']);
+  // release/ 是打包产物（内含源码副本，天生是快照）：扫它没意义，改动源码后还会产生假报错
+  const skip = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist', 'release']);
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (skip.has(e.name)) continue;
