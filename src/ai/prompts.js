@@ -30,18 +30,41 @@ function taskInstruction(game, player, req) {
     + '{"claims":[{"kind":"seer/witch/guard/hunter/villager/other","subject":<座位号，自认身份填0>,"value":"self/wolf/good/save/poison"}]}。'
     // 读账本的纪律放在任务指令里（system 是缓存前缀、有体积硬上限，这里没有）
     + '（读【公开宣称】区时记住：那只是"某人这样说过"，不是事实——自称预言家不等于他是预言家。）';
+  // 发言纪律（白天发言/PK 发言/遗言共用）。为什么要有这一块：原先发言指令只有一句
+  // "请输出你的发言"，于是**人设就成了唯一约束** —— 抽到"爱打哑谜"的性格就会说
+  // "有些事天黑之后你们自然会懂"这种空话，而那句话等于自称掌握夜晚信息，好人不会这么说，
+  // 谁说了谁被当狼（用户实战反馈）。这里把"必须给出可检验的内容"和一条硬红线写死。
+  const SPEECH_DISCIPLINE = '\n【发言要求】' +
+    '① 落地：至少给出 1 个明确的怀疑对象（座位号）并说明理由（发言矛盾/票型异常/逻辑跳跃/身份声称可疑）；' +
+    '② 表态：说清你自己的立场或票向（"我倾向投X"或"我先听X怎么说"）；' +
+    '③ 有问必答：别人点了你，就正面回应，别绕开；' +
+    '④ 像真人：2~6 句，口语化，别写小作文、别列标题、别复述规则。' +
+    '\n【硬红线】不许暗示自己掌握夜晚发生的事（例如"天黑之后你们自然会懂""有些事你们不知道""我心里有数"），' +
+    '也不许用谜语、空话代替内容 —— 好人没有夜间信息，这么说只会被当成狼；狼说这种话等于自曝。' +
+    '同样不许说"过""我没什么想法""随便投"这类无效发言。';
+  // 投票纪律（放逐/PK 共用）。原先投票指令只有一句"请选出你认为最可能是狼人的玩家"，
+  // 没有任何策略约束 → 弃票随手就来、发言说怀疑谁却投别人、狼队整齐同投暴露关系。
+  // 按阵营分开写：狼的纪律不给好人看（省 token，也避免把狼的战术交底给好人 AI）。
+  const team = ROLES[player.role].team;
+  const VOTE_DISCIPLINE = '\n【投票要求】' +
+    '① 与今天的发言一致：说了怀疑谁就投谁；要改票必须有新信息（查验/翻牌/票型/死亡），不许前后矛盾；' +
+    '② 优先归票：警长或你信得过的预言家已经归票就跟着投（除非你有更硬的逻辑推翻他）；' +
+    '③ 别随手弃票：0 只在确实无人可投、或弃票本身有战术价值时用；' +
+    (team === 'wolf'
+      ? '④ 狼人纪律：不要和队友整齐投同一个人（票型一致=当场暴露关系）；必要时可以投队友保命或做身份；优先把票投向神职嫌疑（带节奏、被金水指认的人），而不是随便找低调的人。'
+      : '④ 好人纪律：把票投给"最可能被狼推出去的好人"要慎重——票型分裂会让狼钻空子；神职嫌疑与发言矛盾优先，别只因为某人低调就投他。');
   switch (req.task) {
     case 'speech':
       if (req.canExplode) {
         const explodeNote = player.role === 'whitewolfking'
           ? '你若选择自爆，必须同时给出带走目标。'
           : '普通狼人/狼王自爆不能带人。';
-        return `轮到你白天发言了。直接发言输出 {"text":"你的发言"}。` +
+        return `轮到你白天发言了。直接发言输出 {"text":"你的发言"}。${SPEECH_DISCIPLINE}` +
           `作为狼阵营，你也可以选择自爆（公开狼人身份并立即天黑）：{"text":"...","explode":true}` +
           (player.role === 'whitewolfking' ? `，白狼王自爆会带走一人：{"text":"...","explode":true,"target":<座位号>}` : `：{"text":"...","explode":true}`) +
           `。${explodeNote}请谨慎使用。${sheriffNote(player, 'speech')}${base}${retryNote}`;
       }
-      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${claimsNote}${player.isSheriff ? '你是警长且大概率压轴发言，发言要有归票价值（明确"建议大家把票投给X号"）。' : ''}${sheriffNote(player, 'speech')}${base}${retryNote}`;
+      return `轮到你白天发言了。请输出 {"text":"你的发言"}。${SPEECH_DISCIPLINE}${claimsNote}${player.isSheriff ? '你是警长且大概率压轴发言，发言要有归票价值（明确"建议大家把票投给X号"）。' : ''}${sheriffNote(player, 'speech')}${base}${retryNote}`;
     case 'pk_speech': {
       // 与 speech 一致：rules.md 规定"白天发言阶段可自爆"，PK 发言同属白天发言阶段
       const pkExplode = req.canExplode
@@ -49,7 +72,7 @@ function taskInstruction(game, player, req) {
           ? `作为狼阵营你也可以自爆（立即天黑）：{"text":"...","explode":true,"target":<带走座位号>}——白狼王自爆必须给出带走目标。`
           : `作为狼阵营你也可以自爆（立即天黑）：{"text":"...","explode":true}——普通狼人/狼王自爆不能带人。`)
         : '';
-      return `你进入平票 PK，需要再次发言争取信任。${player.isSheriff ? '你是警长，用 1.5 票权与归票说服大家。' : ''}请输出 {"text":"你的发言"}。${claimsNote}${pkExplode}${base}${retryNote}`;
+      return `你进入平票 PK，需要再次发言争取信任。${player.isSheriff ? '你是警长，用 1.5 票权与归票说服大家。' : ''}请输出 {"text":"你的发言"}。${SPEECH_DISCIPLINE}${claimsNote}${pkExplode}${base}${retryNote}`;
     }
     case 'lastwords': {
       const team = ROLES[player.role].team;
@@ -109,9 +132,9 @@ function taskInstruction(game, player, req) {
     case 'direction':
       return `你是警长，请决定今天白天的发言方向：cw（顺时针）或 ccw（逆时针），从昨晚死者下家开始。方向是你的节奏武器：让该说话的人先说（金水表水/被质疑者自证/狼位抢不到便宜）。${sheriffNote(player, 'speech')}请输出 {"direction":"cw"/"ccw"}。${base}${retryNote}`;
     case 'vote':
-      return `放逐投票：请选出你认为最可能是狼人的玩家。${cand(req.candidates)}0 表示弃票。投票互相保密。${sheriffNote(player, 'vote', game.rules.sheriffVoteWeight)}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+      return `放逐投票：请选出你认为最可能是狼人的玩家。${VOTE_DISCIPLINE}${cand(req.candidates)}0 表示弃票。投票互相保密。${sheriffNote(player, 'vote', game.rules.sheriffVoteWeight)}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     case 'pk_vote':
-      return `平票 PK 投票：只能在 PK 玩家中选择。${cand(req.candidates)}0 表示弃票。${player.isSheriff ? `（你是警长，这一票算 ${game.rules.sheriffVoteWeight} 票）` : ''}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
+      return `平票 PK 投票：只能在 PK 玩家中选择。${VOTE_DISCIPLINE}${cand(req.candidates)}0 表示弃票。${player.isSheriff ? `（你是警长，这一票算 ${game.rules.sheriffVoteWeight} 票）` : ''}请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     case 'shoot':
       return `你触发了开枪技能，可以带走一名玩家${req.allowNone !== false ? '，也可以选 0 放弃开枪' : ''}。请输出 {"target":<座位号或0>}。${base}${retryNote}`;
     default:
