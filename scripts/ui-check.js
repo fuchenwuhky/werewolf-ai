@@ -819,6 +819,14 @@ class Browser {
       check('手机端对局内设置：显示本局信息（对局/进度/存活/身份）', setPanel.rows.length >= 3 && /第 \d+ 天/.test(setPanel.rows.join(' ')), JSON.stringify(setPanel.rows));
       check('手机端对局内设置：入口可用（≥5 个控件）', setPanel.controls >= 5, `控件=${setPanel.controls}`);
       check('手机端对局内设置：说明为何局中改不了并给出回首页改的真路', /开局时/.test(setPanel.hint) && setPanel.home, `home=${setPanel.home} hint="${setPanel.hint.slice(0, 24)}"`);
+      // 真机反馈"点开只有一条线"：弹层高度曾完全靠 flex 推导，父级 auto 高度时可能算成 0。
+      // 这里量真实高度，塌了就红。
+      const setH = await b.eval(`(() => { const m = document.querySelector('#m-modal .modal'); return m ? Math.round(m.getBoundingClientRect().height) : -1; })()`);
+      // 这条断言就是靠上面那份诊断抓到的：弹层曾因为多套一层 .modal 而塌成 2px（"一条线"）。
+      // 教训：只断言"文字在 DOM 里"不够 —— 文字在、盒子 2px 高，玩家什么都看不到。
+      check('手机端对局内设置：弹层有实际高度（不是塌成一条线）', setH >= 200, `高度=${setH}px`);
+      const setKids = await b.eval(`document.querySelectorAll('#m-modal .modal .modal').length`);
+      check('手机端弹层：不得出现 .modal 套 .modal', setKids === 0, `嵌套层数=${setKids}`);
       await b.shot(path.join(SHOTS, '13b-mobile-gear-settings.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
       // 结算后总结（用户反馈"手机端结束后什么都没有"）：终止本局 → 自动弹总结 → 逐项核对。
@@ -840,6 +848,8 @@ class Browser {
       check('手机端总结：给出结果/天数/身份/评分等本局信息', sum.rows.length >= 4, JSON.stringify(sum.rows.slice(0, 6)));
       check('手机端总结：含终局真相与 AI 复盘入口', sum.truth && sum.review, `真相=${sum.truth} 复盘框=${sum.review}`);
       check('手机端总结：呈现"AI 越玩越强"（跨局经验池）', sum.exp, sum.text.slice(0, 90));
+      const sumH = await b.eval(`(() => { const m = document.querySelector('#m-modal .modal'); return m ? Math.round(m.getBoundingClientRect().height) : -1; })()`);
+      check('手机端总结：弹层有实际高度（不是塌成一条线）', sumH >= 200, `高度=${sumH}px`);
       await b.shot(path.join(SHOTS, '13c-mobile-summary.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
       await b.setViewport(1280, 900, false);

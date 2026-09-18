@@ -92,7 +92,10 @@ function openGear() {
   } else {
     rows.push(['🏠 返回首页', () => { localStorage.removeItem('mww_current'); location.reload(); }]);
   }
-  const wrap = el('div', 'modal');
+  // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
+  // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
+  // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
+  const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const box = el('div', 'gear-list');
   rows.forEach(([label, fn]) => {
@@ -111,7 +114,10 @@ function openGear() {
 }
 
 function askTerminate() {
-  const wrap = el('div', 'modal');
+  // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
+  // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
+  // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
+  const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '⏹ 结束本局'));
   wrap.appendChild(el('p', null, '结束后本局不可恢复，将直接结算并公开所有身份。确定要结束吗？'));
   const row = el('div', 'btnrow');
@@ -135,7 +141,10 @@ function askTerminate() {
 function openSettingsModal() {
   const v = state.view;
   const inGame = !!(state.game && state.game.gameId);
-  const wrap = el('div', 'modal');
+  // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
+  // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
+  // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
+  const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const body = el('div', 'mbody');
 
@@ -210,7 +219,10 @@ async function openSummarySheet() {
   const me = v.me || {};
   const score = v.score || null;
   const mine = score && me.seat ? score.rows.find((r) => r.seat === me.seat) : null;
-  const wrap = el('div', 'modal');
+  // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
+  // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
+  // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
+  const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '📊 本局总结'));
   const body = el('div', 'mbody');
 
@@ -761,7 +773,7 @@ function applyView(v) {
     if (e.type === 'night_step') { state.nightQueue = state.nightQueue || []; state.nightQueue.push(e); continue; }
     if (e.type === 'phase') {
       state.nightOpen = /夜/.test((e.data && e.data.title) || '');
-      if (!state.nightOpen) clearNightWaitM(); // 天亮了 → 收掉"等待其他玩家行动中"
+      if (!state.nightOpen) { clearNightWaitM(); flushNightBroadcastM(); } // 天亮 → 收等待提示，并把没播完的补上
     }
     const node = renderEventNode(e);
     if (node) $('#m-flow').appendChild(node);
@@ -780,8 +792,10 @@ function applyView(v) {
   maybeShowRole(v);
 }
 
-/** 夜晚播报播放器（手机端）：与桌面端同一套节奏，只是等待提示挂在自己的节点上 */
-const NIGHT_BROADCAST_GAP_M = 1100;
+/** 夜晚播报播放器（手机端）：与桌面端同一套节奏，只是等待提示挂在自己的节点上。
+ *  间隔 12 秒：用户要求 10~30 秒之间并让总播报时长**短于**夜里真实行动时长
+ *  （6~8 步 × 12 秒 ≈ 72~96 秒，而真实一夜通常 2~5 分钟），所以选 12 秒。 */
+const NIGHT_BROADCAST_GAP_M = 12000;
 
 function clearNightWaitM() {
   const w = document.getElementById('m-night-wait');
@@ -795,6 +809,20 @@ function showNightWaitM() {
   const flow = document.getElementById('m-flow');
   if (!flow) return;
   flow.appendChild(node);
+  scrollFlow(false);
+}
+
+/** 天亮时把还没播完的夜间播报立刻补齐（与桌面端同一套保险逻辑） */
+function flushNightBroadcastM() {
+  if (!state.nightQueue || !state.nightQueue.length) return;
+  const flow = document.getElementById('m-flow');
+  for (const e of state.nightQueue) {
+    state.lastNightStep = e.data;
+    const node = renderEventNode(e);
+    if (node && flow) flow.appendChild(node);
+  }
+  state.nightQueue = [];
+  clearNightWaitM();
   scrollFlow(false);
 }
 

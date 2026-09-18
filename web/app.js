@@ -1229,7 +1229,11 @@ function roleChipHtml(rid) {
  * src/engine/flow.js 的 nightPhase），这里按固定间隔一条一条播，节奏与真实行动耗时无关。
  * 队列播完而夜晚还没结束（天没亮）→ 显示"等待其他玩家行动中"。
  */
-const NIGHT_BROADCAST_GAP = 1100; // 每条播报之间的象征性间隔
+// 夜间播报的间隔：用户实测反馈"播报太快了"，要求落在 10~30 秒之间并让**总播报时长不超过夜里
+// 的实际行动时长**。默认板子一夜 6~8 步，12 秒/步 ≈ 72~96 秒；而一次真实的夜晚要跑 6~8 次
+// 模型调用（实测整局约 28 分钟、单夜常在 2~5 分钟），所以 12 秒既够"一条条来"的仪式感，
+// 又几乎不会播到天亮还没播完。要更慢就改这一个数。
+const NIGHT_BROADCAST_GAP = 12000;
 
 function clearNightWait() {
   const w = $('#night-wait');
@@ -1274,6 +1278,25 @@ window.__nightInfo = () => ({
   rendered: document.querySelectorAll('#stream .msg.event').length,
 });
 
+/**
+ * 天亮时把还没播完的夜间播报立刻补齐。
+ * 间隔改成 12 秒后，理论上存在"天亮了播报还没播完"的可能（真实夜晚通常 2~5 分钟，
+ * 而 6~8 步 × 12 秒 ≈ 72~96 秒，所以极少触发）；一旦触发就立刻补完，
+ * 宁可让补的几条排在"天亮"横幅之后，也不让夜间信息漏播或阴魂不散地一条条冒到白天。
+ */
+function flushNightBroadcast() {
+  if (!state.nightQueue || !state.nightQueue.length) return;
+  const stream = $('#stream');
+  for (const e of state.nightQueue) {
+    state.lastNightStep = e.data;
+    const node = renderEventNode(e);
+    if (node) stream.appendChild(node);
+  }
+  state.nightQueue = [];
+  clearNightWait();
+  autoScroll();
+}
+
 function appendEvents(events) {
   const stream = $('#stream');
   for (const e of events) {
@@ -1307,7 +1330,7 @@ function renderEventNode(e) {
       const night = (d.title || '').includes('夜');
       // nightOpen 决定"夜晚播报播完后要不要显示等待其他玩家行动中"（天一亮就该收掉）
       state.nightOpen = night;
-      if (!night) clearNightWait();
+      if (!night) { clearNightWait(); flushNightBroadcast(); }
       state.voteTally = {}; // 进入新阶段：上一轮的票数不再有意义（否则桌角会挂着过期的票）
       if (state.lastView) updateSeats(state.lastView);
       return el('div', `banner ${night ? 'night' : ''}`, d.title || '');

@@ -337,6 +337,17 @@ html, body { height: 100%; overscroll-behavior: none; }
   display: flex; align-items: center; justify-content: center; padding: var(--sp-4);
 }
 #m-modal .modal { max-height: 82vh; }
+/* 手机弹层加固（真机反馈：对局里的"设置"和"本局总结"点开只有一条线）。
+   原先弹层高度完全靠 .modal{display:flex; flex-direction:column} + .mbody{flex:1 1 auto; min-height:0}
+   这条链推导：flex:1 1 auto 是"撑满父级"，而父级高度是 auto —— 一旦推导失败就是 0 高，
+   屏幕上只剩标题那条边（"一条线"）。这里改成**按内容排 + 给最小高度**，让它结构上塌不了。 */
+#m-modal .modal .mbody {
+  flex: 0 1 auto; min-height: 96px; max-height: 62vh;
+  overflow-y: auto; -webkit-overflow-scrolling: touch;
+}
+#m-modal .modal > h3 { flex: none; }
+#m-modal .modal > .btnrow { flex: none; }
+#m-modal .modal .setinfo, #m-modal .modal .gear-list { flex: none; }
 
 /* 身份翻牌遮罩 */
 .m-flip {
