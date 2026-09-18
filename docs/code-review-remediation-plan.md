@@ -538,3 +538,46 @@ npm audit --omit=dev
 | 文档与回滚方案 | 待验收 |  |  |
 
 所有 P0、P1 行必须有证据并签字；P2 项如延期，必须在发布说明中列出明确的责任人与完成日期。
+
+---
+
+## 10. 施工记录（2026-09-18 第一批）
+
+### 已完成并验证
+
+| 项 | 提交 | 证据 |
+|---|---|---|
+| REL-01 畸形 URL 击穿进程 | 4a61931 | `test/remediation.test.js`：`/%`→400 且服务存活；UA 跳转回归 |
+| VAL-01 错误码语义 | 4a61931 | 413/400/500 映射用例 |
+| REL-02 running 不复位 | ebce443 | Mock 局驱动到终局 → running=false、可 TTL 回收、finished 拒绝重开 |
+| REL-03 存盘失败不重试 | ebce443 | tmp 目录障碍注入 → 失败不盖戳 → 障碍清除后重试真正落盘 |
+| SEC-01 局域网裸奔 | 24f9fac | resolveListenHost 默认回环；AuthManager 配对生命周期（过期/锁定/一次性/吊销）；路由集成：LAN 门禁 401→配对→200，单局令牌通道不受影响 |
+| SEC-02 DOM XSS | e876ad1 | seatLabel 源头转义 + system/game_over 透传转义；静态汇点审计 + escapeHtml 行为级验证 |
+| LOGIC-01 动态阵营 | 56b77cc | factionOf；链狼/链神/链民 × 胜负/评分/复盘/经验总结矩阵（计划 §4.2） |
+| REL-04 读档并发语义 | ed98ece | fromJSON 注入 parallelLlm，true/false 双向断言 |
+| UX-01 移动端复盘 | 6bdde56 | GET 带令牌 + 轮询 done/error + 防连点（静态断言） |
+| SEC-03 Electron 来源 | 95d5bfd | URL origin 精确比较、sandbox、权限全拒（构建冒烟通过） |
+| 阶段 3.2 优雅退出 | 95d5bfd | saveActive 返回 Promise；SIGINT/SIGTERM 先落盘（4s 总闸） |
+| 阶段 3.3/2.2 | f794609 前批次 | schemaVersion:2、残留 tmp 清理、CSP（守卫脚本 sha256 白名单）+ Referrer-Policy + X-Frame-Options |
+| DEP-01 桌面端告警 | 0d164ed | electron 33→44.4.2、builder 25→26.15.3；`npm audit` 0 漏洞；portable exe 构建冒烟通过 |
+| DEP-02 Capacitor 告警 | 见"剩余风险" | 3 moderate 均在构建工具链（uuid），修复需 Capacitor 跨大版本升级+重打 APK |
+| MAINT-01 版本分散 | 见"剩余风险" | 未动 |
+
+### 门槛结果（2026-09-18）
+
+- lint：125 文件全部通过
+- test：491/491 通过（基线 473 + 新增 18）
+- coverage 门禁：行 92.31% / 分支 84.51% / 函数 86.50%（阈值 88/80/78）
+- 根项目 `npm audit --omit=dev`：0 漏洞
+- 桌面端 `npm audit`：0 漏洞（升级后）
+- 推送范围：4a61931…0d164ed（main）
+
+### 剩余风险与延期项
+
+| 项 | 等级 | 处置 |
+|---|---|---|
+| Capacitor 工具链 3 个 moderate（uuid GHSA-w5hq-g745-h8pq） | P2 | 接受并登记：仅构建工具链、非运行时依赖；修复需 Capacitor 跨大版本升级并重打 APK。复核日期：下次 APK 发版前 |
+| api.js 分文件覆盖率（门槛 85%/75%） | P1 | 全局门禁通过；分文件明细待单独核对（本轮已补认证/存盘/生命周期用例） |
+| style-src 'unsafe-inline' | P2 | 迁移债务：界面大量 style 属性，收起需改造渲染层 |
+| 阶段 8 人工验收清单（8 场景） | P1 | 需人工/真机执行；本批已完成对应的自动化部分 |
+| Android 构建冒烟 | P1 | 未执行（需 Android SDK 环境） |
