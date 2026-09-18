@@ -275,7 +275,11 @@ function renderSetupDigest() {
   const pace = paceSel && paceSel.selectedOptions[0] ? paceSel.selectedOptions[0].textContent : '';
   const paceTxt = pace ? pace.replace(/（.*$/, '') : '';
   const mock = $('#use-mock') && $('#use-mock').checked;
-  const cleanBoard = escapeHtml(String(boardName || T('digest.unknownBoard')).replace(/^[^\u4e00-\u9fa5A-Za-z]*/, '').slice(0, 16));
+    // 整改：开头的「12人」剥干净（人数已单列「12 人局」），否则留下孤字「人」读不通。
+  const cleanBoard = escapeHtml(String(boardName || T('digest.unknownBoard'))
+    .replace(/^[0-9]+\s*人*/, '')
+    .replace(/^[\s·—\-]+/, '')
+    .slice(0, 16));
   const facts = [
     `<li>${T('digest.board')} <b>${cleanBoard}</b></li>`,
     `<li><b>${T('digest.players', { n: total })}</b> · ${T('digest.wolves', { w: wolves })} / ${T('digest.good', { g: total - wolves })}</li>`,
