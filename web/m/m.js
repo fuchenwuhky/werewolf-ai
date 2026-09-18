@@ -192,6 +192,120 @@ function toggleLang() {
   flash(next === 'en' ? 'Language: English' : '界面语言：中文');
 }
 
+/**
+ * 本局总结（手机端）。
+ *
+ * 为什么要有：桌面端一直有复盘面板（评分/MVP/终局真相），手机端结算后只有一句
+ * "本局已结算"——用户反馈"手机端好像缺功能，至少结束后总结没有"。
+ *
+ * 数据全部来自服务端视图，不猜：v.score 是 computeScores(game) 的结果（api.js 在对局
+ * 结束后才放进视图），终局身份在 finished 之后对所有座位可见。
+ * 「AI 越玩越强」也首次在这里露出来：经验池取自 /api/stats 的 experiences，
+ * 它由对局结束后的逐座位反思写入（api.js 的 experience.add），
+ * 下一局开局时按角色注入 system 提示词（src/ai/experience.js）。
+ */
+async function openSummarySheet() {
+  const v = state.view;
+  if (!v) return;
+  const me = v.me || {};
+  const score = v.score || null;
+  const mine = score && me.seat ? score.rows.find((r) => r.seat === me.seat) : null;
+  const wrap = el('div', 'modal');
+  wrap.appendChild(el('h3', 'mtitle', '📊 本局总结'));
+  const body = el('div', 'mbody');
+
+  const result = v.winner === 'good' ? '🎉 好人阵营获胜'
+    : v.winner === 'wolf' ? '🐺 狼人阵营获胜'
+      : v.winner === 'draw' ? '🤝 平局（未分胜负）' : '⏹ 对局终止';
+  const rname = (rid) => (roleInfo(rid) || {}).name || rid;
+  body.appendChild(el('div', 'setinfo', [
+    `<div class="set-row"><span>结果</span><b>${escapeHtml(result)}</b></div>`,
+    `<div class="set-row"><span>天数</span><b>第 ${v.day || 0} 天</b></div>`,
+    mine ? `<div class="set-row"><span>我的身份</span><b>${escapeHtml(`${me.seat}号 ${rname(mine.role)}`)}${mine.alive ? '（存活）' : '（已出局）'}</b></div>` : '',
+    mine ? `<div class="set-row"><span>我的评分</span><b>${mine.score} 分</b></div>` : '',
+  ].join('')));
+  if (v.winReason) body.appendChild(el('p', 'hint', escapeHtml(v.winReason)));
+
+  // 得分构成：让分数看得懂（否则只是一个孤零零的数字）
+  if (mine && (mine.details || []).length) {
+    body.appendChild(el('h4', null, '我的得分构成'));
+    const list = el('div', 'gear-list');
+    for (const d of mine.details) {
+      const pts = d.points != null ? d.points : d.score;
+      list.appendChild(el('div', 'set-row', `<span>${escapeHtml(d.label || d.reason || '')}</span><b>${pts != null ? `${pts} 分` : ''}</b></div>`));
+    }
+    body.appendChild(list);
+  }
+
+  // 全员评分（含 MVP）：与桌面复盘面板同源，按分数降序
+  if (score && (score.rows || []).length) {
+    if (score.title) body.appendChild(el('p', 'hint', escapeHtml(score.title)));
+    body.appendChild(el('h4', null, '评分排行'));
+    const rank = el('div', 'gear-list');
+    for (const r of score.rows) {
+      const flag = me.seat === r.seat ? '（我）' : '';
+      rank.appendChild(el('div', 'set-row', `<span>${r.seat}号 ${escapeHtml(rname(r.role))}${flag}</span><b>${r.score} 分</b></div>`));
+    }
+    body.appendChild(rank);
+  }
+
+  // 终局真相：对局结束后所有身份都可见，逐座位列出（复盘的基本盘）
+  const truth = (v.players || []).map((p) => `${p.seat}号 ${p.role ? rname(p.role) : '未知'}`).join(' · ');
+  if (truth) {
+    body.appendChild(el('h4', null, '终局真相'));
+    body.appendChild(el('p', 'hint', escapeHtml(truth)));
+  }
+
+  // AI 复盘文本（桌面端若已生成过就直接显示；否则按需生成 —— 会花一次模型调用，所以不自动跑）
+  const rev = el('p', 'hint', (v.review && v.review.text) || '');
+  rev.id = 'm-review-box';
+  body.appendChild(rev);
+  wrap.appendChild(body);
+  const row = el('div', 'btnrow');
+  const coach = el('button', 'btn', '🧠 生成 AI 复盘');
+  coach.addEventListener('click', () => requestReview());
+  row.appendChild(coach);
+  const close = el('button', 'btn', '关闭');
+  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  row.appendChild(close);
+  wrap.appendChild(row);
+  openModal(wrap);
+  body.appendChild(el('p', 'hint', '正在读取跨局经验池…'));
+  const tail = body.lastChild;
+
+  // 「AI 越玩越强」：经验池不是画饼——它在服务端真实存在且每局注入（见文件头注释）
+  try {
+    const st = await api('GET', '/api/stats');
+    const exp = (st && st.experiences) || {};
+    const entries = Object.entries(exp).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+    const total = entries.reduce((s, [, n]) => s + n, 0);
+    tail.innerHTML = total
+      ? `🧠 AI 越玩越强：跨局经验池已有 <b>${total}</b> 条教训（${entries.slice(0, 6).map(([rid, n]) => `${escapeHtml(rname(rid))} ${n}`).join(' · ')}）——下一局开局时会按角色注入对应 AI 的提示词。`
+      : '🧠 AI 越玩越强：跨局经验池还是空的。完成几局（非 Mock）之后，各 AI 会把复盘教训沉淀进来，下一局开局时注入。';
+  } catch (_) {
+    tail.textContent = '';
+  }
+}
+
+/**
+ * 请求/查看 AI 复盘（手机端）：与桌面端同一个接口（POST /api/games/:id/review）。
+ * 会花一次模型调用，所以做成显式按钮而不是自动触发。
+ */
+async function requestReview() {
+  const v = state.view;
+  if (!v || !state.game) return;
+  const box = document.getElementById('m-review-box');
+  if (box) box.textContent = '⏳ 正在生成复盘…';
+  try {
+    await api('POST', `/api/games/${state.game.gameId}/review`, { token: state.game.playerToken, seat: v.me ? v.me.seat : 0 });
+    const r = await api('GET', `/api/games/${state.game.gameId}/review`);
+    const text = (r && r.review && r.review.text) || '';
+    if (box) box.textContent = text || '复盘生成失败：模型没有返回内容。';
+  } catch (e) {
+    if (box) box.textContent = `复盘生成失败：${e.message}`;
+  }
+}
+
 /** 点身份牌：已经发过牌就直接亮正面，否则走翻牌浮层 */
 function showMyCard() {
   if (!state.view || !state.view.me || !state.view.me.role) return;
@@ -1197,10 +1311,16 @@ function updateActionbar(v) {
     keys.dataset.task = sig; dlg.dataset.task = sig;
     keys.innerHTML = ''; dlg.innerHTML = '';
     dlg.appendChild(el('div', 'idle', v.finished
-      ? '本局已结算 —— 左上角 ⚙ 里可以查看规则书或退出。'
+      ? '本局已结算 —— 看总结，或从左上角 ⚙ 里查看规则书与退出。'
       : '现在轮不到你操作。轮到你会在这里出现输入框或技能键。'));
     if (v.finished) {
-      keys.appendChild(keyEl('🏠 回到首页', 'on', () => { localStorage.removeItem('mww_current'); location.reload(); }));
+      keys.appendChild(keyEl('📊 查看本局总结', 'on', () => openSummarySheet()));
+      keys.appendChild(keyEl('🏠 回到首页', '', () => { localStorage.removeItem('mww_current'); location.reload(); }));
+      // 结算后自动弹一次总结（用户反馈"手机端结束后什么都没有"）；只弹一次，关掉不再打扰
+      if (state.summaryShownFor !== state.game.gameId) {
+        state.summaryShownFor = state.game.gameId;
+        setTimeout(() => openSummarySheet(), 600);
+      }
       return;
     }
     mountExplodeBtn(v, keys);
