@@ -455,7 +455,8 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 分页模式：整屏不再滚动 —— 每页正好一屏，翻页代替滑动（见 codex.js 的 renderPaged） */
 #m-codex.cdx-paged { overflow: hidden; display: flex; flex-direction: column; }
 /* padding-top 是给"本局 ×N"角标留的位置：它挂在卡框外上方 6px，overflow:hidden 会把第一排的角标切掉 */
-#m-codex.cdx-paged .cdx-grid { flex: 1 1 auto; min-height: 0; overflow: hidden; padding-top: 8px; }
+/* 纵向允许少量滚动：每页固定至少 4 张（见 codex.js 的 computeCap），2 行放不下时不该被裁掉 */
+#m-codex.cdx-paged .cdx-grid { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding-top: 8px; }
 #m-codex.cdx-paged .cdx-cards { align-content: start; }
 .cdx-pager {
   flex: none; display: flex; align-items: center; gap: var(--sp-2);

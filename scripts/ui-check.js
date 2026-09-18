@@ -454,6 +454,16 @@ class Browser {
     check('手机版图鉴：独立成屏并渲染牌面', mc.shown.includes('m-codex') && mc.cards > 0 && mc.art === mc.cards, JSON.stringify({ shown: mc.shown, cards: mc.cards, art: mc.art }));
     check('手机版图鉴：一页只放一个阵营', mc.factions.length > 0 && new Set(mc.factions).size === 1, JSON.stringify(mc.factions));
     check('手机版图鉴：每页不超容量、整本可按页翻完', mc.sizes.every((n) => n <= mc.cap) && mc.total >= 4, JSON.stringify({ cap: mc.cap, sizes: mc.sizes, total: mc.total }));
+    check('手机版图鉴：一页至少 4 张牌', mc.cap >= 4, `cap=${mc.cap}`);
+    // 矮屏回归（用户实测机型）：旧实现按 2:3 卡框高度算容量，矮屏上只够 1 行 → 一页 2 张，翻一次只翻两张。
+    await b.setViewport(390, 700, true);
+    await b.eval(`window.dispatchEvent(new Event('resize'))`);
+    await sleep(320); // 容量重算有 180ms 防抖
+    const shortCap = await b.eval(`(window.Codex && window.Codex.pageInfo) ? window.Codex.pageInfo().cap : -1`);
+    check('手机版图鉴：矮屏（390×700）每页仍至少 4 张', shortCap >= 4, `cap=${shortCap}`);
+    await b.setViewport(390, 844, true);
+    await b.eval(`window.dispatchEvent(new Event('resize'))`);
+    await sleep(320);
     check('手机版图鉴：页码条显示阵营与进度', /阵营|第三方/.test(mc.title) && /页/.test(mc.meta) && mc.prevDisabled === true, `${mc.title} / ${mc.meta}`);
     check('手机版图鉴：小屏不放右侧细节栏（走弹层）', mc.detail === false);
     await b.shot(path.join(SHOTS, '06b-mobile-codex.png'));

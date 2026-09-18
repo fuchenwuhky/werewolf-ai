@@ -124,7 +124,10 @@ window.Codex = (function () {
     const cardW = Math.max(80, (w - gap * (cols - 1)) / cols);
     const cardH = cardW * 1.5; // 卡框是 2:3
     const rows = Math.max(1, Math.floor((avail + gap) / (cardH + gap)));
-    return Math.max(2, rows * cols);
+    // 下限 4 张/页：实测在 390×760 的手机上，2:3 卡框高度会让"按高度算"的容量掉到 1 行 = 2 张/页，
+    // 于是翻页变成"一次翻两张"，用户明确要求"一页放 4 个角色"。这里给下限，
+    // 放不下时由 m.css 允许这一页少量纵向滚动（宁可轻微滚动，也不要一次只翻两张）。
+    return Math.max(4, rows * cols);
   }
 
   /** 分组 → 切页：每个阵营从新的一页开始，装满就续到下一页；返回 [{sec, ids}] */
