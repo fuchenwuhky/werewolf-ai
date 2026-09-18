@@ -1263,6 +1263,17 @@ async function playNightBroadcast() {
   if (state.nightOpen) showNightWait();
 }
 
+/**
+ * 只读调试钩子（与现成的 window.__f5 同类）：给 ui-check 断言"播报是逐条播的、
+ * 不是一次全出来"用。故意只读 —— 测试不许通过它改状态。
+ */
+window.__nightInfo = () => ({
+  queue: (state.nightQueue || []).length,
+  playing: !!state.nightPlaying,
+  open: !!state.nightOpen,
+  rendered: document.querySelectorAll('#stream .msg.event').length,
+});
+
 function appendEvents(events) {
   const stream = $('#stream');
   for (const e of events) {

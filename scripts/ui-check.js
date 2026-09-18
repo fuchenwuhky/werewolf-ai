@@ -710,6 +710,11 @@ class Browser {
         const domTask = await b.eval(`document.getElementById('action-controls')?.dataset.task || ''`);
         // 注意：app.js 会把候选座位一并写进 dataset（形如 wolf_kill[2,3,5,...]），所以用前缀判断
         check('夜里的投刀面板已渲染', !!(pending && pending.task === 'wolf_kill' && domTask.startsWith('wolf_kill')), `pending=${pending && pending.task} dom=${domTask}`);
+        // 夜晚播报节奏：服务端把整夜步骤**一次性**发来（播报与行动解耦），客户端必须逐条播。
+        // 旧版直接渲染 → 并发后几条同时冒出来（用户反馈的"播报变奇怪"）。此刻整夜播报还在播
+        // （每步 1.1s），所以 playing/queue 必然为真；若哪天又变成"一次全出"，这里会红。
+        const ni = await b.eval(`window.__nightInfo ? window.__nightInfo() : null`);
+        check('夜晚播报：正在逐条播放（不是一次全出）', !!ni && (ni.playing || ni.queue > 0), JSON.stringify(ni));
         if (pending && pending.task === 'wolf_kill' && domTask.startsWith('wolf_kill')) {
           // 通用定位提交按钮：面板里的非选座按钮、文案含"投/确认/提交/确定"、且未禁用。
           // （第一版我按文案"投刀"硬找，狼队投票面板的按钮其实叫别的名字 → 找不到 → 静默没点。）
@@ -816,7 +821,27 @@ class Browser {
       check('手机端对局内设置：说明为何局中改不了并给出回首页改的真路', /开局时/.test(setPanel.hint) && setPanel.home, `home=${setPanel.home} hint="${setPanel.hint.slice(0, 24)}"`);
       await b.shot(path.join(SHOTS, '13b-mobile-gear-settings.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
+      // 结算后总结（用户反馈"手机端结束后什么都没有"）：终止本局 → 自动弹总结 → 逐项核对。
       await api('POST', `/api/games/${g4.gameId}/terminate`, { token: g4.playerToken });
+      await sleep(2200); // 自动弹出有 600ms 延迟，弹出后还要拉一次 /api/stats
+      const sum = await b.eval(`(() => {
+        const m = document.getElementById('m-modal');
+        const txt = (m && m.textContent) || '';
+        return {
+          title: ((m || {}).querySelector ? (m.querySelector('.mtitle') || {}).textContent : '') || '',
+          rows: [...((m || {}).querySelectorAll ? m.querySelectorAll('.set-row') : [])].map((r) => r.textContent.trim()),
+          truth: /终局真相/.test(txt),
+          exp: /跨局经验池/.test(txt),
+          review: !!document.querySelector('#m-review-box'),
+          text: txt.slice(0, 160),
+        };
+      })()`);
+      check('手机端结算后自动弹出本局总结', /本局总结/.test(sum.title), `标题="${sum.title}"`);
+      check('手机端总结：给出结果/天数/身份/评分等本局信息', sum.rows.length >= 4, JSON.stringify(sum.rows.slice(0, 6)));
+      check('手机端总结：含终局真相与 AI 复盘入口', sum.truth && sum.review, `真相=${sum.truth} 复盘框=${sum.review}`);
+      check('手机端总结：呈现"AI 越玩越强"（跨局经验池）', sum.exp, sum.text.slice(0, 90));
+      await b.shot(path.join(SHOTS, '13c-mobile-summary.png'));
+      await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
       await b.setViewport(1280, 900, false);
     }
 
