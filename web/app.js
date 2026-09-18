@@ -1110,8 +1110,11 @@ function updateMemoryChip(v) {
 }
 
 function seatLabel(seat) {
-  const name = state.seatNames[seat] || '';
-  // 默认昵称就是"N号"时避免重复显示
+  const raw = state.seatNames[seat] || '';
+  // 默认昵称就是"N号"时避免重复显示。
+  // 安全（整改 SEC-02）：昵称是用户可控输入，seatLabel 的返回值只用于 innerHTML 模板，
+  // 必须在源头转义，否则一个 <img onerror=...> 昵称就是持久化 DOM XSS。
+  const name = escapeHtml(raw);
   return `${seat}号${name && name !== `${seat}号` ? ' ' + name : ''}`;
 }
 
@@ -1340,7 +1343,8 @@ function renderEventNode(e) {
       return el('div', 'msg event', `🕯 第${d.index}/${d.total}步 · ${icons[d.step] || ''} ${escapeHtml(d.label)}`);
     }
     case 'system':
-      return d.title ? el('div', 'sysline', `【${d.title}】${e.text}`) : el('div', 'sysline', e.text || d.text || '');
+      // 安全（SEC-02）：system 事件文本可能透传服务端消息，一律按文本转义
+      return d.title ? el('div', 'sysline', `【${escapeHtml(d.title)}】${escapeHtml(e.text || '')}`) : el('div', 'sysline', escapeHtml(e.text || d.text || ''));
     case 'deaths': {
       const deaths = d.deaths || [];
       const rules = state.view && state.view.rules;
@@ -1389,7 +1393,7 @@ function renderEventNode(e) {
       return el('div', 'sysline', `${seatLabel(d.by)}（警长）决定从 ${d.startSeat}号 开始${d.direction === 'cw' ? '顺时针' : '逆时针'}发言`);
     case 'game_over': {
       if (d.winner === 'none') {
-        const b = el('div', 'banner', `⏹ ${d.reason || '对局已终止'}`);
+        const b = el('div', 'banner', `⏹ ${escapeHtml(d.reason || '对局已终止')}`);
         b.style.fontSize = '15px';
         return b;
       }

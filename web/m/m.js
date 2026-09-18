@@ -28,7 +28,8 @@ async function api(method, url, body) {
 }
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const roleInfo = (rid) => state.meta.roles[rid];
-const seatLabel = (seat) => { const n = state.seatNames[seat] || ''; return `${seat}号${n && n !== `${seat}号` ? ' ' + n : ''}`; };
+// 安全（整改 SEC-02）：昵称是用户可控输入，seatLabel 的返回值只用于 innerHTML 模板，源头转义
+const seatLabel = (seat) => { const raw = state.seatNames[seat] || ''; const n = escapeHtml(raw); return `${seat}号${n && n !== `${seat}号` ? ' ' + n : ''}`; };
 const isMine = (e) => state.view && state.view.me && e.actor === state.view.me.seat;
 
 // ---------------- 屏1：板子选择 ----------------
@@ -945,7 +946,7 @@ function renderEventNode(e) {
   switch (e.type) {
     case 'phase': { const night = (d.title || '').includes('夜'); return el('div', `banner ${night ? 'night' : ''}`, d.title || ''); }
     case 'night_step': return el('div', 'msg event', `🕯 ${escapeHtml(d.label)}（${d.index}/${d.total}）`);
-    case 'system': return el('div', 'sysline', e.text || d.text || '');
+    case 'system': return el('div', 'sysline', escapeHtml(e.text || d.text || ''));
     case 'deaths': {
       const ds = d.deaths || [];
       const rules = state.view && state.view.rules;
@@ -980,7 +981,7 @@ function renderEventNode(e) {
     case 'idiot_save': return el('div', 'msg event', `🃏 ${seatLabel(d.seat)} 是白痴，免疫放逐（不可投票）`);
     case 'direction': return el('div', 'sysline', `${seatLabel(d.by)}（警长）决定从 ${d.startSeat} 号开始${d.direction === 'cw' ? '顺时针' : '逆时针'}发言`);
     case 'game_over': {
-      if (d.winner === 'none') return el('div', 'banner', `⏹ ${d.reason || '对局已终止'}`);
+      if (d.winner === 'none') return el('div', 'banner', `⏹ ${escapeHtml(d.reason || '对局已终止')}`);
       if (d.winner === 'draw') return el('div', 'banner', '🤝 平局（未分胜负）');
       const b = el('div', `banner ${d.winner === 'good' ? '' : 'night'}`, d.winner === 'good' ? '🎉 好人阵营获胜！' : '🐺 狼人阵营获胜！');
       b.style.fontSize = '15px';

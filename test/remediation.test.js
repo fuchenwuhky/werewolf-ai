@@ -305,3 +305,34 @@ test('SEC-01（路由集成）：LAN 门禁下配置/建局/列表/统计 401，
   assert.strictEqual(rTokens.code, 401, '全量令牌属于管理信息：即便持有玩家令牌也必须 401');
   api.games.delete(g.id);
 });
+
+// ---------- SEC-02：不可信内容必须按文本渲染（静态汇点审计） ----------
+
+test('SEC-02：seatLabel 必须在源头转义昵称，system/game_over 透传文本必须转义', () => {
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+  const m = fs.readFileSync(path.join(__dirname, '..', 'web', 'm', 'm.js'), 'utf8');
+
+  // seatLabel 的返回值只进 innerHTML 模板（app.js 37 处 / m.js 30+ 处），昵称是用户可控输入
+  assert.match(app, /function seatLabel\(seat\) \{[\s\S]*?escapeHtml\(raw\)/, 'app.js seatLabel 必须转义昵称');
+  assert.match(m, /const seatLabel = \(seat\) =>[\s\S]*?escapeHtml\(raw\)/, 'm.js seatLabel 必须转义昵称');
+
+  // system 事件文本透传服务端消息；game_over 的 reason 透传终止原因 —— 都不能裸插
+  assert.doesNotMatch(app, /el\('div', 'sysline', e\.text \|\| d\.text \|\| ''\)/, 'app.js system 事件裸插 e.text');
+  assert.doesNotMatch(m, /el\('div', 'sysline', e\.text \|\| d\.text \|\| ''\)/, 'm.js system 事件裸插 e.text');
+  assert.match(app, /escapeHtml\(d\.reason \|\| '对局已终止'\)/);
+  assert.match(m, /escapeHtml\(d\.reason \|\| '对局已终止'\)/);
+
+  // 发言正文（模型输出）两条渲染路径都必须转义
+  assert.ok(app.includes(`el('div', null, escapeHtml(d.text || ''))`), 'app.js 发言正文必须转义');
+  assert.ok(m.includes(`el('div', null, escapeHtml(d.text || ''))`), 'm.js 发言正文必须转义');
+});
+
+test('SEC-02（行为级）：以 escapeHtml 语义验证恶意昵称被中和', () => {
+  // 从 app.js 提取 escapeHtml 实现做行为验证（无 DOM 环境依赖）
+  const app = fs.readFileSync(path.join(__dirname, '..', 'web', 'app.js'), 'utf8');
+  const fn = new Function(`${app.match(/function escapeHtml\(s\) \{.*\}/)[0]}; return escapeHtml;`)();
+  const payload = `<img src=x onerror="alert(1)">"'<>&`;
+  const out = fn(payload);
+  assert.ok(!/[<>"']/.test(out.replace(/&(amp|lt|gt|quot|#39);/g, '')), '转义后不得残留可执行字符');
+  assert.strictEqual(out, `&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&quot;&#39;&lt;&gt;&amp;`);
+});
