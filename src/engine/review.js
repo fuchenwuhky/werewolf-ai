@@ -14,7 +14,9 @@ const { computeScores } = require('./score');
 
 const teamOf = (game, seat) => {
   const p = game.player(seat);
-  return p && p.role && ROLES[p.role] ? ROLES[p.role].team : null;
+  if (!p || !p.role || !ROLES[p.role]) return null;
+  // 整改 LOGIC-01：复盘归属用最终胜负阵营（暗恋者随绑定对象变动），不再读静态 ROLES.team
+  return game.categoryOf(p) === 'wolf' ? 'wolf' : 'good';
 };
 const roleName = (role) => (role && ROLES[role] ? ROLES[role].name : role || '未知');
 const nameOf = (game, seat) => {

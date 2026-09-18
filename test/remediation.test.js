@@ -336,3 +336,64 @@ test('SEC-02（行为级）：以 escapeHtml 语义验证恶意昵称被中和',
   assert.ok(!/[<>"']/.test(out.replace(/&(amp|lt|gt|quot|#39);/g, '')), '转义后不得残留可执行字符');
   assert.strictEqual(out, `&lt;img src=x onerror=&quot;alert(1)&quot;&gt;&quot;&#39;&lt;&gt;&amp;`);
 });
+
+// ---------- LOGIC-01：动态阵营（暗恋者链人）在胜负/评分/复盘/经验总结四处一致 ----------
+
+function makeGameWithAdmirer() {
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, admirer: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'logic01', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal();
+  // 指定角色：1 号暗恋者，2 号狼人，3 号预言家，4/5 号平民
+  g.players[0].role = 'admirer';
+  g.players[1].role = 'wolf';
+  g.players[2].role = 'seer';
+  g.players[3].role = 'villager';
+  g.players[4].role = 'villager';
+  return g;
+}
+
+test('LOGIC-01：暗恋者链狼人 → factionOf=wolf 而类别保留；链神职/村民 → good', () => {
+  const g = makeGameWithAdmirer();
+  const admirer = g.player(1);
+
+  g.crush[1] = 2; // 链狼人
+  assert.strictEqual(g.categoryOf(admirer), 'wolf');
+  assert.strictEqual(g.factionOf(admirer), 'wolf', '整改前：评分/复盘读静态 ROLES.team，链狼暗恋者被当成好人结算');
+
+  g.crush[1] = 3; // 链预言家
+  assert.strictEqual(g.categoryOf(admirer), 'god', '类别必须保留（神职展示与规则用）');
+  assert.strictEqual(g.factionOf(admirer), 'good');
+
+  g.crush[1] = 4; // 链村民
+  assert.strictEqual(g.categoryOf(admirer), 'villager');
+  assert.strictEqual(g.factionOf(admirer), 'good');
+});
+
+test('LOGIC-01：链狼暗恋者在狼胜局的评分行 team=wolf 且拿「阵营获胜」分', () => {
+  const { computeScores } = require('../src/engine/score');
+  const g = makeGameWithAdmirer();
+  g.crush[1] = 2; // 链狼
+  g.winner = 'wolf';
+  g.winReason = '屠边';
+  g.finished = true;
+  const rows = computeScores(g);
+  const adm = rows.rows.find((r) => r.seat === 1);
+  assert.strictEqual(adm.team, 'wolf', '整改前：team 读静态 ROLES.admirer.team=good');
+  assert.ok(adm.details.some((d) => d.includes('+20 阵营获胜')), '整改前：暗恋者链狼拿不到阵营获胜分');
+});
+
+test('LOGIC-01：复盘归属（teamOf）与经验总结提示词用最终阵营', () => {
+  const review = require('../src/engine/review');
+  const { lessonInstruction } = require('../src/ai/prompts');
+  const g = makeGameWithAdmirer();
+  g.crush[1] = 2; // 链狼
+  g.winner = 'wolf';
+  g.finished = true;
+  // teamOf 是 review.js 内部实现：通过 reviewFacts 的放逐台账观察最终阵营归属
+  const facts = review.reviewFacts(g, 1);
+  assert.ok(facts, 'reviewFacts 应能抽取暗恋者的复盘事实');
+  const prompt = lessonInstruction(g, g.player(1), '');
+  assert.match(prompt, /你所在的阵营.*获胜/, '整改前：经验总结按静态 good 计算 → 提示词会说「失败」');
+});

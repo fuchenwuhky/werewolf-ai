@@ -12,7 +12,8 @@ function computeScores(game) {
   const rows = new Map();
   for (const p of game.players) {
     rows.set(p.seat, {
-      seat: p.seat, name: p.name, role: p.role, team: ROLES[p.role].team, alive: p.alive,
+      // 整改 LOGIC-01：team 用最终胜负阵营（暗恋者随绑定对象变动），不再读静态 ROLES.team
+      seat: p.seat, name: p.name, role: p.role, team: game.factionOf(p), alive: p.alive,
       score: 0, details: [],
       _speeches: 0, _votes: [], _checks: 0, _checksHit: 0,
       _guards: [], _kills: [],
@@ -62,7 +63,7 @@ function computeScores(game) {
     // ---- 基础 ----
     const role = ROLES[r.role];
     // 平局（winner === 'draw'）：谁都不算"阵营获胜"，不给这 20 分
-    const won = (game.winner === 'good' || game.winner === 'wolf') && (role.team === 'wolf') === (game.winner === 'wolf');
+    const won = (game.winner === 'good' || game.winner === 'wolf') && (game.factionOf(game.player(r.seat)) === 'wolf') === (game.winner === 'wolf');
     if (won) add(r.seat, 20, '阵营获胜');
     if (r.alive) add(r.seat, 10, '存活到最后');
 
@@ -73,7 +74,7 @@ function computeScores(game) {
     let voteHits = 0;
     for (const t of r._votes) {
       const tp = game.player(t);
-      if (tp && ROLES[tp.role].team === 'wolf') voteHits++;
+      if (tp && game.factionOf(tp) === 'wolf') voteHits++;
     }
     if (voteHits) add(r.seat, voteHits * 6, `投中狼 ${voteHits} 次`);
 
@@ -87,7 +88,7 @@ function computeScores(game) {
         if (e.type === 'witch_action' && d.antidote && d.killTarget) add(r.seat, 3, '解药救人');
         if (e.type === 'witch_action' && d.poison) {
           const tp = game.player(d.poison);
-          add(r.seat, tp && ROLES[tp.role].team === 'wolf' ? 10 : -10, `毒${tp && ROLES[tp.role].team === 'wolf' ? '中狼' : '错人'}`);
+          add(r.seat, tp && game.factionOf(tp) === 'wolf' ? 10 : -10, `毒${tp && game.factionOf(tp) === 'wolf' ? '中狼' : '错人'}`);
         }
       }
     }
@@ -96,7 +97,7 @@ function computeScores(game) {
         const d = e.data || {};
         if (e.type === 'shoot' && e.actor === r.seat && d.target) {
           const tp = game.player(d.target);
-          add(r.seat, tp && ROLES[tp.role].team === 'wolf' ? 10 : -10, `枪${tp && ROLES[tp.role].team === 'wolf' ? '中狼' : '错好人'}`);
+          add(r.seat, tp && game.factionOf(tp) === 'wolf' ? 10 : -10, `枪${tp && game.factionOf(tp) === 'wolf' ? '中狼' : '错好人'}`);
         }
       }
     }
@@ -105,7 +106,7 @@ function computeScores(game) {
         const d = e.data || {};
         if (e.type === 'duel' && e.actor === r.seat && d.target) {
           const tp = game.player(d.target);
-          add(r.seat, tp && ROLES[tp.role].team === 'wolf' ? 10 : -5, `决斗${tp && ROLES[tp.role].team === 'wolf' ? '成功' : '失误'}`);
+          add(r.seat, tp && game.factionOf(tp) === 'wolf' ? 10 : -5, `决斗${tp && game.factionOf(tp) === 'wolf' ? '成功' : '失误'}`);
         }
       }
     }

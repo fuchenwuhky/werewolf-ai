@@ -133,6 +133,15 @@ class Game {
     return (ROLES[p.role] && ROLES[p.role].category) || 'villager';
   }
 
+  /**
+   * 玩家的最终胜负阵营（整改 LOGIC-01）：只返回 good | wolf，用于胜负归属、评分、
+   * 复盘归属与经验总结。与 categoryOf 的区别：categoryOf 保留 god/villager 类别
+   * （规则与展示用），factionOf 把神职/村民都折进好人阵营。暗恋者随绑定对象变动。
+   */
+  factionOf(p) {
+    return this.categoryOf(p) === 'wolf' ? 'wolf' : 'good';
+  }
+
   // ---------- 事件 ----------
   /**
    * 发事件。**可见性 fail-closed**：类型未登记、私密事件没给座位、混合类型走默认值，一律抛错。
