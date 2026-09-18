@@ -338,18 +338,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
  */
 const NIGHT_STEPS = {
   admirer: {
-    label: '暗恋者行动',
+    label: '暗恋者 · 一瞥惊心',
     present: (g) => g.day === 1 && (g.board.admirer || 0) > 0,
     actors: (g) => g.aliveOfRole('admirer'),
     run: admirerStep,
   },
-  guard: { label: '守卫行动', present: (g) => (g.board.guard || 0) > 0, actors: (g) => g.aliveOfRole('guard'), run: guardStep },
-  dreamer: { label: '摄梦人行动', present: (g) => (g.board.dreamer || 0) > 0, actors: (g) => g.aliveOfRole('dreamer'), run: dreamerStep },
-  wolf: { label: '狼人行动', present: (g) => g.wolves().length > 0, actors: (g) => g.nightWolves(), run: wolfStep },
-  wolfbeauty: { label: '狼美人行动', present: (g) => (g.board.wolfbeauty || 0) > 0, actors: (g) => g.aliveOfRole('wolfbeauty'), run: wolfbeautyStep },
-  seer: { label: '预言家行动', present: (g) => (g.board.seer || 0) > 0, actors: (g) => g.aliveOfRole('seer'), run: seerStep },
-  witch: { label: '女巫行动', present: (g) => (g.board.witch || 0) > 0, actors: (g) => g.aliveOfRole('witch'), run: witchStep },
-  crow: { label: '乌鸦行动', present: (g) => (g.board.crow || 0) > 0, actors: (g) => g.aliveOfRole('crow'), run: crowStep },
+  guard: { label: '守卫 · 执灯守夜', present: (g) => (g.board.guard || 0) > 0, actors: (g) => g.aliveOfRole('guard'), run: guardStep },
+  dreamer: { label: '摄梦人 · 邀你入梦', present: (g) => (g.board.dreamer || 0) > 0, actors: (g) => g.aliveOfRole('dreamer'), run: dreamerStep },
+  wolf: { label: '狼人 · 狼影掠过', present: (g) => g.wolves().length > 0, actors: (g) => g.nightWolves(), run: wolfStep },
+  wolfbeauty: { label: '狼美人 · 魅影低语', present: (g) => (g.board.wolfbeauty || 0) > 0, actors: (g) => g.aliveOfRole('wolfbeauty'), run: wolfbeautyStep },
+  seer: { label: '预言家 · 天眼窥探', present: (g) => (g.board.seer || 0) > 0, actors: (g) => g.aliveOfRole('seer'), run: seerStep },
+  witch: { label: '女巫 · 药釜轻倾', present: (g) => (g.board.witch || 0) > 0, actors: (g) => g.aliveOfRole('witch'), run: witchStep },
+  crow: { label: '乌鸦 · 黢羽盘旋', present: (g) => (g.board.crow || 0) > 0, actors: (g) => g.aliveOfRole('crow'), run: crowStep },
 };
 
 /** 小工具 */
@@ -532,18 +532,16 @@ async function runNightStep(game, step) {
 
 /**
  * 夜晚并发的分波执行：依赖已满足的步骤同一波开跑。
- * 步骤的**播报顺序与序号仍按 nightOrder**，所以玩家看到的"守卫行动 → 狼人行动 → …"完全不变。
+ * 这里**只跑行动、不发播报** —— 播报已由 nightPhase 按 nightOrder 一次性发出（见那里的注释）。
+ * 旧实现把播报放在波次里，于是同一波（默认板子第一波就有 7 个步骤）齐射，
+ * 节奏变成"啪一下全出来"，这就是用户反馈的"夜间播报变奇怪"。
  */
 async function runNightWaves(game, steps) {
-  const total = steps.length;
   const done = new Set();
   const rest = [...steps];
   while (rest.length) {
     const ready = rest.filter((s) => (NIGHT_DEPS[s] || []).every((d) => done.has(d) || !steps.includes(d)));
     const wave = ready.length ? ready : [rest[0]]; // 依赖成环时退化为顺序执行（正常板子不会发生）
-    for (const s of wave) {
-      game.emit('night_step', { data: { step: s, label: NIGHT_STEPS[s].label, index: steps.indexOf(s) + 1, total } });
-    }
     await Promise.all(wave.map((s) => runNightStep(game, s)));
     for (const s of wave) {
       done.add(s);
@@ -566,19 +564,21 @@ async function nightPhase(game) {
   if (game.day > 1 && typeof game.waitReflection === 'function') await game.waitReflection(game.day - 1);
   // 固定全步骤播报（防信息泄露）：角色已死也播报该步骤；板子里不存在的角色不播；暗恋者仅首夜行动
   const activeSteps = game.rules.nightOrder.filter((s) => NIGHT_STEPS[s] && NIGHT_STEPS[s].present(game));
+  // 播报与行动**解耦**：整夜的步骤一次性按 nightOrder 顺序发出，不等任何行动跑完。
+  // 事件内容与旧串行路径逐字节相同（同样的事件、同样的顺序、同样的 index/total），
+  // 变的只是"什么时候发"——不再让播报跟着某一波行动的完成时机走。
+  // 旧并发实现按波齐射（NIGHT_DEPS 只拦女巫等狼刀 → 第一波就是 7 个步骤一起播），
+  // 玩家看到的就是"啪一下全出来"。节奏现在交给客户端按固定间隔播放
+  // （web/app.js 与 web/m/m.js 的 night_step 队列），播完而行动未完时显示"等待其他玩家行动中"。
+  activeSteps.forEach((s, i) => {
+    game.emit('night_step', { data: { step: s, label: NIGHT_STEPS[s].label, index: i + 1, total: activeSteps.length } });
+  });
   if (game.parallelLlm && activeSteps.length > 1) {
     // 多 Key：独立步骤并发（只有女巫等狼刀），总时长明显下降
     await runNightWaves(game, activeSteps);
   } else {
-    // 单 Key（默认）：逐步骤串行 —— 与旧版逐字节一致
-    let idx = 0;
-    for (const step of game.rules.nightOrder) {
-      const cap = NIGHT_STEPS[step];
-      if (!cap || !activeSteps.includes(step)) continue;
-      idx++;
-      game.emit('night_step', { data: { step, label: cap.label, index: idx, total: activeSteps.length } });
-      await runNightStep(game, step);
-    }
+    // 单 Key（默认）：逐步骤串行
+    for (const step of activeSteps) await runNightStep(game, step);
   }
   resolveNightDeaths(game);
 }

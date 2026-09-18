@@ -1224,10 +1224,54 @@ function roleChipHtml(rid) {
   return `<span class="role-tag" style="color:${r.color}">${r.emoji} ${r.name}</span>`;
 }
 
+/**
+ * 夜晚播报的"播放器"：服务端已把整夜的步骤**一次性**发来（播报与行动解耦，见
+ * src/engine/flow.js 的 nightPhase），这里按固定间隔一条一条播，节奏与真实行动耗时无关。
+ * 队列播完而夜晚还没结束（天没亮）→ 显示"等待其他玩家行动中"。
+ */
+const NIGHT_BROADCAST_GAP = 1100; // 每条播报之间的象征性间隔
+
+function clearNightWait() {
+  const w = $('#night-wait');
+  if (w) w.remove();
+}
+
+function showNightWait() {
+  if ($('#night-wait')) return;
+  const stream = $('#stream');
+  const node = el('div', 'sysline', '⏳ 等待其他玩家行动中…');
+  node.id = 'night-wait';
+  stream.appendChild(node);
+  autoScroll();
+}
+
+async function playNightBroadcast() {
+  if (state.nightPlaying) return;
+  state.nightPlaying = true;
+  const stream = $('#stream');
+  while (state.nightQueue && state.nightQueue.length) {
+    const e = state.nightQueue.shift();
+    state.lastNightStep = e.data; // 调试面板/观战要看"当前第几步"，随播放推进
+    clearNightWait();
+    const node = renderEventNode(e);
+    if (node) stream.appendChild(node);
+    autoScroll();
+    await new Promise((r) => setTimeout(r, NIGHT_BROADCAST_GAP));
+  }
+  state.nightPlaying = false;
+  // 播完但天没亮 → 行动还在跑（并发时很常见），如实告诉玩家在等谁
+  if (state.nightOpen) showNightWait();
+}
+
 function appendEvents(events) {
   const stream = $('#stream');
   for (const e of events) {
-    if (e.type === 'night_step') state.lastNightStep = e.data;
+    // 夜晚步骤先入队、不直接渲染：节奏归客户端管（旧版直接渲染 → 并发后几条同时冒出来）
+    if (e.type === 'night_step') {
+      state.nightQueue = state.nightQueue || [];
+      state.nightQueue.push(e);
+      continue;
+    }
     // 私密投票进度：不渲染成消息（会刷屏），只更新状态供 renderLive 显示"已思考 N/M"。
     // 服务端只播报计数，不含任何目标/座位 —— 这里也不许把它写进聊天流。
     if (e.type === 'vote_progress') {
@@ -1239,6 +1283,7 @@ function appendEvents(events) {
     const node = renderEventNode(e);
     if (node) stream.appendChild(node);
   }
+  if (state.nightQueue && state.nightQueue.length) playNightBroadcast();
   autoScroll();
 }
 
@@ -1249,6 +1294,9 @@ function renderEventNode(e) {
   switch (e.type) {
     case 'phase': {
       const night = (d.title || '').includes('夜');
+      // nightOpen 决定"夜晚播报播完后要不要显示等待其他玩家行动中"（天一亮就该收掉）
+      state.nightOpen = night;
+      if (!night) clearNightWait();
       state.voteTally = {}; // 进入新阶段：上一轮的票数不再有意义（否则桌角会挂着过期的票）
       if (state.lastView) updateSeats(state.lastView);
       return el('div', `banner ${night ? 'night' : ''}`, d.title || '');

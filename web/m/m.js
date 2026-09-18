@@ -642,11 +642,18 @@ function applyView(v) {
   }
   for (const e of v.events) {
     if (e.seq <= (freshFrom || 0)) continue; // 幂等：已渲染过的 seq 直接跳过
-    if (e.type === 'night_step') state.lastNightStep = e.data;
+    // 夜晚播报：服务端已把整夜步骤一次性发来（播报与行动解耦，见 src/engine/flow.js 的 nightPhase），
+    // 这里先入队、按固定间隔一条条播 —— 直接渲染的话并发后几条会同时冒出来（用户反馈的"播报变奇怪"）
+    if (e.type === 'night_step') { state.nightQueue = state.nightQueue || []; state.nightQueue.push(e); continue; }
+    if (e.type === 'phase') {
+      state.nightOpen = /夜/.test((e.data && e.data.title) || '');
+      if (!state.nightOpen) clearNightWaitM(); // 天亮了 → 收掉"等待其他玩家行动中"
+    }
     const node = renderEventNode(e);
     if (node) $('#m-flow').appendChild(node);
     feedStage(e, e.seq > freshFrom);
   }
+  if (state.nightQueue && state.nightQueue.length) playNightBroadcastM();
   if (v.events.length) state.playerAfter = Math.max(state.playerAfter, ...v.events.map((e) => e.seq));
   updateLive(v);
   scrollFlow(false);
@@ -657,6 +664,41 @@ function applyView(v) {
   updatePausedBanner(v);
   updateMemoryChip(v);
   maybeShowRole(v);
+}
+
+/** 夜晚播报播放器（手机端）：与桌面端同一套节奏，只是等待提示挂在自己的节点上 */
+const NIGHT_BROADCAST_GAP_M = 1100;
+
+function clearNightWaitM() {
+  const w = document.getElementById('m-night-wait');
+  if (w) w.remove();
+}
+
+function showNightWaitM() {
+  if (document.getElementById('m-night-wait')) return;
+  const node = el('div', 'msg event', '⏳ 等待其他玩家行动中…');
+  node.id = 'm-night-wait';
+  const flow = document.getElementById('m-flow');
+  if (!flow) return;
+  flow.appendChild(node);
+  scrollFlow(false);
+}
+
+async function playNightBroadcastM() {
+  if (state.nightPlaying) return;
+  state.nightPlaying = true;
+  const flow = document.getElementById('m-flow');
+  while (state.nightQueue && state.nightQueue.length) {
+    const e = state.nightQueue.shift();
+    state.lastNightStep = e.data; // 调试/观战要看"当前第几步"，随播放推进
+    clearNightWaitM();
+    const node = renderEventNode(e);
+    if (node && flow) flow.appendChild(node);
+    scrollFlow(false);
+    await new Promise((r) => setTimeout(r, NIGHT_BROADCAST_GAP_M));
+  }
+  state.nightPlaying = false;
+  if (state.nightOpen) showNightWaitM(); // 播完天没亮 → 行动还在跑，如实提示
 }
 
 /**
