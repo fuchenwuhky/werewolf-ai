@@ -90,10 +90,13 @@
   --sp-6: 28px;
   --sp-7: 40px;
 
-  /* ---- 控件尺寸：输入框与按钮同高，避免"下拉比输入框高"的错位 ---- */
-  --h-ctl: 38px;
-  --h-ctl-sm: 30px;
+  /* ---- 控件尺寸（FIN-03 §7.3 表）：
+     输入/下拉/普通按钮 ≥40；紧凑工具 ≥32；主操作 ≥44（.btn.primary）；大号 48。
+     --h-icon：返回/关闭/设置/笔记等图标按钮 40×40。 ---- */
+  --h-ctl: 40px;
+  --h-ctl-sm: 32px;
   --h-ctl-lg: 48px;
+  --h-icon: 40px;
 
   /* ---- 字号阶 ---- */
   --fs-xs: 11px;
@@ -252,37 +255,13 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
 }
 .hero-inner { display: flex; align-items: center; gap: var(--sp-5); max-width: 1440px; margin: 0 auto; position: relative; z-index: 2; }
 .hero-scene { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 130px; display: block; pointer-events: none; }
-.hero-mark { flex: none; width: 92px; height: 92px; filter: drop-shadow(0 10px 26px rgba(0, 0, 0, .65)); }
-.hero-mark svg { width: 100%; height: 100%; display: block; }
-/* 奖章外环：金色渐变描边（顶亮底深）做出金属厚度 */
-.mark-ring { fill: none; stroke: url(#markGold); stroke-width: 2.2; }
-/* 环槽：外环与圆盘之间的一道暗槽，头才不会像浮在环上 */
-.mark-ring-groove { fill: none; stroke: rgba(3, 6, 13, .85); stroke-width: 3.4; }
-.mark-disc { fill: url(#markDisc); }
-.mark-ring2 { fill: none; stroke: rgba(216, 178, 95, .26); stroke-width: 1; stroke-dasharray: 3 5; }
-.mark-tick { fill: rgba(216, 178, 95, .5); }
-.mark-glow { fill: url(#markGlow); filter: url(#markBlur); }
-/* 毛色：三条停靠点分出头骨 / 颊 / 下颌的明暗；fill 写在 markup 的 url(#wolfFur) 上 */
-.mark-fur { stroke: rgba(214, 230, 255, .55); stroke-width: 1.15; stroke-linejoin: round; }
-.mark-ear-in { fill: rgba(3, 6, 14, .72); }
-/* 吻部桥面：之前 .17 而且拉到底，远看像"流下来的鼻涕"，压到 .11 并缩短（见 markup 的路径） */
-/* 鼻梁压暗（不是提亮）：提亮会在吻部中间拉出一条浅色带，远看像"流下来的东西" */
-.mark-bridge { fill: rgba(4, 8, 18, .3); }
-.mark-cheek { fill: rgba(6, 10, 22, .34); }
-.mark-brow { fill: rgba(5, 8, 18, .5); }
-.mark-eye-shape { fill: url(#wolfEye); }
-.mark-eye-lid { fill: rgba(7, 11, 24, .72); }
-.mark-eye-core { fill: #fffaea; }
-.mark-eye-glow { fill: rgba(255, 208, 113, .4); filter: url(#markBlur); }
-.mark-eye { animation: wolfEye 6s ease-in-out infinite; }
-.mark-eye + .mark-eye { animation-delay: .2s; }
-@keyframes wolfEye { 0%, 88%, 100% { opacity: 1; } 92% { opacity: .25; } }
-.mark-nose { fill: #070b18; }
-.mark-rim-hi { fill: none; stroke: rgba(228, 240, 255, .42); stroke-width: 1.3; stroke-linecap: round; }
-.mark-nose-hi { fill: rgba(226, 238, 255, .55); }
-/* 嘴线用**浅色**：深色线在近黑的吻部上根本看不见 */
-.mark-mouth { fill: none; stroke: rgba(196, 214, 248, .3); stroke-width: 1; stroke-linecap: round; }
-.mark-nose-rim { fill: none; stroke: rgba(196, 214, 248, .14); stroke-width: 1; stroke-linecap: round; }
+/* FIN-08：首页大标识 = 生产资产 assets/brand/wolf-emblem.svg（月夜狼冠母版直拷）。
+   页内不再维护第二份狼头 SVG（旧 .mark-* 内联样式随旧 SVG 一并移除）。 */
+.hero-mark { flex: none; }
+.hero-emblem {
+  display: block; width: 120px; height: 120px;
+  filter: drop-shadow(0 12px 30px rgba(0, 0, 0, .7));
+}
 
 .hero-text { min-width: 0; flex: 1 1 auto; }
 .hero-kicker {
@@ -309,12 +288,84 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
 .hero-facts li b { color: var(--gold-bright); font-weight: 600; }
 .hero-lang { position: absolute; right: 0; top: 0; }
 
-/* 设置页自己滚动：hero 与底部操作条固定，中间滚动 */
+/* 设置页自己滚动：hero 固定为品牌行，首页与开局设置在滚动区里 */
 #screen-setup { overflow: hidden; }
 .setup-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+
+/* ============ 首页第一屏（FIN-04 §8.1）：档案 / 继续上局 / 开始新局 ============ */
+.home-hero {
+  max-width: 1440px; margin: 0 auto;
+  padding: var(--sp-5) var(--sp-6) var(--sp-2);
+}
+.home-cols { display: flex; align-items: flex-start; gap: var(--sp-6); }
+.home-main { flex: 1 1 auto; min-width: 0; }
+/* 次级入口行：低频资料不占第一屏主体；独立成列，行高 ≥48 */
+.home-side {
+  flex: 0 0 268px; display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3); border: 1px solid var(--line-dim); border-radius: var(--r-lg);
+  background: linear-gradient(180deg, rgba(20, 29, 51, .5), rgba(13, 19, 36, .4));
+}
+.home-entry { justify-content: flex-start; text-decoration: none; }
+/* 列表行高 ≥48（FIN-03）：用两级选择器盖过 .btn 的 40px 基准 */
+.home-side .home-entry { min-height: 48px; }
+
+/* 当前档案（复用 state.profiles 体系）：头像 emoji + 昵称 + 管理入口 */
+.home-profile {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4);
+  border: 1px solid rgba(146, 174, 235, .18); border-radius: var(--r-md);
+  background: rgba(146, 174, 235, .06);
+}
+.home-avatar { flex: none; font-size: 34px; line-height: 1; }
+.home-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.home-who b { font-size: var(--fs-lg); color: var(--gold-bright); letter-spacing: 1px; overflow-wrap: anywhere; }
+
+/* 继续上局卡 / 空态 */
+.home-card { margin: 0 0 var(--sp-4); }
+#resume-box.home-card {
+  margin: 0 0 var(--sp-4);
+  border-color: rgba(216, 178, 95, .45);
+  box-shadow: var(--el-2), var(--bevel), var(--ring-soft);
+}
+#resume-box h2 { margin: 0 0 var(--sp-2); border-bottom: none; padding-bottom: 0; font-size: var(--fs-lg); }
+.home-empty { padding: var(--sp-3) var(--sp-4); border: 1px dashed var(--line); border-radius: var(--r-lg); }
+
+/* 主行动区：开始按钮 + 费用说明 + 确认要素行 */
+.home-cta { display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap; margin: 0 0 var(--sp-3); }
+.home-cta .hint { flex: 0 1 auto; }
+.setup-warn { color: var(--warn); font-weight: 600; }
+.setup-warn:empty { display: none; }
+#setup-error:not(:empty) { color: #ffb3bc; }
+.home-hero .setup-summary { flex: 1 1 100%; }
+
+/* 开局设置区（默认在首屏之下）：分组标题 */
+.setup-section {
+  max-width: 1440px; margin: 0 auto;
+  padding: 0 var(--sp-6) var(--sp-6);
+}
+.group-head {
+  display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap;
+  margin: var(--sp-5) 0 0; padding-bottom: var(--sp-2);
+  font-family: var(--font-cn-title); font-size: var(--fs-lg); font-weight: 600;
+  color: var(--moon); letter-spacing: 2px;
+  border-bottom: 1px solid var(--line-dim);
+}
+.group-head .hint { font-family: var(--font-body); font-weight: 400; letter-spacing: 0; }
+.setup-col .group-head { margin-top: 0; }
+.setup-col .card + .group-head { margin-top: var(--sp-4); }
+/* 卡片内折叠（规则长表等）：折叠头可点、有箭头指示 */
+details.fold > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  padding: var(--sp-2) 0; color: var(--muted); font-size: var(--fs-sm);
+}
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary::before { content: '▸ '; color: var(--gold); }
+details.fold[open] > summary::before { content: '▾ '; }
+details.fold > summary:hover { color: var(--gold); }
+
 .setup-grid {
   display: flex; align-items: flex-start; gap: var(--sp-4);
-  padding: var(--sp-5) var(--sp-6) var(--sp-4); max-width: 1440px; margin: 0 auto;
+  padding: var(--sp-2) 0 0;
 }
 .setup-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-4); }
 
@@ -470,8 +521,10 @@ input[type=radio]:checked {
 }
 .btn:hover { border-color: var(--gold-dim); color: var(--gold-bright); box-shadow: var(--el-2), var(--bevel); }
 .btn:active { transform: translateY(1px); box-shadow: var(--el-1); }
-/* 主按钮＝鎏金封印：深色字压在金色上，是整套界面最亮的暖色焦点 */
+/* 主按钮＝鎏金封印：深色字压在金色上，是整套界面最亮的暖色焦点。
+   FIN-03：主操作（开始/投票/技能确认）高 ≥44、宽 ≥112。 */
 .btn.primary {
+  min-height: 44px; min-width: 112px;
   background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 46%, #a8822c 100%);
   border-color: rgba(255, 236, 180, .55); color: #241802; font-weight: 700;
   text-shadow: 0 1px 0 rgba(255, 255, 255, .35);
@@ -484,28 +537,16 @@ input[type=radio]:checked {
 .btn.danger { background: linear-gradient(180deg, #7d1c27, #4a0f17); border-color: #9c2b39; color: #ffd9dc; }
 .btn.danger:hover { border-color: var(--accent); color: #fff; }
 .btn.small { min-height: var(--h-ctl-sm); padding: 0 var(--sp-3); font-size: var(--fs-sm); border-radius: var(--r-sm); }
-.btn.big { min-height: var(--h-ctl-lg); padding: 0 var(--sp-6); font-size: var(--fs-lg); letter-spacing: 4px; font-weight: 700; }
+.btn.big { min-height: var(--h-ctl-lg); padding: 0 var(--sp-6); font-size: var(--fs-lg); letter-spacing: 4px; font-weight: 700; min-width: 168px; }
 .btn[disabled] { opacity: .45; cursor: not-allowed; }
+/* 图标按钮（返回/关闭/设置/笔记）：40×40 正方形触区（FIN-03） */
+.btn.icon-btn { width: var(--h-icon); height: var(--h-icon); min-height: var(--h-icon); padding: 0; font-size: var(--fs-lg); }
 .btnrow { display: flex; gap: var(--sp-2); align-items: center; margin-top: var(--sp-2); flex-wrap: wrap; }
 
-/* ---------- 底部操作条：常驻可见，避免"按钮在几千像素之外" ---------- */
-.setup-actions {
-  position: relative; z-index: 20; flex: none;
-  padding: var(--sp-3) var(--sp-6) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(180deg, rgba(6, 9, 15, .55), rgba(6, 9, 15, .96) 55%);
-  backdrop-filter: blur(12px) saturate(1.15);
-  border-top: 1px solid var(--line);
-  box-shadow: 0 -12px 34px rgba(0, 0, 0, .55);
-}
-.setup-actions-inner {
-  display: flex; align-items: center; gap: var(--sp-4); flex-wrap: wrap;
-  max-width: 1440px; margin: 0 auto;
-}
-.setup-actions .hint { flex: 1 1 200px; }
-.setup-summary { flex: 1 1 320px; min-width: 0; color: var(--text-dim); font-size: var(--fs-md); }
+/* ---------- 确认要素行（原底部操作条，随 FIN-04 移入首页主行动区） ---------- */
+.setup-summary { flex: 1 1 320px; min-width: 0; color: var(--text-dim); font-size: var(--fs-md); line-height: 1.8; }
 .setup-summary b { color: var(--gold-bright); font-weight: 600; }
 .setup-summary .ss-sep { color: var(--line-strong); margin: 0 6px; }
-#resume-box { margin: 0 var(--sp-6) var(--sp-4); max-width: 560px; }
 
 /* ---------- 板子编辑器 ---------- */
 .board-editor { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2) var(--sp-3); margin-top: var(--sp-3); }
@@ -600,6 +641,22 @@ details summary:hover { color: var(--gold); }
 .topbar .sub { color: var(--muted); font-size: var(--fs-sm); font-style: italic; }
 .top-actions { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 
+/* FIN-05 顶栏左区：小狼冠（同品牌 SVG）+ 当前档案昵称 + 连接/保存状态点 */
+.brand-mini { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 0 1 auto; }
+.topbar-emblem { flex: none; width: 22px; height: 22px; filter: drop-shadow(0 1px 4px rgba(0, 0, 0, .8)); }
+.topbar-profile {
+  font-size: var(--fs-sm); color: var(--text-dim);
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conn-dot {
+  flex: none; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--muted); box-shadow: 0 0 6px rgba(0, 0, 0, .6);
+}
+.conn-dot.conn-ok { background: var(--jade); box-shadow: 0 0 8px rgba(88, 185, 163, .8); }
+.conn-dot.conn-warn { background: var(--ember); box-shadow: 0 0 8px rgba(224, 144, 60, .85); animation: pulseDot 1.6s ease-in-out infinite; }
+.game-top .game-status { flex: 1 1 auto; justify-content: center; }
+.game-top .top-actions { flex: 0 0 auto; }
+
 .game-status { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; min-width: 0; }
 /* 天数牌：一块"日历石牌"，中间是天数、下沿是 DAY/NIGHT */
 .day-plate {
@@ -642,19 +699,78 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .alive-meter b { color: var(--text); font-weight: 600; }
 
+/* FIN-05：≥1280px 三栏 = 左座位区 240 / 中发言弹性 / 右笔记栏 300。
+   行高 minmax(0,1fr)：三栏各自内部滚动，历史再长也不把整页撑高。 */
 .game-layout {
   flex: 1 1 auto; min-height: 0; display: grid;
-  grid-template-columns: 400px minmax(0, 1fr); gap: var(--sp-4);
-  padding: var(--sp-4) var(--sp-4) 0;
-  align-items: start;
+  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-4) 0;
 }
-/* 复盘面板出现时（JS 给 #screen-game 加 .has-coach）才让出第三列 */
-#screen-game.has-coach .game-layout { grid-template-columns: 400px minmax(0, 1fr) 340px; }
+#screen-game.notes-collapsed .game-layout { grid-template-columns: 240px minmax(0, 1fr); }
+/* 复盘面板出现时：占中列下方一整行（首层结算 + 展开详情），不挤压三栏 */
+#screen-game.has-coach .game-layout { grid-template-rows: minmax(0, 1fr) auto; }
+#screen-game.has-coach .coach-panel { grid-column: 2 / -1; grid-row: 2; height: auto; max-height: 40vh; }
 
 .left-col {
-  min-width: 0; display: flex; flex-direction: column; gap: var(--sp-3);
-  position: sticky; top: 62px;
+  grid-column: 1; grid-row: 1;
+  min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: var(--sp-3);
+  overflow-y: auto; overflow-x: hidden; padding-bottom: var(--sp-2);
 }
+.stream-wrap {
+  grid-column: 2; grid-row: 1;
+  min-width: 0; min-height: 0; position: relative;
+  display: flex; flex-direction: column;
+}
+/* 我的笔记右栏（FIN-05）：≥1280 常驻（JS 加 .docked），更窄窗口自动回抽屉 */
+#notes-drawer.docked {
+  position: static; grid-column: 3; grid-row: 1;
+  width: auto; z-index: auto; overflow-y: auto;
+  border-left: 1px solid var(--line-dim);
+  box-shadow: none; animation: none;
+  display: flex; flex-direction: column;
+}
+
+/* 座位视图切换（FIN-05）：圆桌 / 列表共用数据与选择状态，切换不清草稿、不改目标 */
+.seat-tabs { display: flex; gap: var(--sp-1); flex: none; }
+.seat-tabs .chip { min-height: 36px; padding: 0 13px; }
+
+/* 列表视图：整行即目标区（≥64×72），行内信息比缩小的圆桌更可读 */
+.seats-list {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: 2px 2px var(--sp-2) 0;
+}
+.seat-row {
+  display: flex; align-items: center; gap: var(--sp-2);
+  min-height: 72px; padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-dim); border-radius: var(--r-md);
+  background: linear-gradient(180deg, rgba(20, 29, 51, .55), rgba(13, 19, 36, .5));
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.seat-row .row-num {
+  position: relative; flex: none; width: 40px; height: 40px; border-radius: 50%;
+  display: grid; place-items: center;
+  font-size: var(--fs-base); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--moon);
+  background: radial-gradient(circle at 34% 26%, #26355c 0%, #101728 72%);
+  border: 1.5px solid var(--line-strong);
+}
+.seat-row .row-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.seat-row .row-name { font-weight: 600; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-row .row-meta { min-height: 1.2em; }
+.seat-row.dead { opacity: .45; }
+.seat-row.dead .row-num { filter: grayscale(.85); border-color: var(--line-dim); }
+.seat-row.speaking { border-color: rgba(224, 144, 60, .55); }
+.seat-row.speaking .row-num { border-color: var(--ember); }
+.seat-row.speaking .row-name { color: var(--ember); }
+.seat-row.mine { border-color: rgba(216, 178, 95, .5); }
+.seat-row.mine .row-name { color: var(--gold-bright); }
+.seat-row.targetable { cursor: pointer; border-style: dashed; border-color: var(--line-strong); }
+.seat-row.targetable:hover { border-color: var(--gold); }
+.seat-row.picked { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(179, 50, 63, .18); }
+.seat-row.picked .row-name { color: #ffc9cf; }
+.seat-row .tag-chip { max-width: 100%; }
 
 /* ---------- 我的身份卡 ---------- */
 .my-role {
@@ -678,8 +794,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
    为什么不用 CSS 圆函数：sin()/cos() 在部分 WebView 上没有，退化后会全部叠在中心；
    由 JS 算好再把结果交给 CSS，任何浏览器上都是同一张桌子。 */
 .seats { position: relative; width: 100%; aspect-ratio: 1 / 1; min-height: 0; }
-/* 舞台内缩 36px：给座位方块留出半个身位，任何人数都不会顶出栏外 */
-.ring-stage { position: absolute; inset: 36px; }
+/* 舞台内缩收窄（FIN-05 左栏 240px）：240 宽的栏里 12 人圆桌仍要每人可辨，
+   内缩从 36px 收到 14px，座位牌与头像相应缩一档；要读细节就切「列表」视图 */
+.ring-stage { position: absolute; inset: 14px; }
 /* 桌沿：一圈铜环 + 一圈虚刻线（夜里"看到"桌子的边界，而不是一堆漂在空中的头像） */
 /* 桌沿：座位正中坐在这一圈上（座位半径 43%，直径 86%，这里取 88% 让铜环从头像内侧露出一点） */
 .ring-stage::before {
@@ -714,20 +831,21 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .seat {
   position: absolute; left: calc(50% + var(--x, 0%)); top: calc(50% + var(--y, 0%));
   transform: translate(-50%, -50%);
-  width: 64px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  width: 56px; display: flex; flex-direction: column; align-items: center; gap: 3px;
   cursor: default; transition: transform var(--dur) var(--ease), opacity var(--dur) var(--ease);
 }
+.seat:focus-visible { border-radius: var(--r-sm); }
 .seat .snum {
-  position: relative; width: 40px; height: 40px; border-radius: 50%;
+  position: relative; width: 36px; height: 36px; border-radius: 50%;
   display: grid; place-items: center;
-  font-size: var(--fs-base); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--moon);
+  font-size: var(--fs-sm); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--moon);
   background: radial-gradient(circle at 34% 26%, #26355c 0%, #101728 72%);
   border: 1.5px solid var(--line-strong);
   box-shadow: 0 5px 14px rgba(0, 0, 0, .55), var(--bevel);
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 .seat .sname {
-  max-width: 64px; margin-top: 3px; font-size: 10px; line-height: 1.3; color: var(--text-dim); text-align: center;
+  max-width: 58px; margin-top: 3px; font-size: 10px; line-height: 1.3; color: var(--text-dim); text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* 肖像与隐藏身份无关；数字保留在左下角，右侧继续留给身份和票数徽记。 */
@@ -759,7 +877,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .seat.dead { opacity: .42; }
 .seat.dead .snum { filter: grayscale(.85); border-color: var(--line-dim); }
 .seat.dead .snum::after {
-  content: ''; position: absolute; left: 50%; top: 50%; width: 52px; height: 1.5px;
+  content: ''; position: absolute; left: 50%; top: 50%; width: 44px; height: 1.5px;
   background: rgba(196, 210, 245, .8); transform: translate(-50%, -50%) rotate(-42deg);
   box-shadow: 0 0 6px rgba(0, 0, 0, .9);
 }
@@ -790,13 +908,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid rgba(255, 255, 255, .25); color: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
 }
-/* 标注入口常显（计划 §4.3：不能只在 hover 出现）；hover 提亮 */
-.seat .tag-btn { position: absolute; right: -6px; top: -6px; opacity: .55; transition: opacity var(--dur) var(--ease); }
+/* 标注入口常显（计划 §4.3：不能只在 hover 出现）；hover 提亮。
+   FIN-03 清理局部 !important：尺寸直接沿用 .btn.small（紧凑工具 32px），不再用 !important 压。 */
+.seat .tag-btn { position: absolute; right: -8px; top: -8px; opacity: .6; transition: opacity var(--dur) var(--ease); }
 .seat:hover .tag-btn, .seat .tag-btn:focus-visible { opacity: 1; }
-.tag-btn {
-  min-height: 20px !important; padding: 0 6px !important; font-size: var(--fs-xs) !important;
-  border-radius: var(--r-pill) !important;
-}
+.seat-row .tag-btn { flex: none; opacity: .75; }
 .tag-chip { opacity: .9; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- 玩家档案（PROF-01） ---------- */
@@ -825,11 +941,21 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 
 /* ---------- 事件流 ---------- */
 .stream {
-  min-width: 0; min-height: 0; height: 100%; overflow-y: auto;
+  min-width: 0; min-height: 0; flex: 1 1 auto; overflow-y: auto;
   display: flex; flex-direction: column; gap: var(--sp-2);
   padding: 0 var(--sp-3) var(--sp-6) 0;
   scroll-behavior: smooth;
 }
+/* 新发言胶囊（FIN-10）：用户上翻阅读时提示新增条数，点击回到最新 */
+.new-msg-pill {
+  position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6;
+  min-height: 36px; padding: 0 18px; border-radius: var(--r-pill);
+  border: 1px solid var(--gold-dim); cursor: pointer;
+  background: linear-gradient(180deg, #1b2440, #101728);
+  color: var(--gold-bright); font-size: var(--fs-md); font-family: inherit;
+  box-shadow: var(--el-2);
+}
+.new-msg-pill:hover { border-color: var(--gold); }
 /* 阶段横幅：一章的开头（金色双线 + 居中标题） */
 .banner {
   position: relative; margin: var(--sp-4) 0 var(--sp-2); padding: var(--sp-2) 0;
@@ -900,6 +1026,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border-left: 3px solid var(--gold); line-height: 1.6;
 }
 .pending-hint.waiting { color: var(--muted); border-left-color: var(--line-strong); }
+/* FIN-03 状态齐全：成功 / 失败各有可见状态（不只靠 ✓/✗ 字符） */
+.pending-hint.ok { color: var(--jade); border-left-color: var(--jade); }
+.pending-hint.err { color: #ffb3bc; border-left-color: var(--accent); }
 #action-controls { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
 #action-controls textarea {
   flex: 1 1 260px; min-height: 46px; padding: var(--sp-2) var(--sp-3);
@@ -913,7 +1042,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 /* 选目标用的座位胶囊 */
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
-  min-height: 32px; padding: 0 11px; border-radius: var(--r-pill); cursor: pointer;
+  min-height: 36px; padding: 0 11px; border-radius: var(--r-pill); cursor: pointer;
   font-size: var(--fs-md); font-variant-numeric: tabular-nums;
   border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--text-dim);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform .08s var(--ease);
@@ -957,6 +1086,29 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .coach-panel .cs-row:last-child { border-bottom: none; }
 .coach-panel .cs-row span { color: var(--muted); }
 .coach-panel .cs-row b { color: var(--text); font-weight: 600; text-align: right; }
+.coach-panel .cs-row .cs-basis { font-weight: 400; color: var(--text-dim); }
+/* FIN-04 §8.4：结算分层 —— 首层速览在上，第二层（展开）全员 / 时间线 / 标注 / AI 复盘 */
+.coach-panel h4 {
+  margin: var(--sp-3) 0 var(--sp-2); padding-bottom: 5px; font-size: var(--fs-sm);
+  color: var(--muted); letter-spacing: 1px; border-bottom: 1px solid var(--line-dim);
+}
+.coach-more { margin-top: var(--sp-3); border-top: 1px dashed var(--line-dim); }
+.coach-more > summary {
+  cursor: pointer; list-style: none; user-select: none;
+  padding: var(--sp-2) 0; color: var(--gold); font-size: var(--fs-sm);
+}
+.coach-more > summary::-webkit-details-marker { display: none; }
+.coach-more > summary::before { content: '▸ '; }
+.coach-more[open] > summary::before { content: '▾ '; }
+.coach-more > summary:hover { color: var(--gold-bright); }
+.coach-players { margin-bottom: var(--sp-2); }
+.cp-row {
+  display: grid; grid-template-columns: 44px minmax(0, 1fr) 96px 52px 60px; gap: 6px; align-items: center;
+  padding: 5px 0; border-bottom: 1px solid var(--line-soft); font-size: var(--fs-md);
+}
+.cp-row.cp-head { color: var(--muted); font-size: var(--fs-sm); }
+.cp-row .cp-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-row .cp-state, .cp-row .cp-score, .cp-row .cp-role { text-align: right; }
 
 /* ============================================================
    四之二、角色图鉴
@@ -1196,36 +1348,56 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
    ------------------------------------------------------------
    桌面三栏 → 窄屏两栏 → 单栏；圆桌在窄屏自动缩小（它本身是 1:1 的正方形）。
    ============================================================ */
-@media (max-width: 1280px) {
-  #screen-game.has-coach .game-layout { grid-template-columns: 340px minmax(0, 1fr) 300px; }
-  .game-layout { grid-template-columns: 340px minmax(0, 1fr); }
+/* ============================================================
+   七、响应式（FIN-05）
+   ------------------------------------------------------------
+   ≥1280：三栏（左座位 240 / 中发言 / 右笔记 300）；
+   1024–1279：右栏自动变抽屉（JS 按 matchMedia 摘掉 .docked），发言优先；
+   <900：紧凑单栏重排，座位在上、事件流在下。
+   ============================================================ */
+@media (max-width: 1279px) {
+  .game-layout,
+  #screen-game.notes-collapsed .game-layout,
+  #screen-game.has-coach .game-layout { grid-template-columns: 240px minmax(0, 1fr); }
+  #screen-game.has-coach .game-layout { grid-template-rows: minmax(0, 1fr) auto; }
+  #screen-game.has-coach .coach-panel { grid-column: 2 / -1; grid-row: 2; }
 }
-@media (max-width: 1080px) {
+@media (max-width: 900px) {
+  .hero { padding: var(--sp-4) var(--sp-4) var(--sp-3); }
+  .hero-emblem { width: 72px; height: 72px; }
+  .hero-text h1 { font-size: var(--fs-2xl); letter-spacing: 4px; }
+  .home-hero { padding: var(--sp-4); }
+  .home-cols { flex-direction: column; gap: var(--sp-4); }
+  .home-side { flex: 1 1 auto; flex-direction: row; flex-wrap: wrap; }
+  .home-entry { flex: 1 1 40%; }
+  .setup-section { padding: 0 var(--sp-4) var(--sp-5); }
   .setup-grid { flex-direction: column; }
   .setup-col { width: 100%; }
-  .game-layout { grid-template-columns: 330px minmax(0, 1fr); padding: var(--sp-3) var(--sp-3) 0; }
-  /* 教练面板不再抢消息流的宽度，改到整行显示在下方 */
-  #screen-game.has-coach .game-layout { grid-template-columns: 330px minmax(0, 1fr); }
-  .coach-panel { grid-column: 1 / -1; height: auto; max-height: 40vh; }
-}
-@media (max-width: 860px) {
-  .hero { padding: var(--sp-5) var(--sp-4) var(--sp-4); }
-  .hero-mark { width: 64px; height: 64px; }
-  .hero-text h1 { font-size: var(--fs-2xl); letter-spacing: 4px; }
-  .setup-grid { padding: var(--sp-4) var(--sp-4) var(--sp-3); }
-  .setup-actions { padding: var(--sp-3) var(--sp-4); }
   .topbar { padding: var(--sp-2) var(--sp-3); }
-  .topbar h1 { font-size: 18px; }
+  .topbar-profile { max-width: 110px; }
   .row2 { grid-template-columns: 1fr; }
   .board-editor { grid-template-columns: 1fr; }
   .mode-picker { grid-template-columns: 1fr; }
   .ai-names { grid-template-columns: 1fr; }
-  /* 单栏：圆桌在上、事件流在下，仍然只让事件流滚动 */
-  .game-layout { grid-template-columns: minmax(0, 1fr); padding: var(--sp-2) var(--sp-3) 0; }
-  #screen-game.has-coach .game-layout { grid-template-columns: minmax(0, 1fr); }
-  .left-col { position: static; }
+  /* 单栏：座位区在上（自身限高滚动）、事件流在下，仍然只让事件流吃剩余高度 */
+  .game-layout,
+  #screen-game.notes-collapsed .game-layout,
+  #screen-game.has-coach .game-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    padding: var(--sp-2) var(--sp-3) 0;
+  }
+  .left-col { grid-row: 1; grid-column: 1; max-height: 46vh; }
   .seats { max-width: 380px; margin: 0 auto; }
+  .stream-wrap { grid-row: 2; grid-column: 1; }
+  #screen-game.has-coach .coach-panel { grid-column: 1; }
   .stream { padding-right: 0; }
+}
+/* 矮窗口（笔记本小窗）：首页品牌行压缩，保证「开始」与设置区可达 */
+@media (min-width: 901px) and (max-height: 800px) {
+  .hero { padding-top: var(--sp-4); padding-bottom: calc(var(--sp-3) + 82px); }
+  .hero-emblem { width: 88px; height: 88px; }
+  .home-hero { padding-top: var(--sp-4); }
 }
 
 /* ============================================================

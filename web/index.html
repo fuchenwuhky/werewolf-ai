@@ -61,7 +61,9 @@
 <a class="skip-link" href="#app" data-i18n="skip.toMain">跳到主内容</a>
 <div id="app" role="main" tabindex="-1">
 
-  <!-- ============ 设置页 ============ -->
+  <!-- ============ 首页 / 开局设置页 ============
+       FIN-04 信息架构：第一屏是 品牌 + 当前档案 + 继续上局 + 开始新局 + 次级入口；
+       API / 板子 / 规则等长表单折叠进下方「开局设置」区，不再占据第一屏。 -->
   <section id="screen-setup" class="screen">
     <header class="hero">
     <!-- 村舍剪影放在 hero 里（而不是固定层）：固定层会被设置页的卡片整片盖住，
@@ -84,200 +86,15 @@
       </g>
     </svg>
       <div class="hero-inner">
-        <div class="hero-mark" aria-hidden="true">
-          <!-- 狼首纹章：几何化处理（不做写实描边），但保留体积——
-               耳窝、颊毛、吻部桥面、眉骨、眼窝阴影、下颌分层各一条路径，
-               左右镜像用 <g transform> 而不是复制一遍坐标，保证绝对对称。
-               配色只有墨蓝（毛）＋金（眼/环）＋近黑（鼻/阴影）三个层级。 -->
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="月夜狼首纹章">
-  <defs>
-    <radialGradient id="wmVignette" cx=".5" cy=".42" r=".75">
-      <stop offset="0" stop-color="#4a0e0e" stop-opacity="0"/>
-      <stop offset=".8" stop-color="#4a0e0e" stop-opacity="0"/>
-      <stop offset="1" stop-color="#5a1010" stop-opacity=".5"/>
-    </radialGradient>
-    <radialGradient id="wmDisc" cx=".5" cy=".34" r=".85">
-      <stop offset="0" stop-color="#12141f"/>
-      <stop offset=".55" stop-color="#0a0b13"/>
-      <stop offset="1" stop-color="#030308"/>
-    </radialGradient>
-    <linearGradient id="wmGold" x1=".15" y1="0" x2=".85" y2="1">
-      <stop offset="0" stop-color="#d9c084"/>
-      <stop offset=".28" stop-color="#a8863a"/>
-      <stop offset=".55" stop-color="#7c5e1a"/>
-      <stop offset=".8" stop-color="#55400f"/>
-      <stop offset="1" stop-color="#3a2a08"/>
-    </linearGradient>
-    <linearGradient id="wmGoldRing2" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#c3a867"/>
-      <stop offset=".5" stop-color="#8a6b24"/>
-      <stop offset="1" stop-color="#4e3a0e"/>
-    </linearGradient>
-    <linearGradient id="wmFur" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a4152"/>
-      <stop offset=".38" stop-color="#202636"/>
-      <stop offset=".72" stop-color="#12151f"/>
-      <stop offset="1" stop-color="#080a12"/>
-    </linearGradient>
-    <linearGradient id="wmFurEdge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5a6478"/>
-      <stop offset="1" stop-color="#2a3040"/>
-    </linearGradient>
-    <radialGradient id="wmEyeG" cx=".5" cy=".42" r=".65">
-      <stop offset="0" stop-color="#ffd9c0"/>
-      <stop offset=".35" stop-color="#ff7a45"/>
-      <stop offset=".75" stop-color="#d02a1c"/>
-      <stop offset="1" stop-color="#6e0f0a"/>
-    </radialGradient>
-    <radialGradient id="wmHalo" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#c9b27a" stop-opacity=".18"/>
-      <stop offset=".6" stop-color="#c9b27a" stop-opacity=".05"/>
-      <stop offset="1" stop-color="#c9b27a" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="wmMoonG" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#c03026" stop-opacity=".8"/>
-      <stop offset="1" stop-color="#c03026" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="wmMuzzle" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#57679f"/>
-      <stop offset="1" stop-color="#1b2445"/>
-    </linearGradient>
-    <filter id="wmSoft" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="3"/>
-    </filter>
-    <filter id="wmSoft2" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="5"/>
-    </filter>
-  </defs>
-
-  <!-- 圆盘底：午夜渐变 + 暗角 -->
-  <circle cx="120" cy="120" r="118" fill="#05070f"/>
-  <circle cx="120" cy="120" r="101" fill="url(#wmDisc)"/>
-
-  <!-- 星空：细星 + 两颗四芒星 -->
-  <g fill="#8a2420" opacity=".85">
-    <circle cx="52" cy="66" r="1.3" opacity=".7"/>
-    <circle cx="84" cy="42" r="1" opacity=".55"/>
-    <circle cx="196" cy="86" r="1.2" opacity=".6"/>
-    <circle cx="176" cy="180" r="1" opacity=".5"/>
-    <circle cx="46" cy="160" r="1.1" opacity=".5"/>
-    <circle cx="206" cy="140" r=".9" opacity=".45"/>
-  </g>
-  <g fill="#b03a2e">
-    <path d="M62 92 l2.2 5 5 2.2 -5 2.2 -2.2 5 -2.2 -5 -5 -2.2 5 -2.2 Z" opacity=".85"/>
-    <path d="M186 158 l1.8 4 4 1.8 -4 1.8 -1.8 4 -1.8 -4 -4 -1.8 4 -1.8 Z" opacity=".7"/>
-  </g>
-
-  <!-- 新月：右上，柔光晕 -->
-  <g opacity=".9">
-    <circle cx="176" cy="58" r="26" fill="url(#wmMoonG)"/>
-    <circle cx="176" cy="58" r="14" fill="#a82820"/>
-    <circle cx="181.5" cy="54.5" r="12.4" fill="url(#wmDisc)"/>
-  </g>
-
-  <!-- 头后金色光晕：把头从圆盘上托出来 -->
-  <ellipse cx="120" cy="128" rx="64" ry="62" fill="url(#wmHalo)"/>
-  <!-- 哥特尖拱剪影（极淡的教堂窗轮廓） -->
-  <path d="M120 40 C142 58 156 84 156 118 L156 176 L84 176 L84 118 C84 84 98 58 120 40 Z" fill="#05060c" opacity=".55"/>
-
-  <!-- 耳（左耳 + 镜像右耳）：外缘弧线、内耳窝、金色描边光 -->
-  <g transform="translate(120 126) scale(1.16) translate(-120 -126)">
-  <g id="wmEarL">
-    <path d="M84 88 C74 70 70 54 74 32 C92 48 104 62 110 76 C101 82 92 86 84 88 Z" fill="url(#wmFur)" stroke="#0a1122" stroke-width="1.4"/>
-    <path d="M86 78 C79 64 76 52 76.5 40 C88 52 97 64 102 73 C96.5 76 91 78 86 78 Z" fill="#101830" opacity=".85"/>
-    <path d="M76 38 C85 51 93 61 100 68" fill="none" stroke="#b39a5e" stroke-width="1.6" opacity=".7" stroke-linecap="round"/>
-  </g>
-  <use href="#wmEarL" transform="translate(240 0) scale(-1 1)"/>
-
-  <!-- 头部主体：带颊毛锯齿的对称剪影 -->
-  <path d="M120 62
-    C142 60 158 68 166 84
-    C171 96 172 110 168 124
-    L178 136 L166 140 L174 152 L158 152
-    C154 166 144 180 132 188
-    C128 191 124 194 120 194
-    C116 194 112 191 108 188
-    C96 180 86 166 82 152
-    L66 152 L74 140 L62 136
-    L72 124
-    C68 110 69 96 74 84
-    C82 68 98 60 120 62 Z"
-    fill="url(#wmFur)" stroke="#0a1122" stroke-width="1.6"/>
-  <!-- 颊毛：左右两撮细毛尖 -->
-  <g fill="none" stroke="url(#wmFurEdge)" stroke-width="1.4" opacity=".5" stroke-linecap="round">
-    <path d="M78 138 C74 146 72 152 71 158"/>
-    <path d="M84 146 C81 152 79 158 78 163"/>
-    <path d="M162 138 C166 146 168 152 169 158"/>
-    <path d="M156 146 C159 152 161 158 162 163"/>
-  </g>
-
-  <!-- 额顶反光弧 + 额发 -->
-  <path d="M96 74 C103 68 111 66 120 66 C129 66 137 68 144 74" fill="none" stroke="#6a7488" stroke-width="1.8" opacity=".6" stroke-linecap="round"/>
-  <g fill="none" stroke="#20294d" stroke-width="1.6" opacity=".8" stroke-linecap="round">
-    <path d="M108 78 C110 88 110 96 108 104"/>
-    <path d="M120 80 C120 90 120 98 120 106"/>
-    <path d="M132 78 C130 88 130 96 132 104"/>
-  </g>
-
-  <!-- 眉骨：内压的锐角，出凶相 -->
-  <g fill="#101830">
-    <path d="M80 112 C88 104 102 102 112 108 C104 108 90 110 82 116 Z"/>
-    <path d="M160 112 C152 104 138 102 128 108 C136 108 150 110 158 116 Z"/>
-  </g>
-
-  <!-- 眼窝光晕 + 琥珀狼眼（左眼 + 镜像右眼） -->
-  <g id="wmEyeL">
-    <ellipse cx="98" cy="122" rx="12" ry="9" fill="#d23a20" opacity=".42" filter="url(#wmSoft2)"/>
-    <path d="M83 122 C90 111.5 106 109.5 113 117 C107 127 90 128.5 83 122 Z" fill="url(#wmEyeG)"/>
-    <path d="M83 122 C90 111.5 106 109.5 113 117 C107 114.8 93 116.8 83 122 Z" fill="#3a2a10" opacity=".38"/>
-    <ellipse cx="99.5" cy="120.5" rx="2.6" ry="3.9" transform="rotate(-10 99.5 120.5)" fill="#0d0a06"/>
-    <circle cx="98" cy="118.2" r="1.2" fill="#fffdf2"/>
-  </g>
-  <use href="#wmEyeL" transform="translate(240 0) scale(-1 1)"/>
-
-  <!-- 吻部：桥面渐变 + 鼻 + 嘴线 -->
-  <path d="M120 126 C128 134 131 148 129 160 C127 171 124 177 120 181 C116 177 113 171 111 160 C109 148 112 134 120 126 Z" fill="url(#wmMuzzle)" opacity=".92"/>
-  <path d="M108 178 C112 184 116 187 120 187 C124 187 128 184 132 178 L128 174 C125 178 115 178 112 174 Z" fill="#141c38"/>
-  <path d="M106 167 C109 176 114 181 120 181 C126 181 131 176 134 167 C131 163 109 163 106 167 Z" fill="#0d1326"/>
-  <path d="M106 167 C109 175 114 180 120 180 C126 180 131 175 134 167" fill="none" stroke="#3d4a7c" stroke-width="1.1" opacity=".8"/>
-  <ellipse cx="113" cy="170" rx="2.4" ry="1.3" transform="rotate(-16 113 170)" fill="#4a5468" opacity=".8"/>
-  <path d="M120 181 C120 184 118.4 185.6 116 186.2" fill="none" stroke="#0d1326" stroke-width="1.3" stroke-linecap="round"/>
-  <path d="M120 181 C120 184 121.6 185.6 124 186.2" fill="none" stroke="#0d1326" stroke-width="1.3" stroke-linecap="round"/>
-  </g>
-
-  <!-- 下颌须毛 -->
-  <g fill="none" stroke="#1d2333" stroke-width="1.3" opacity=".8" stroke-linecap="round">
-    <path d="M112 190 C110 193 108 195 105 196.5"/>
-    <path d="M128 190 C130 193 132 195 135 196.5"/>
-  </g>
-
-  <circle cx="120" cy="120" r="101" fill="url(#wmVignette)"/>
-  <!-- 外环：金属主环 + 内刻线 + 铆钉 + 细刻圈（最后画，压住头部边缘） -->
-  <circle cx="120" cy="120" r="107" fill="none" stroke="#0a1122" stroke-width="7" opacity=".9"/>
-  <circle cx="120" cy="120" r="110" fill="none" stroke="url(#wmGold)" stroke-width="6"/>
-  <circle cx="120" cy="120" r="104.5" fill="none" stroke="url(#wmGoldRing2)" stroke-width="1.8" opacity=".95"/>
-  <circle cx="120" cy="120" r="100" fill="none" stroke="#8a7440" stroke-width=".8" opacity=".35"/>
-  <circle cx="120" cy="120" r="113.5" fill="none" stroke="url(#wmGold)" stroke-width="1.4" opacity=".8"/>
-  <g fill="url(#wmGold)">
-    <rect x="117.4" y="1.6" width="5.2" height="7" rx="2.4"/>
-    <rect x="117.4" y="231.4" width="5.2" height="7" rx="2.4"/>
-    <rect x="1.6" y="117.4" width="7" height="5.2" rx="2.4"/>
-    <rect x="231.4" y="117.4" width="7" height="5.2" rx="2.4"/>
-  </g>
-  <g fill="#8a7440" opacity=".8">
-    <circle cx="120" cy="14.5" r="1.6"/>
-    <circle cx="120" cy="225.5" r="1.6"/>
-    <circle cx="14.5" cy="120" r="1.6"/>
-    <circle cx="225.5" cy="120" r="1.6"/>
-  </g>
-</svg>
-
+        <div class="hero-mark">
+          <!-- FIN-08：首页大标识改用生产资产（月夜狼冠母版直拷的 SVG，可编辑矢量），
+               不再在页面里维护第二份狼头。局中顶栏与手机端引用同一份文件。 -->
+          <img class="hero-emblem" src="assets/brand/wolf-emblem.svg" alt="月夜狼冠纹章" width="120" height="120">
         </div>
         <div class="hero-text">
           <p class="hero-kicker" data-i18n="app.kicker">月夜集会 · 村人闭眼，狼人睁眼</p>
           <h1 id="app-title" data-i18n="app.title">🐺 AI 狼人杀</h1>
           <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
-          <ul class="hero-facts" id="hero-facts"></ul>
         </div>
         <button class="btn ghost small hero-lang" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
         <button class="btn ghost small hero-codex" id="btn-codex" data-i18n="codex.entry">📖 角色图鉴</button>
@@ -285,130 +102,192 @@
     </header>
 
     <div class="setup-scroll">
-      <div class="setup-grid">
-        <!-- 左列：① API 配置 + ② 板子 -->
-        <div class="setup-col">
-        <!-- API 配置 -->
-        <div class="card" id="card-api">
-          <!-- 编号走 CSS 的 attr(data-no) 伪元素：data-i18n 会整块替换 textContent，写子元素会被抹掉 -->
-          <h2 data-no="①" data-i18n="api.title">API 配置</h2>
-          <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
-          <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
-          <label><span data-i18n="api.modelFast">快速任务模型（留空 = 与主模型相同）</span><input id="cfg-modelfast" placeholder="留空则与上面一致"></label>
-          <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
-          <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
-          <div class="hint" id="cfg-channels"></div>
-          <div class="btnrow">
-            <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
-            <button class="btn ghost small" id="btn-probe" type="button">探测并发额度</button>
-          </div>
-          <div class="row2">
-            <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
-            <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
-          </div>
-          <label><span data-i18n="api.pace">节奏档位（一次设定思考强度 / 反思频率 / 上下文预算）</span>
-            <select id="cfg-pace"></select></label>
-          <div class="hint" id="cfg-pace-hint"></div>
-          <div class="row2">
-            <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
-              <select id="cfg-effort">
-                <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
-                <option value="medium" data-i18n="api.effortMedium">中档 medium（默认，平衡速度与质量）</option>
-                <option value="high" data-i18n="api.effortHigh">最高 high（最慢，实测单条发言平均等 100s+）</option>
-              </select></label>
-            <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
-              <select id="cfg-fasteffort">
-                <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
-                <option value="medium" data-i18n="api.fastEffortMedium">中档 medium</option>
-                <option value="high" data-i18n="api.fastEffortHigh">最高 high</option>
-              </select></label>
-          </div>
-          <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>
-            <input id="cfg-budget" type="number" step="1000" min="3000"></label>
-          <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> <span data-i18n="api.cacheControl">给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</span></label>
-          <label class="checkline"><input id="cfg-keepalive" type="checkbox"> <span data-i18n="api.keepAlive">复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可</span></label>
-          <div class="btnrow">
-            <button class="btn" id="btn-save-config" data-i18n="common.save">保存配置</button>
-            <button class="btn ghost" id="btn-test-config" data-i18n="common.test">测试连接</button>
-            <span id="cfg-test-result" class="hint"></span>
-          </div>
-        </div>
-
-        <!-- 玩家 -->
-        <div class="card" id="card-players">
-          <h2 data-no="③" data-i18n="players.title">玩家</h2>
-          <!-- 玩家档案（PROF-01）：本机多档案，切换不换 API 配置；对局创建时把归属固化到所选档案 -->
-          <div class="profile-strip" id="profile-strip">
-            <label class="profile-pick"><span class="profile-label">👤 我的档案</span>
-              <select id="profile-select" title="对局将归属到该档案（战绩/笔记/经验池按档案隔离）"></select>
-            </label>
-            <button class="btn ghost small" id="btn-profile-manage" type="button">管理档案…</button>
-          </div>
-          <div class="mode-picker">
-            <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
-            <label class="mode-card"><input type="radio" name="mode" value="watch"> <span class="mode-body"><b data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</b></span></label>
-          </div>
-          <div id="play-options">
-            <div class="row2">
-              <label><span data-i18n="players.seat">我的座位</span>
-                <select id="my-seat"></select>
-              </label>
-              <label><span data-i18n="players.name">我的昵称</span><input id="my-name" value="我" maxlength="12"></label>
+      <!-- ======== 首页第一屏：档案 / 继续上局 / 开始新局 / 次级入口（FIN-04 §8.1） ======== -->
+      <div class="home-hero" id="home-hero">
+        <div class="home-cols">
+          <div class="home-main">
+            <!-- 当前档案：复用 state.profiles / state.profileId 体系（本机玩家档案，无登录概念） -->
+            <div class="home-profile" id="home-profile">
+              <span class="home-avatar" id="home-avatar" aria-hidden="true">👤</span>
+              <span class="home-who">
+                <b id="home-nick">…</b>
+                <span class="hint">本机玩家档案 · 战绩 / 笔记 / 经验按档案隔离</span>
+              </span>
+              <button class="btn ghost small" id="btn-profiles-entry" type="button">管理档案…</button>
             </div>
-            <div class="hint" id="seat-hint"></div>
+
+            <!-- 继续上局：有可恢复局时显示（模式 / 阶段 / 保存时间来自 checkResume）；无可恢复局给空态 -->
+            <div id="resume-box" class="hidden card home-card">
+              <h2 data-i18n="resume.title">发现进行中的对局</h2>
+              <div class="btnrow">
+                <button class="btn primary" id="btn-resume" data-i18n="resume.continue">▶ 继续对局</button>
+                <button class="btn ghost" id="btn-discard" data-i18n="resume.discard">放弃并清除</button>
+              </div>
+            </div>
+            <div id="resume-empty" class="home-card home-empty hidden">
+              <p class="hint">没有进行中的对局。点「开始游戏」直接开一局，或先在下方「开局设置」里调整板子与规则。</p>
+            </div>
+
+            <!-- 主行动区：开始按钮 + 确认要素行（这一局是什么）+ 费用说明 -->
+            <div class="home-cta">
+              <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
+              <span class="hint">Mock 试玩不调用 API、完全免费；真实对局按你配置的模型服务商计费。</span>
+              <span class="hint setup-warn" id="setup-warn" role="status"></span>
+            </div>
+            <ul class="hero-facts" id="hero-facts"></ul>
+            <div class="setup-summary" id="setup-summary"></div>
+            <span class="hint" id="setup-error"></span>
           </div>
-          <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
-          <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
-          <div id="ai-names" class="ai-names"></div>
-          <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button><a class="btn ghost" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a></div>
-          <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
-          <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
-        </div>
 
-        </div><!-- /左列 -->
-
-        <!-- 右列：② 板子 + ④ 规则。
-             卡片按**实测高度**配平（API 1081 / 规则 1333 / 板子 613 / 玩家 725）：
-             {API+玩家=1806} 与 {板子+规则=1946} 差 140px，是四种分法里最平的；
-             原来的 {API+板子} 与 {规则+玩家} 差 364px，左下角会空出一大片。
-             编号走行主序（左上→右上→左下→右下），所以左列是 ① 与 ③、右列是 ② 与 ④。 -->
-        <div class="setup-col">
-        <!-- 板子 -->
-        <div class="card" id="card-board">
-          <h2 data-no="②" data-i18n="board.title">板子</h2>
-          <label><span data-i18n="board.template">模板</span>
-            <select id="board-template"></select>
-          </label>
-          <div id="board-editor" class="board-editor"></div>
-          <div class="hint" id="board-total"></div>
+          <!-- 次级入口行：低频资料与设置不占第一屏主体 -->
+          <nav class="home-side" aria-label="资料与设置入口">
+            <button class="btn ghost home-entry" id="entry-codex" type="button">🎴 角色图鉴</button>
+            <a class="btn ghost home-entry" href="ai-cast.html" target="_blank" rel="noopener">🤖 AI 来客名册 ↗</a>
+            <button class="btn ghost home-entry" id="entry-rulebook" type="button">📖 规则书</button>
+            <button class="btn ghost home-entry" id="entry-settings" type="button">⚙ 开局设置 · 模型与密钥</button>
+          </nav>
         </div>
-
-        <!-- 规则开关 -->
-        <div class="card" id="card-rules">
-          <h2 data-no="④"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
-          <div id="rules-editor"></div>
-        </div>
-        </div><!-- /右列 -->
       </div>
-    </div>
 
-    <div class="setup-actions">
-      <div class="setup-actions-inner">
-        <div class="setup-summary" id="setup-summary"></div>
-        <span class="hint" id="setup-error"></span>
-        <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
+      <!-- ======== 开局设置区：分组折叠，默认在首屏之下（FIN-04 §8.2/8.3） ======== -->
+      <div class="setup-section" id="setup-section">
+        <div class="setup-grid">
+          <!-- 左列：① 板子 + ② 玩家 + ③ 规则 -->
+          <div class="setup-col">
+            <h2 class="group-head">游戏默认偏好 <span class="hint">开局后板子与规则固定，中途不可修改</span></h2>
+
+            <!-- 板子 -->
+            <div class="card" id="card-board">
+              <h2 data-no="①" data-i18n="board.title">板子</h2>
+              <label><span data-i18n="board.template">模板</span>
+                <select id="board-template"></select>
+              </label>
+              <div id="board-editor" class="board-editor"></div>
+              <div class="hint" id="board-total"></div>
+            </div>
+
+            <!-- 玩家 -->
+            <div class="card" id="card-players">
+              <h2 data-no="②" data-i18n="players.title">玩家</h2>
+              <!-- 玩家档案（PROF-01）：本机多档案，切换不换 API 配置；对局创建时把归属固化到所选档案 -->
+              <div class="profile-strip" id="profile-strip">
+                <label class="profile-pick"><span class="profile-label">👤 我的档案</span>
+                  <select id="profile-select" title="对局将归属到该档案（战绩/笔记/经验池按档案隔离）"></select>
+                </label>
+                <button class="btn ghost small" id="btn-profile-manage" type="button">管理档案…</button>
+              </div>
+              <div class="mode-picker">
+                <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
+                <label class="mode-card"><input type="radio" name="mode" value="watch"> <span class="mode-body"><b data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</b></span></label>
+              </div>
+              <div id="play-options">
+                <div class="row2">
+                  <label><span data-i18n="players.seat">我的座位</span>
+                    <select id="my-seat"></select>
+                  </label>
+                  <label><span data-i18n="players.name">我的昵称</span><input id="my-name" value="我" maxlength="12"></label>
+                </div>
+                <div class="hint" id="seat-hint"></div>
+              </div>
+              <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
+              <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
+              <div id="ai-names" class="ai-names"></div>
+              <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button><a class="btn ghost" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a></div>
+              <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
+              <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
+            </div>
+
+            <!-- 规则开关（长表单默认折叠） -->
+            <div class="card" id="card-rules">
+              <h2 data-no="③"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
+              <details class="fold" id="rules-fold">
+                <summary>展开规则长表（夜晚顺序 / 自救 / 警长竞选…通常不用改）</summary>
+                <div id="rules-editor"></div>
+              </details>
+            </div>
+          </div><!-- /左列 -->
+
+          <!-- 右列：④ 模型与密钥 + 设备与数据 + 关于 -->
+          <div class="setup-col">
+            <h2 class="group-head">模型与密钥 <span class="hint">此设备共享 · 不随档案切换</span></h2>
+
+            <!-- API 配置 -->
+            <div class="card" id="card-api">
+              <!-- 编号走 CSS 的 attr(data-no) 伪元素：data-i18n 会整块替换 textContent，写子元素会被抹掉 -->
+              <h2 data-no="④" data-i18n="api.title">API 配置</h2>
+              <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
+              <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
+              <label><span data-i18n="api.modelFast">快速任务模型（留空 = 与主模型相同）</span><input id="cfg-modelfast" placeholder="留空则与上面一致"></label>
+              <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
+              <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
+              <div class="hint" id="cfg-channels"></div>
+              <div class="btnrow">
+                <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
+                <button class="btn ghost small" id="btn-probe" type="button">探测并发额度</button>
+              </div>
+              <div class="row2">
+                <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
+                <label><span data-i18n="api.maxTokens">最大回复 tokens（建议 16000，思考过程也计入）</span><input id="cfg-maxtokens" type="number" step="100" min="1000" title="思考模型的思考过程也计入此上限：太小会截断后反复重试"></label>
+              </div>
+              <label><span data-i18n="api.pace">节奏档位（一次设定思考强度 / 反思频率 / 上下文预算）</span>
+                <select id="cfg-pace"></select></label>
+              <div class="hint" id="cfg-pace-hint"></div>
+              <div class="row2">
+                <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
+                  <select id="cfg-effort">
+                    <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
+                    <option value="medium" data-i18n="api.effortMedium">中档 medium（默认，平衡速度与质量）</option>
+                    <option value="high" data-i18n="api.effortHigh">最高 high（最慢，实测单条发言平均等 100s+）</option>
+                  </select></label>
+                <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
+                  <select id="cfg-fasteffort">
+                    <option value="low" data-i18n="api.fastEffortLow">最低 low（默认，最丝滑）</option>
+                    <option value="medium" data-i18n="api.fastEffortMedium">中档 medium</option>
+                    <option value="high" data-i18n="api.fastEffortHigh">最高 high</option>
+                  </select></label>
+              </div>
+              <label><span data-i18n="api.budget">上下文预算 tokens（每次决策的记忆预算，超出自动裁剪；默认 12000）</span>
+                <input id="cfg-budget" type="number" step="1000" min="3000"></label>
+              <label class="checkline"><input id="cfg-cachecontrol" type="checkbox"> <span data-i18n="api.cacheControl">给 system 消息加显式缓存标记（部分服务商需要，默认走自动前缀缓存）</span></label>
+              <label class="checkline"><input id="cfg-keepalive" type="checkbox"> <span data-i18n="api.keepAlive">复用 HTTP 长连接（默认开：每次调用省一轮 TCP+TLS 握手，实测约 90ms）。若日志频繁出现「复用连接已失效（ECONNRESET）」，多半是防火墙/代理会掐断空闲连接，取消勾选即可</span></label>
+              <div class="btnrow">
+                <button class="btn" id="btn-save-config" data-i18n="common.save">保存配置</button>
+                <button class="btn ghost" id="btn-test-config" data-i18n="common.test">测试连接</button>
+                <span id="cfg-test-result" class="hint"></span>
+              </div>
+            </div>
+
+            <!-- 设备与数据：只列真实存在的能力 -->
+            <h2 class="group-head">设备与数据</h2>
+            <div class="card" id="card-device">
+              <div class="btnrow">
+                <button class="btn ghost" id="btn-device-profiles" type="button">👤 档案管理（导入 / 导出 / 战绩）</button>
+                <a class="btn ghost" href="/m/">📱 手机端页面</a>
+              </div>
+              <p class="hint" id="pairing-status"></p>
+            </div>
+
+            <!-- 关于 -->
+            <h2 class="group-head">关于</h2>
+            <div class="card" id="card-about">
+              <p class="hint" id="about-version"></p>
+              <p class="hint">本机单机运行：对局、笔记与档案只保存在这台电脑上；模型请求直接发往你配置的服务商地址。</p>
+            </div>
+          </div><!-- /右列 -->
+        </div>
       </div>
-    </div>
-    <div id="resume-box" class="hidden card">
-      <h2 data-i18n="resume.title">发现进行中的对局</h2>
-      <div class="btnrow"><button class="btn primary" id="btn-resume" data-i18n="resume.continue">继续对局</button>
-      <button class="btn ghost" id="btn-discard" data-i18n="resume.discard">放弃并清除</button></div>
     </div>
   </section>
 
-  <!-- ============ 游戏页 ============ -->
+  <!-- ============ 游戏页（FIN-05：左座位区 / 中发言 / 右笔记三栏） ============ -->
   <section id="screen-game" class="screen hidden">
     <header class="topbar game-top">
+      <div class="brand-mini">
+        <!-- FIN-08：局中顶栏小狼冠，同一份生产 SVG，缩为低干扰标识 -->
+        <img class="topbar-emblem" src="assets/brand/wolf-emblem.svg" alt="" width="22" height="22" aria-hidden="true">
+        <span id="topbar-profile" class="topbar-profile"></span>
+        <span id="conn-dot" class="conn-dot conn-off" title="连接状态"></span>
+      </div>
       <div class="game-status">
         <div class="day-plate">
           <span class="day-num" id="g-day">第0天</span>
@@ -420,38 +299,48 @@
       </div>
       <div class="top-actions">
         <span class="alive-meter" id="g-alive" title="存活人数"></span>
-        <button class="btn ghost" id="btn-notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记">📝</button>
-        <button class="btn ghost" id="btn-gear" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置">⚙</button>
+        <button class="btn ghost icon-btn" id="btn-notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记">📝</button>
+        <button class="btn ghost icon-btn" id="btn-gear" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置">⚙</button>
       </div>
     </header>
 
     <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
     <div id="paused-banner" class="paused-banner hidden"></div>
 
-    <main class="game-layout">
+    <main class="game-layout" id="game-layout">
       <div class="left-col">
         <div id="my-role-card" class="my-role hidden"></div>
+        <!-- 座位视图切换（FIN-05）：圆桌 / 列表共用同一份选择状态，切换不清草稿、不改目标、不重建对局 -->
+        <div class="seat-tabs" role="group" aria-label="座位视图切换">
+          <button class="chip sel" id="seat-view-ring" type="button" aria-pressed="true">⚪ 圆桌</button>
+          <button class="chip" id="seat-view-list" type="button" aria-pressed="false">☰ 列表</button>
+        </div>
         <aside id="seats" class="seats"></aside>
+        <aside id="seats-list" class="seats-list hidden" aria-label="座位列表"></aside>
       </div>
-      <section id="stream" class="stream" role="log" aria-live="polite" aria-label="对局事件流" data-i18n-aria="game.streamAria"></section>
+      <div class="stream-wrap">
+        <section id="stream" class="stream" role="log" aria-live="polite" aria-label="对局事件流" data-i18n-aria="game.streamAria"></section>
+        <!-- 历史阅读锚点（FIN-10）：用户上翻时不被新消息拉走，显示新增条数，点击回到最新 -->
+        <button id="new-msg-pill" class="new-msg-pill hidden" type="button">↓ 有新发言</button>
+      </div>
       <section id="coach-panel" class="coach-panel hidden"></section>
+
+      <!-- 私人笔记（FIN-05）：≥1280px 常驻右栏（.docked），1024–1279px 自动变抽屉。
+           与上帝抽屉同一套抽屉样式；Esc 关闭，焦点回顶栏按钮。 -->
+      <aside id="notes-drawer" class="god-drawer hidden" aria-label="私人笔记">
+        <div class="drawer-head">
+          <h3>📝 私人笔记</h3>
+          <button class="btn ghost small" id="btn-notes-close"><span>✕ 关闭</span></button>
+        </div>
+        <p class="hint">只是你自己的推理笔记，AI 完全看不到；按对局与档案保存。已公开的身份会自动覆盖你的推测。</p>
+        <div id="notes-list"></div>
+      </aside>
     </main>
 
     <footer id="actionbar" class="actionbar">
       <div id="pending-hint" class="pending-hint"></div>
       <div id="action-controls"></div>
     </footer>
-
-    <!-- 私人笔记抽屉（NOTE-03）：常显入口在顶栏 📝；列出全部座位标注，点击进编辑。
-         与上帝抽屉同一套抽屉样式；Esc 关闭，焦点回顶栏按钮。 -->
-    <aside id="notes-drawer" class="god-drawer hidden" aria-label="私人笔记">
-      <div class="drawer-head">
-        <h3>📝 私人笔记</h3>
-        <button class="btn ghost small" id="btn-notes-close"><span>✕ 关闭</span></button>
-      </div>
-      <p class="hint">只是你自己的推理笔记，AI 完全看不到；按对局与档案保存。已公开的身份会自动覆盖你的推测。</p>
-      <div id="notes-list"></div>
-    </aside>
 
     <aside id="god-drawer" class="god-drawer hidden">
       <div class="drawer-head">

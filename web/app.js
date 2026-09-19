@@ -15,6 +15,13 @@ const elText = (tag, cls, text) => { const d = document.createElement(tag); if (
  */
 const STREAM_DEAD_MS = 36000;
 
+/**
+ * 产品版本（「关于」分组展示用）。
+ * TODO(FIN-04)：版本单一来源是 release-version.json（FIN-11）；/api/meta 目前不下发版本字段，
+ * 前端先展示与 package.json / release-version.json 一致的常量，待轻量版本接口就绪后改为读取。
+ */
+const APP_VERSION = '1.5.2';
+
 const state = {
   meta: null,            // {roles, boards, ruleMeta, defaultRules}
   setup: { boardCounts: null, boardId: 'adv12', rules: null, mode: 'play', mySeat: 'random' },
@@ -37,9 +44,23 @@ const state = {
   anno: { rev: 0, seats: {}, loaded: false, gameId: null }, // 本局私人标注（NOTE-02/03）：{seat: V2标注}
   lastView: null,        // 最近一次玩家视图：圆桌要从"选目标"里重绘，必须留一份
   voteTally: {},         // 最近一次亮票的票数（画在圆桌圆心与座位角标上），阶段切换即清空
+  // ---- FIN-05/10：局中布局与增量渲染状态 ----
+  seatNodes: new Map(),  // 圆桌座位节点（以 seat 为 key 复用，发言字块更新不清空重建）
+  seatListNodes: new Map(), // 列表视图座位行节点（与圆桌共用同一份选择状态）
+  seatStructKey: '',     // 座位结构签名（人数/我的座位/视角）：变化才全量重建，否则逐座位补丁
+  seatView: 'ring',      // 座位视图：'ring' 圆桌 | 'list' 列表（记住选择，切换不清草稿）
+  notesCollapsed: false, // 右侧笔记栏在宽屏（≥1280）下是否被用户收起
+  newMsgCount: 0,        // 用户上翻历史期间累计的新发言条数（新消息胶囊）
+  modalReturnFocus: null,// 最上层模态的焦点来源（关闭后焦点回来源）
+  gameMeta: null,        // 懒加载的当前局元数据（mock 等，视图负载里没有；结算标识用）
+  lastErrSig: null,      // 上一条已提示的对局异常（避免每帧重复追加）
+  notesModeBound: false, // 笔记右栏的媒体查询监听只注册一次
 };
 
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
+
+// 座位视图偏好（FIN-05）：圆桌 / 列表记住上一次选择
+try { if (localStorage.getItem('ww_seat_view') === 'list') state.seatView = 'list'; } catch (_) { /* 隐私模式忽略 */ }
 
 async function api(method, url, body) {
   const res = await fetch(url, {
@@ -85,7 +106,8 @@ function showPairingGate() {
     } catch (e) { wrap.querySelector('#pair-err').textContent = e.message; }
   };
   wrap.querySelector('#pair-go').addEventListener('click', go);
-  wrap.querySelector('#pair-code').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  // 中文输入法 composing 期间 Enter 不触发（FIN-03）：数字键盘下罕见，但守卫必须一致
+  wrap.querySelector('#pair-code').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !isComposing(e)) go(); });
   wrap.querySelector('#pair-code').focus();
 }
 
@@ -109,7 +131,14 @@ async function initSetup() {
   renderKeyChannels(cfg);
 
   // LAN 模式下，本机设置页展示当前配对码（整改 SEC-01：手机等设备要用它配对）
+  // 「设备与数据」分组里的状态行也来自这同一个真实接口，不做假状态。
   api('GET', '/api/auth/pairing').then((p) => {
+    const pairStatus = $('#pairing-status');
+    if (pairStatus) {
+      pairStatus.textContent = p && p.needed && p.code
+        ? `🌐 局域网配对进行中：配对码 ${p.code}（${Math.ceil((p.expiresInMs || 0) / 1000)}s 内有效，手机打开本页需输入）`
+        : '局域网配对：当前无需配对，手机直接访问本服务地址即可。';
+    }
     if (!p || !p.needed || !p.code) return;
     const card = document.querySelector('#cfg-key') && document.querySelector('#cfg-key').closest('div');
     const tip = document.createElement('p');
@@ -153,6 +182,21 @@ async function initSetup() {
   if (codexBtn) codexBtn.addEventListener('click', openCodex);
   const codexBack = $('#btn-codex-back');
   if (codexBack) codexBack.addEventListener('click', closeCodex);
+  // ---- 首页次级入口与分组（FIN-04 §8.1/8.3）：都是真实存在的能力，不做假开关 ----
+  const entryCodex = $('#entry-codex');
+  if (entryCodex) entryCodex.addEventListener('click', openCodex);
+  const entryRulebook = $('#entry-rulebook');
+  if (entryRulebook) entryRulebook.addEventListener('click', openRulebook);
+  const entrySettings = $('#entry-settings');
+  if (entrySettings) entrySettings.addEventListener('click', () => {
+    const sec = $('#setup-section');
+    if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  const profilesEntry = $('#btn-profiles-entry');
+  if (profilesEntry) profilesEntry.addEventListener('click', openProfileManager);
+  const deviceProfiles = $('#btn-device-profiles');
+  if (deviceProfiles) deviceProfiles.addEventListener('click', openProfileManager);
+  renderAbout();
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
       localStorage.removeItem('ww_current');
@@ -202,7 +246,7 @@ async function initSetup() {
   // 冷启动较慢时用户会以为"点了没反应"。所以：开始按钮在 HTML 里就是 disabled，
   // 这里显式启用；整个加载窗口内的拦截由 index.html 最先执行的那段守卫负责（见 index.html 顶部）。
   const startBtn = $('#btn-start');
-  if (startBtn) startBtn.disabled = false;
+  if (startBtn) { startBtn.disabled = false; startBtn.removeAttribute('title'); } // 禁用原因（加载中）已解除
   // 顺手擦掉守卫写下的"正在加载配置"：按钮已经可用了，这行字留着会自相矛盾（截图里就挂着过）
   const errBox = $('#setup-error');
   if (errBox && /正在加载配置/.test(errBox.textContent || '')) errBox.textContent = '';
@@ -306,6 +350,17 @@ function renderSetupDigest() {
       + `<span class="ss-sep">|</span>${cleanBoard}`
       + (mock ? `<span class="ss-sep">|</span>${T('digest.mock')}` : `<span class="ss-sep">|</span>${escapeHtml(model)}`)
       + (paceTxt ? `<span class="ss-sep">|</span>${escapeHtml(paceTxt)}` : '');
+    // 开局确认要素（FIN-04 §8.2）：档案归属与模型状态要与板子/人数一样一眼可见
+    const profile = (state.profiles || []).find((p) => p.id === state.profileId);
+    if (profile) sum.innerHTML += `<span class="ss-sep">|</span>👤 ${escapeHtml(profile.nickname)}`;
+    const seatChoice = $('#my-seat') ? String($('#my-seat').value || '') : '';
+    if (seatChoice) sum.innerHTML += `<span class="ss-sep">|</span>座位 ${seatChoice === 'random' ? '随机' : seatChoice + ' 号'}`;
+  }
+  // 真实模式缺 Key 的显式警示（不阻止浏览，但按下开始时会被拦截并引导 —— 见 startGame）
+  const warn = $('#setup-warn');
+  if (warn) {
+    const hasKey = !!(state.cfg && state.cfg.hasKey);
+    warn.textContent = (!mock && !hasKey) ? '⚠ 真实模式需要先在下方「模型与密钥」保存 API Key（Mock 试玩不需要）。' : '';
   }
 }
 
@@ -613,6 +668,14 @@ async function startGame() {
   $('#setup-error').textContent = '';
   try {
     const total = boardTotal();
+    const useMock = $('#use-mock').checked;
+    // 真实模式缺 Key：客户端先行阻止并引导（服务端门禁保留，这里是更早、更有指向性的失败）
+    if (!useMock && state.cfg && !state.cfg.hasKey) {
+      $('#setup-error').textContent = '✗ 真实对局需要 API Key：请在下方「模型与密钥」填写并保存，或勾选「Mock 试玩」（免费，不调用 API）。';
+      const apiCard = $('#card-api');
+      if (apiCard) apiCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
     // 座位：'random'（默认，由服务端抽签）或明确的号数；纯观战没有人类座位
     const seatChoice = state.setup.mode === 'play' ? String($('#my-seat').value || 'random') : '0';
     const randomSeat = seatChoice === 'random';
@@ -630,7 +693,6 @@ async function startGame() {
         players.push({ name: (ni && ni.value.trim()) || `${i}号`, isHuman: false, personality: (pi && pi.value.trim()) || '' });
       }
     }
-    const useMock = $('#use-mock').checked;
     const body = {
       boardId: state.setup.boardId !== 'custom' ? state.setup.boardId : null,
       board: state.setup.boardId === 'custom' ? { ...state.setup.boardCounts } : undefined,
@@ -644,7 +706,8 @@ async function startGame() {
     if (state.profileId) body.profileId = state.profileId;
     persistSeatChoice(seatChoice);
     const created = await api('POST', '/api/games', body);
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat };
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!useMock };
+    state.gameMeta = { mock: !!useMock }; // 结算层要如实标注试玩局（视图负载里没有 mock 字段）
     localStorage.setItem('ww_current', JSON.stringify(state.game));
     if (created.mySeat) console.info(`[ww] 本局你在 ${created.mySeat} 号座位`);
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
@@ -674,8 +737,7 @@ async function checkResume() {
       // 曾经这里用的是 v.live —— 那是流式直播缓冲，没人在打字时就是 null，
       // 于是刷新页面会被误判成"不可恢复"，紧接着把用户令牌删掉（丢档）。
       if (v && !v.finished && v.started && v.inMemory) {
-        $('#resume-box').classList.remove('hidden');
-        $('#resume-box h2').textContent = `发现进行中的对局（继续上次的局）${await resumeDetail(g.gameId, v)}`;
+        showResumeCard('发现进行中的对局（继续上次的局）', await resumeDetail(g.gameId, v));
         return;
       }
       localStorage.removeItem('ww_current'); // 已结束/从未开局（设置页放弃的创建残留）→ 不恢复
@@ -691,8 +753,7 @@ async function checkResume() {
       const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
       if (v && !v.finished) {
         localStorage.setItem('ww_current', JSON.stringify(g));
-        $('#resume-box').classList.remove('hidden');
-        $('#resume-box h2').textContent = `发现进行中的对局（已自动找回会话）${await resumeDetail(g.gameId, v)}`;
+        showResumeCard('发现进行中的对局（已自动找回会话）', await resumeDetail(g.gameId, v));
         return;
       }
     }
@@ -700,21 +761,35 @@ async function checkResume() {
     const resumable = rows.find((r) => r.resumable);
     if (resumable) {
       localStorage.setItem('ww_resumable', JSON.stringify({ gameId: resumable.id, day: resumable.day }));
-      $('#resume-box').classList.remove('hidden');
-      $('#resume-box h2').textContent = `发现中断的对局（服务重启过）${await resumeDetail(resumable.id, resumable)}`;
       $('#btn-resume').textContent = '从断点恢复对局';
+      showResumeCard('发现中断的对局（服务重启过）', await resumeDetail(resumable.id, resumable));
       return;
     }
   } catch (_) { /* 无可恢复对局 */ }
+  // 无可恢复局：给明确空态（FIN-04 §8.1），而不是悄悄什么都不显示
+  const empty = $('#resume-empty');
+  if (empty) empty.classList.remove('hidden');
+}
+
+/** 首页「继续上局」卡：标题 + 模式/阶段/人数/保存时间（详情并入标题行，详情拿不到不影响恢复本身） */
+function showResumeCard(title, detail) {
+  const box = $('#resume-box');
+  if (!box) return;
+  box.classList.remove('hidden');
+  const empty = $('#resume-empty');
+  if (empty) empty.classList.add('hidden');
+  const h = box.querySelector('h2');
+  if (h) h.textContent = detail ? `${title}（${detail}）` : title;
 }
 
 /**
- * 恢复卡片的一句话详情（P3-a）：人数 / 第几天 / 试玩还是真局 / 存档多久前。
+ * 恢复卡片的一行详情（P3-a + FIN-04）：阶段 / 人数 / 试玩还是真局 / 存档多久前。
  * 以前卡片只有一句"发现对局"，玩家不知道要恢复的是哪一局什么状态（实测反馈）。
  * 拿不到详情不影响恢复 —— 详情是锦上添花，恢复本身不能因为它失败。
  */
 async function resumeDetail(gameId, v) {
   const parts = [];
+  if (v && v.phase) parts.push(PHASE_LABEL[v.phase] || v.phase);
   if (v && v.day != null) parts.push(`第 ${v.day} 天`);
   try {
     const { rows } = await api('GET', '/api/games');
@@ -728,7 +803,7 @@ async function resumeDetail(gameId, v) {
       }
     }
   } catch (_) { /* 详情拿不到就只显示已知信息 */ }
-  return parts.length ? `（${parts.join(' · ')}）` : '';
+  return parts.join(' · ');
 }
 
 async function resumeFromAnchor() {
@@ -773,16 +848,56 @@ function profileLabel(p) {
 
 function renderProfileStrip(err) {
   const sel = $('#profile-select');
-  if (!sel) return;
-  sel.innerHTML = '';
-  for (const p of state.profiles.filter((x) => !x.archivedAt)) {
-    const o = el('option', null, escapeHtml(profileLabel(p)));
-    o.value = p.id;
-    sel.appendChild(o);
+  if (sel) {
+    sel.innerHTML = '';
+    for (const p of state.profiles.filter((x) => !x.archivedAt)) {
+      const o = el('option', null, escapeHtml(profileLabel(p)));
+      o.value = p.id;
+      sel.appendChild(o);
+    }
+    if (state.profileId) sel.value = state.profileId;
+    sel.disabled = !state.profiles.length;
+    if (err) sel.title = err; else sel.removeAttribute('title');
   }
-  if (state.profileId) sel.value = state.profileId;
-  sel.disabled = !state.profiles.length;
-  if (err) sel.title = err; else sel.removeAttribute('title');
+  renderHomeProfile(err);
+  renderTopbarIdentity();
+}
+
+/** 首页第一屏的当前档案（FIN-04）：头像 emoji + 昵称，与管理入口并存；数据同源 state.profiles */
+function renderHomeProfile(err) {
+  const av = $('#home-avatar');
+  const nick = $('#home-nick');
+  const p = (state.profiles || []).find((x) => x.id === state.profileId);
+  if (av) av.textContent = p ? (AVATAR_EMOJI[p.avatarId] || '👤') : '👤';
+  if (nick) {
+    nick.textContent = p ? p.nickname : (err ? '档案加载失败' : '默认档案');
+    nick.title = err || '';
+  }
+}
+
+/** 局中顶栏：当前档案昵称（对局归属的可见标识，FIN-05） */
+function renderTopbarIdentity() {
+  const node = $('#topbar-profile');
+  if (!node) return;
+  const p = (state.profiles || []).find((x) => x.id === state.profileId);
+  node.textContent = p ? `${AVATAR_EMOJI[p.avatarId] || '👤'} ${p.nickname}` : '';
+  node.title = p ? '当前玩家档案（本局归属）' : '';
+}
+
+/** 「关于」分组：版本 + 运行端（不做假信息；能力只有实际接入的才展示） */
+function renderAbout() {
+  const box = $('#about-version');
+  if (!box) return;
+  box.textContent = `AI 狼人杀 · 版本 v${APP_VERSION} · 桌面浏览器端`;
+}
+
+/** 连接/保存状态点（FIN-05 顶栏）：ok=实时推送，warn=轮询降级，off=未连接 */
+function setConnDot(kind, text) {
+  const dot = $('#conn-dot');
+  if (!dot) return;
+  dot.classList.remove('conn-ok', 'conn-warn', 'conn-off');
+  dot.classList.add(`conn-${kind === 'ok' || kind === 'warn' ? kind : 'off'}`);
+  if (text) dot.title = text;
 }
 
 function onSelectProfile(pid) {
@@ -791,13 +906,16 @@ function onSelectProfile(pid) {
   const p = state.profiles.find((x) => x.id === pid);
   // 档案昵称作为"我的昵称"默认值（仍可手动改，不强制同步）
   if (p && $('#my-name') && !$('#my-name').dataset.touched) $('#my-name').value = p.nickname;
+  renderHomeProfile();
+  renderTopbarIdentity();
+  renderSetupDigest();
 }
 
 function openProfileManager() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>👤 玩家档案</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; });
+  close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
   body.appendChild(el('p', 'hint', '同一台设备可以建多个玩家档案：战绩、笔记、AI 经验池互相隔离。API 配置是整台设备共享的，切换档案不会改动它。档案的唯一身份是 UUID，昵称允许重名。'));
@@ -821,7 +939,7 @@ function openProfileManager() {
       return b;
     };
     if (!p.archivedAt) {
-      op('选用', async (pp) => { onSelectProfile(pp.id); $('#modal-root').innerHTML = ''; renderProfileStrip(); }, 'btn small');
+      op('选用', async (pp) => { onSelectProfile(pp.id); closeModal(); renderProfileStrip(); }, 'btn small');
     }
     op('编辑', (pp) => openProfileEdit(pp));
     // 战绩（PROF-03，§3.7）：懒加载，按桶分列（真实胜率分母只含真实+自然结束+可判定）
@@ -883,7 +1001,7 @@ function openProfileEdit(existing) {
   const wrap = el('div');
   const head = el('div', 'mhead', `<h2>${existing ? '编辑档案' : '新建档案'}</h2>`);
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; openProfileManager(); });
+  close.addEventListener('click', () => { closeModal(); openProfileManager(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
 
@@ -921,7 +1039,7 @@ function openProfileEdit(existing) {
         onSelectProfile(r.profile.id);
       }
       await loadProfiles();
-      $('#modal-root').innerHTML = '';
+      closeModal();
       openProfileManager();
     } catch (e) {
       if (e.message.includes('409') || /已被其他窗口|revision/i.test(e.message)) err.textContent = '档案刚被别处修改过（另一窗口？），请关闭后重开再试';
@@ -956,7 +1074,7 @@ function openProfileImport() {
       const r = await api('POST', '/api/profiles/import', { package: pkg });
       await loadProfiles();
       onSelectProfile(r.profileId);
-      $('#modal-root').innerHTML = '';
+      closeModal();
       renderProfileStrip();
       openProfileManager();
       alert(`导入完成：${r.imported} 局已归入新档案`);
@@ -976,11 +1094,127 @@ function enterGameScreen() {
   state.anno = { rev: 0, seats: {}, loaded: false, gameId: state.game.gameId };
   try { state.tags = JSON.parse(localStorage.getItem(`ww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#stream').innerHTML = '';
-  $('#btn-gear').addEventListener('click', openGearMenu);
-  $('#btn-notes').addEventListener('click', toggleNotesDrawer);
-  $('#btn-notes-close').addEventListener('click', toggleNotesDrawer);
+  // FIN-10：座位结构作废（换局/人数可能变化），首次渲染全量重建，之后逐座位补丁
+  state.seatNodes = new Map();
+  state.seatListNodes = new Map();
+  state.seatStructKey = '';
+  state.newMsgCount = 0;
+  state.lastErrSig = null;
+  hideNewMsgPill();
+  bindGameChrome();
+  applySeatView();
+  applyNotesMode();
+  renderTopbarIdentity();
+  loadGameMeta(); // 结算层要如实标注试玩/真实（视图负载里没有 mock 字段）
   initAnnotations(); // NOTE-03/05：拉取本局标注 + 旧 ww_tags_ 一次性迁移
   startPolling();
+}
+
+/**
+ * 顶栏与布局的交互只绑一次：重复 enterGameScreen（恢复/重进）不得叠加监听，
+ * 否则一次点击触发多次 toggle（FIN-10「重复进入不叠加提交」的桌面半边）。
+ */
+function bindGameChrome() {
+  const once = (sel, fn) => {
+    const n = $(sel);
+    if (n && !n.dataset.bound) { n.dataset.bound = '1'; n.addEventListener('click', fn); }
+  };
+  once('#btn-gear', openGearMenu);
+  once('#btn-notes', toggleNotesDrawer);
+  once('#btn-notes-close', toggleNotesDrawer);
+  once('#seat-view-ring', () => setSeatView('ring'));
+  once('#seat-view-list', () => setSeatView('list'));
+  const stream = $('#stream');
+  if (stream && !stream.dataset.scrollBound) {
+    stream.dataset.scrollBound = '1';
+    // 历史阅读锚点（FIN-10）：滚回底部即清除"新发言"计数
+    stream.addEventListener('scroll', () => {
+      if (streamNearBottom(stream)) hideNewMsgPill();
+    }, { passive: true });
+  }
+  const pill = $('#new-msg-pill');
+  if (pill && !pill.dataset.bound) {
+    pill.dataset.bound = '1';
+    pill.addEventListener('click', () => {
+      scrollBottomInstant($('#stream'));
+      hideNewMsgPill();
+    });
+  }
+  if (!state.notesModeBound) {
+    state.notesModeBound = true;
+    if (window.matchMedia) {
+      try {
+        matchMedia('(min-width: 1280px)').addEventListener('change', applyNotesMode);
+      } catch (_) { /* 老 WebView 无 addEventListener 版本：跳过动态切换，刷新后生效 */ }
+    }
+  }
+}
+
+/** 座位视图切换（FIN-05）：纯显示层切换 —— 不清笔记草稿、不改已选目标、不重新建局 */
+function applySeatView() {
+  const ring = $('#seats');
+  const list = $('#seats-list');
+  const isList = state.seatView === 'list';
+  if (ring) ring.classList.toggle('hidden', isList);
+  if (list) list.classList.toggle('hidden', !isList);
+  const bRing = $('#seat-view-ring');
+  const bList = $('#seat-view-list');
+  if (bRing) { bRing.classList.toggle('sel', !isList); bRing.setAttribute('aria-pressed', String(!isList)); }
+  if (bList) { bList.classList.toggle('sel', isList); bList.setAttribute('aria-pressed', String(isList)); }
+}
+
+function setSeatView(view) {
+  if (view !== 'ring' && view !== 'list') return;
+  state.seatView = view;
+  try { localStorage.setItem('ww_seat_view', view); } catch (_) { /* 隐私模式忽略 */ }
+  applySeatView();
+  if (state.lastView) updateSeats(state.lastView); // 新视图立刻带上当前目标/票数状态
+}
+
+/** 笔记右栏模式（FIN-05）：≥1280px 常驻右栏（.docked），更窄时回到既有抽屉机制 */
+function notesDocked() { return !!(window.matchMedia && matchMedia('(min-width: 1280px)').matches); }
+
+function applyNotesMode() {
+  const d = $('#notes-drawer');
+  if (!d) return;
+  if (notesDocked()) {
+    d.classList.add('docked');
+    $('#screen-game').classList.toggle('notes-collapsed', !!state.notesCollapsed);
+    d.classList.toggle('hidden', !!state.notesCollapsed);
+  } else {
+    d.classList.remove('docked');
+    $('#screen-game').classList.remove('notes-collapsed');
+    d.classList.add('hidden'); // 抽屉模式默认收起，由顶栏 📝 打开
+  }
+  if (!d.classList.contains('hidden')) renderNotesList();
+}
+
+function toggleNotesDrawer() {
+  const d = $('#notes-drawer');
+  if (notesDocked()) {
+    // 常驻右栏模式：📝 按钮 = 收起/展开右栏
+    state.notesCollapsed = !state.notesCollapsed;
+    applyNotesMode();
+    return;
+  }
+  const opening = d.classList.contains('hidden');
+  $('#god-drawer').classList.add('hidden'); // 两个抽屉互斥
+  d.classList.toggle('hidden');
+  if (opening) renderNotesList();
+}
+
+/** 当前局的元数据（mock 等）：视图负载里没有，结算层要如实标注，懒加载一次并缓存 */
+async function loadGameMeta() {
+  if (!state.game) return;
+  if (state.gameMeta && state.gameMeta.gameId === state.game.gameId) return;
+  try {
+    const { rows } = await api('GET', '/api/games');
+    const r = (rows || []).find((x) => x.id === state.game.gameId);
+    state.gameMeta = r ? { gameId: r.id, mock: !!r.mock, seats: r.seats || null } : { gameId: state.game.gameId, mock: !!state.game.mock };
+  } catch (_) {
+    state.gameMeta = { gameId: state.game && state.game.gameId, mock: !!(state.game && state.game.mock) };
+  }
+  if (state.view && state.view.finished) renderCoach(state.view); // 迟到的元数据补一次结算标识
 }
 
 /**
@@ -991,7 +1225,7 @@ function openGearMenu() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>⚙ 设置</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; });
+  close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
   const list = el('div', 'gear-list');
@@ -1010,7 +1244,7 @@ function openGearMenu() {
   items.forEach(([label, fn], i) => {
     const b = el('button', 'gear-item' + (i === items.length - 1 ? '' : ''), label);
     if (/结束本局/.test(label)) b.classList.add('danger');
-    b.addEventListener('click', () => { $('#modal-root').innerHTML = ''; fn(); });
+    b.addEventListener('click', () => { closeModal(); fn(); });
     list.appendChild(b);
   });
   body.appendChild(list);
@@ -1089,7 +1323,7 @@ function openLegacyPendingPrompt(pending) {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>🏷 旧标记待确认</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; });
+  close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
   body.appendChild(el('p', 'hint', '以下座位的旧版标记无法自动并入你的笔记（该座位的候选与备注已满）。旧数据仍保留在本机，不会丢失；请选择编辑并入或显式丢弃：'));
@@ -1104,7 +1338,7 @@ function openLegacyPendingPrompt(pending) {
     const ops = el('div', 'pm-ops');
     const edit = el('button', 'btn ghost small', '编辑并入');
     edit.addEventListener('click', () => {
-      $('#modal-root').innerHTML = '';
+      closeModal();
       openTagModal(Number(seat)); // 编辑保存成功后该座位即并入；失败/取消则仍留在待确认记录里
     });
     const drop = el('button', 'btn small danger', '丢弃旧标记');
@@ -1114,7 +1348,7 @@ function openLegacyPendingPrompt(pending) {
         if (Object.keys(pending).length) localStorage.setItem(`ww_tags_${state.game.gameId}`, JSON.stringify(pending));
         else localStorage.removeItem(`ww_tags_${state.game.gameId}`);
       } catch (_) {}
-      $('#modal-root').innerHTML = '';
+      closeModal();
       if (Object.keys(pending).length) openLegacyPendingPrompt(pending);
     });
     ops.append(edit, drop);
@@ -1162,7 +1396,7 @@ function saveAnnotations(seat, entry) {
           const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
           state.anno.rev = r.revision;
           state.anno.seats = r.annotations.seats || {};
-          $('#modal-root').innerHTML = '';
+          closeModal();
           try {
             await saveAnnotations(seat, keep); // 以最新 revision 重放这一座位的修改
           } catch (_) { alert('合并保存仍失败，请稍后重试'); }
@@ -1172,7 +1406,7 @@ function saveAnnotations(seat, entry) {
           const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
           state.anno.rev = r.revision;
           state.anno.seats = r.annotations.seats || {};
-          $('#modal-root').innerHTML = '';
+          closeModal();
           updateSeats(state.view);
         });
         br.append(merge, discard);
@@ -1234,7 +1468,7 @@ function openTagModal(seat) {
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => {
     if (dirty() && !confirm('有未保存的修改，确定放弃？')) return;
-    $('#modal-root').innerHTML = '';
+    closeModal();
   });
   head.appendChild(close);
   const body = el('div', 'mbody');
@@ -1323,7 +1557,7 @@ function openTagModal(seat) {
     });
     save.disabled = true;
     const okFlag = await saveAnnotations(seat, entry);
-    if (okFlag) $('#modal-root').innerHTML = '';
+    if (okFlag) closeModal();
     else save.disabled = false;
   });
   br.appendChild(save);
@@ -1332,7 +1566,7 @@ function openTagModal(seat) {
     clr.addEventListener('click', async () => {
       save.disabled = true;
       const okFlag = await saveAnnotations(seat, A_.normalizeSeatAnnotation({}));
-      if (okFlag) $('#modal-root').innerHTML = '';
+      if (okFlag) closeModal();
       else save.disabled = false;
     });
     br.appendChild(clr);
@@ -1342,15 +1576,7 @@ function openTagModal(seat) {
   openModal(wrap);
 }
 
-// ---------------- 笔记抽屉（NOTE-03）：常显入口顶栏 📝 ----------------
-function toggleNotesDrawer() {
-  const d = $('#notes-drawer');
-  const opening = d.classList.contains('hidden');
-  $('#god-drawer').classList.add('hidden'); // 两个抽屉互斥
-  d.classList.toggle('hidden');
-  if (opening) renderNotesList();
-}
-
+// ---------------- 笔记列表（NOTE-03）：抽屉/右栏共用同一份渲染 ----------------
 function renderNotesList() {
   const box = $('#notes-list');
   if (!box) return;
@@ -1395,12 +1621,12 @@ async function terminateGame() {
       try { await poll(); } catch (_) {}
       if (state.view && state.view.finished) break;
     }
-    $('#pending-hint').textContent = '对局已终止，全场亮牌 ✓';
+    setHint('对局已终止，全场亮牌 ✓', 'ok');
     // 终止是终态：立刻把"当前对局"从 localStorage 里清掉。
     // 以前只在 poll 循环里根据 view.finished 清，而中止那一刻循环可能已经 break 了，
     // 于是残留下来，下次进页面会被当成活局恢复（P2-c，桌面/移动双端都复现过）。
     localStorage.removeItem('ww_current');
-  } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+  } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
 }
 
 function backHome() {
@@ -1418,6 +1644,7 @@ function startPolling() {
 function startPollFallback() {
   if (state.pollTimer) return;
   state.pollTimer = setInterval(poll, 1200);
+  setConnDot('warn', '实时推送不可用，已转为轮询（每 30s 自动尝试恢复推送）');
   // 降级不是终态（P2-a）：每 30s 试着重连推送，成功就撤掉提示、回到推送通道。
   // 原来一旦降级就再也回不去，横幅还会永久挂在事件流里。
   if (!state.streamRetry) {
@@ -1467,6 +1694,7 @@ function startStream() {
       }
     }, 4000);
     setStreamStatus(null); // 连上了就把降级提示撤掉（P2-a）
+    setConnDot('ok', '实时推送已连接（对局自动保存于服务端）');
     return true;
   } catch (e) {
     stopStream();
@@ -1538,6 +1766,40 @@ async function poll() {
  * 事件按 seq 游标过滤：SSE 断线重连时服务端可能重发旧事件（浏览器会带 Last-Event-ID，
  * 服务端也会据此续传），过滤后天然幂等，同一句话不会被画两遍。
  */
+/** 同帧合并刷新（FIN-10）：一帧内到达的多份视图只触发一次完整重绘，避免每个字块都跑一遍布局 */
+let renderQueued = false;
+function scheduleGameRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  const run = () => { renderQueued = false; renderGameFrame(); };
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run);
+  else setTimeout(run, 16);
+}
+
+function renderGameFrame() {
+  const P = state.playerView || null;
+  const G = state.godView || null;
+  const primary = state.godMode ? (G || P) : P;
+  if (!primary || !state.view) return;
+  const mine = P || primary; // 与"我"相关的面板（角色卡/操作栏/暂停横幅）需要玩家视角
+  state.view.me = mine.me;
+  state.view.pending = mine.pending;
+  updateHeader(state.view);
+  updateSeats(state.godMode ? { ...primary, me: mine.me } : primary);
+  renderMyRoleCard(mine);
+  updateActionbar(mine);
+  updatePausedBanner(mine);
+  updateMemoryChip(mine);
+  renderLive(state.godMode ? state.view : primary);
+  maybeShowRole(mine);
+  renderCoach(state.view); // 终局后的教练面板（含"正在生成/失败原因"）
+  if (mine.error && state.lastErrSig !== mine.error) {
+    state.lastErrSig = mine.error;
+    appendSys(`⚠️ 对局异常：${mine.error}`);
+  }
+  if (state.godMode) renderGodStats();
+}
+
 function applyView(pv, gv) {
   if (pv) state.playerView = pv;
   if (gv) state.godView = gv;
@@ -1551,26 +1813,14 @@ function applyView(pv, gv) {
   const godEvents = fresh(G && G.events, state.godAfter);
   if ((state.godMode ? state.godAfter : state.playerAfter) === 0) {
     $('#stream').innerHTML = '';
+    hideNewMsgPill();
     state.seatNames = {};
     for (const p of primary.players) state.seatNames[p.seat] = p.name;
   }
   appendEvents(state.godMode ? godEvents : playerEvents);
   if (godEvents.length) state.godAfter = Math.max(state.godAfter || 0, ...godEvents.map((e) => e.seq));
   if (playerEvents.length) state.playerAfter = Math.max(state.playerAfter || 0, ...playerEvents.map((e) => e.seq));
-  const mine = P || primary; // 与"我"相关的面板（角色卡/操作栏/暂停横幅）需要玩家视角
-  state.view.me = mine.me;
-  state.view.pending = mine.pending;
-  updateHeader(state.view);
-  updateSeats(state.godMode ? { ...primary, me: mine.me } : primary);
-  renderMyRoleCard(mine);
-  updateActionbar(mine);
-  updatePausedBanner(mine);
-  updateMemoryChip(mine);
-  renderLive(state.godMode ? state.view : primary);
-  maybeShowRole(mine);
-  renderCoach(state.view); // 终局后的教练面板（含"正在生成/失败原因"）
-  if (mine.error) appendSys(`⚠️ 对局异常：${mine.error}`);
-  if (state.godMode) renderGodStats();
+  scheduleGameRender();
 }
 
 /**
@@ -1650,6 +1900,7 @@ function renderLive(v) {
   if (!l && !vp) {
     if (node0) node0.remove();
     state.liveSig = '';
+    state.liveSkel = '';
     state.liveSince = null; // 下一段直播重新计时，避免沿用上一个人的秒表
     return;
   }
@@ -1659,7 +1910,7 @@ function renderLive(v) {
   const secs = l ? Math.max(0, Math.round((Date.now() - liveSince(`${l.seat}|${l.task || ''}`)) / 1000))
     : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
   const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
-  if (node0 && state.liveSig === sig) return; // 1.2s 轮询且内容未增长：不重建 DOM
+  if (node0 && state.liveSig === sig) return; // 内容未增长：不写 DOM
   state.liveSig = sig;
   let node = node0;
   if (!node) {
@@ -1667,23 +1918,37 @@ function renderLive(v) {
     node.id = 'live-typing';
     $('#stream').appendChild(node);
   }
+  // FIN-10 流式更新当前节点：骨架（谁在说/什么形态）只在一段直播开始或形态变化时重建；
+  // 之后每个字块只写正文与计数两个文本节点，不重建整个气泡。
   const who = l ? seatLabel(l.seat) : '';
-  const counter = vp
-    ? ` <span class="typing-tag">已思考 ${vp.done}/${vp.total} · ${secs}s</span>`
-    : (l ? ` <span class="typing-tag">已 ${secs}s${canSeeText && text ? ` · ${text.length} 字` : ''}${state.godMode && reasoning ? ` · 思考 ${reasoning.length} 字` : ''}</span>` : '');
-  if (!l) {
-    let only = '<div class="meta"><span class="typing-tag">… 正在收集投票</span></div>';
-    only += `<div class="typing-body muted">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
-    node.innerHTML = only;
-    autoScroll();
-    return;
+  const skelSig = `${l ? l.seat : 0}|${l ? l.task : ''}|${canSeeText ? 1 : 0}|${state.godMode ? 1 : 0}|${vp && !l ? 1 : 0}`;
+  if (state.liveSkel !== skelSig || !node.firstChild) {
+    state.liveSkel = skelSig;
+    if (vp && !l) {
+      node.innerHTML = '<div class="meta"><span class="typing-tag">… 正在收集投票</span></div>'
+        + '<div class="typing-body muted"><span class="typing-count"></span></div>';
+    } else {
+      const tag = canSeeText && text ? '✍ 正在发言' : (text ? '… 正在决策' : '… 正在思考');
+      node.innerHTML = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span> <span class="typing-count"></span></div>`
+        + (canSeeText
+          ? '<div class="typing-body"><span class="typing-text"></span><span class="caret"></span></div>'
+          : '<div class="typing-body muted">正在思考…<span class="caret"></span></div>')
+        + (state.godMode ? '<div class="typing-reason" hidden></div>' : '');
+    }
   }
-  const tag = canSeeText && text ? '✍ 正在发言' : (text ? '… 正在决策' : '… 正在思考');
-  let html = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span>${counter}</div>`;
-  if (canSeeText && text) html += `<div class="typing-body">${escapeHtml(text)}<span class="caret"></span></div>`;
-  else html += '<div class="typing-body muted">正在思考…<span class="caret"></span></div>';
-  if (state.godMode && reasoning) html += `<div class="typing-reason">💭 ${escapeHtml(reasoning.slice(-400))}</div>`;
-  node.innerHTML = html;
+  const count = node.querySelector('.typing-count');
+  if (count) {
+    count.textContent = vp && !l
+      ? `已思考 ${vp.done}/${vp.total} · ${secs}s`
+      : `已 ${secs}s${canSeeText && text ? ` · ${text.length} 字` : ''}${state.godMode && reasoning ? ` · 思考 ${reasoning.length} 字` : ''}`;
+  }
+  const tNode = node.querySelector('.typing-text');
+  if (tNode) tNode.textContent = text;
+  const rNode = node.querySelector('.typing-reason');
+  if (rNode) {
+    if (state.godMode && reasoning) { rNode.hidden = false; rNode.textContent = `💭 ${reasoning.slice(-400)}`; }
+    else rNode.hidden = true;
+  }
   autoScroll();
 }
 
@@ -1789,13 +2054,54 @@ function closeCodex() {
 
 function codexVisible() { return !$('#screen-codex').classList.contains('hidden'); }
 
-function autoScroll() {
-  const s = $('#stream');
-  const nearBottom = s.scrollHeight - s.scrollTop - s.clientHeight < 160;
-  if (nearBottom) s.scrollTop = s.scrollHeight;
+/** 用户是否停留在事件流底部附近（锚点判定，FIN-10）：在底部才自动跟随，上翻时不被拉走 */
+function streamNearBottom(s) { return s.scrollHeight - s.scrollTop - s.clientHeight < 160; }
+
+/**
+ * 程序化滚底必须**瞬时**完成：#stream 带 scroll-behavior:smooth，平滑动画期间
+ * "距底部距离"始终非零 —— 下一帧就会误判"用户在上翻"，跟随永久脱钩（实测 227 条误报）。
+ */
+function scrollBottomInstant(s) {
+  if (!s) return;
+  const prev = s.style.scrollBehavior;
+  s.style.scrollBehavior = 'auto';
+  s.scrollTop = s.scrollHeight;
+  s.style.scrollBehavior = prev;
 }
 
-function appendSys(text) { $('#stream').appendChild(el('div', 'sysline', text)); autoScroll(); }
+function autoScroll() {
+  const s = $('#stream');
+  if (s && streamNearBottom(s)) scrollBottomInstant(s);
+}
+
+/**
+ * 追加一条流内容（FIN-10 历史阅读锚点）：
+ * 用户本来就在底部 → 跟随滚到最新；上翻阅读时 → 不拉走视线，累计条数显示"有 N 条新发言"胶囊。
+ */
+function pushStream(node) {
+  if (!node) return;
+  const s = $('#stream');
+  if (!s) return;
+  const follow = streamNearBottom(s);
+  s.appendChild(node);
+  if (follow) scrollBottomInstant(s);
+  else { state.newMsgCount = (state.newMsgCount || 0) + 1; showNewMsgPill(); }
+}
+
+function showNewMsgPill() {
+  const pill = $('#new-msg-pill');
+  if (!pill) return;
+  pill.textContent = `↓ 有 ${state.newMsgCount} 条新发言`;
+  pill.classList.remove('hidden');
+}
+
+function hideNewMsgPill() {
+  state.newMsgCount = 0;
+  const pill = $('#new-msg-pill');
+  if (pill) pill.classList.add('hidden');
+}
+
+function appendSys(text) { pushStream(el('div', 'sysline', text)); }
 
 /**
  * 推送通道状态条（P2-a）：唯一且会被更新的一个元素。
@@ -1805,6 +2111,7 @@ function appendSys(text) { $('#stream').appendChild(el('div', 'sysline', text));
 function setStreamStatus(text) {
   let n = document.getElementById('stream-status');
   if (!text) { if (n) n.remove(); return; }
+  setConnDot('warn', text); // 连接/保存状态点（FIN-05 顶栏）与流内状态条同源
   if (!n) { n = el('div', 'sysline'); n.id = 'stream-status'; $('#stream').appendChild(n); }
   if (n.textContent !== text) n.textContent = text;
   autoScroll();
@@ -1843,14 +2150,11 @@ function showNightWait() {
 async function playNightBroadcast() {
   if (state.nightPlaying) return;
   state.nightPlaying = true;
-  const stream = $('#stream');
   while (state.nightQueue && state.nightQueue.length) {
     const e = state.nightQueue.shift();
     state.lastNightStep = e.data; // 调试面板/观战要看"当前第几步"，随播放推进
     clearNightWait();
-    const node = renderEventNode(e);
-    if (node) stream.appendChild(node);
-    autoScroll();
+    pushStream(renderEventNode(e));
     await new Promise((r) => setTimeout(r, NIGHT_BROADCAST_GAP));
   }
   state.nightPlaying = false;
@@ -1877,19 +2181,19 @@ window.__nightInfo = () => ({
  */
 function flushNightBroadcast() {
   if (!state.nightQueue || !state.nightQueue.length) return;
-  const stream = $('#stream');
   for (const e of state.nightQueue) {
     state.lastNightStep = e.data;
-    const node = renderEventNode(e);
-    if (node) stream.appendChild(node);
+    pushStream(renderEventNode(e));
   }
   state.nightQueue = [];
   clearNightWait();
-  autoScroll();
 }
 
 function appendEvents(events) {
   const stream = $('#stream');
+  // 先记锚点再批量追加：避免每条消息各读一次 scrollHeight（大历史导入时的布局抖动）
+  const wasNearBottom = stream ? streamNearBottom(stream) : true;
+  let added = 0;
   for (const e of events) {
     // 夜晚步骤先入队、不直接渲染：节奏归客户端管（旧版直接渲染 → 并发后几条同时冒出来）
     if (e.type === 'night_step') {
@@ -1906,10 +2210,14 @@ function appendEvents(events) {
     }
     if (e.type === 'vote_reveal' || e.type === 'phase' || e.type === 'game_over') state.voteProgress = null;
     const node = renderEventNode(e);
-    if (node) stream.appendChild(node);
+    if (node && stream) { stream.appendChild(node); added++; }
+  }
+  // 追加完统一处理一次滚动/锚点（FIN-10）：在底部才跟随，上翻时只累计"新发言"条数
+  if (added && stream) {
+    if (wasNearBottom) scrollBottomInstant(stream);
+    else { state.newMsgCount = (state.newMsgCount || 0) + added; showNewMsgPill(); }
   }
   if (state.nightQueue && state.nightQueue.length) playNightBroadcast();
-  autoScroll();
 }
 
 function renderEventNode(e) {
@@ -2103,12 +2411,19 @@ function updateHeader(v) {
   }
 }
 
+/**
+ * 座位渲染（FIN-10 增量化）：以 seat 为 key 复用节点。
+ * 结构签名（人数/我的座位/视角）变化才全量重建（换局/人数变化兜底）；
+ * 其余更新逐座位算签名打补丁 —— 发言字块、直播帧绝不清空重建全部座位，
+ * 未变化的座位节点保持同一引用（头像 <img> 不重复创建，不再每帧重排）。
+ */
 function updateSeats(v) {
   const box = $('#seats');
+  if (!box || !Array.isArray(v.players)) return;
   const mySeat = v.me ? v.me.seat : 0;
   // 同步上帝面板的座位下拉（AI 座位）
   const godSel = $('#god-seat');
-  if (state.godMode && Number(godSel.dataset.count) !== v.players.length) {
+  if (state.godMode && godSel && Number(godSel.dataset.count) !== v.players.length) {
     godSel.dataset.count = v.players.length;
     godSel.innerHTML = '';
     for (const p of v.players) {
@@ -2117,33 +2432,40 @@ function updateSeats(v) {
       godSel.appendChild(el('option', null, `${p.seat}号 ${escapeHtml(p.name)}`)).value = p.seat;
     }
   }
-  // ---- 圆桌 ----
-  box.innerHTML = '';   // 必须先清空：漏掉这一行会每帧追加一张新桌子，圆心文字叠成一团（踩过）
-  //
-  // 布局：座位按椭圆均分，坐标在 JS 里算好写成 --x/--y（百分比）。
-  // 为什么不用 CSS 的 sin()/cos()：部分 WebView 没有这两个函数，退化后所有座位会叠在圆心
-  // （"看着像只有一个人"这种错最难查）。JS 算一次、CSS 只负责摆，任何环境都是同一张桌子。
-  //
-  // 圆心放"阶段牌"：天数/阶段/轮到谁/亮票票数。视线中心是当前状态，而不是一片空白。
   state.lastView = v;
+  const structKey = `${v.players.length}|${mySeat}|${state.godMode ? 1 : 0}`;
+  if (structKey !== state.seatStructKey || !state.seatNodes.size) buildSeatStructure(v, structKey);
+  updateRingCore(v);
   const liveSeat = v.live && v.live.seat ? Number(v.live.seat) : 0;
-  const tally = state.voteTally || {};
-  const voteChips = Object.entries(tally)
-    .filter(([, k]) => k > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 6)
-    .map(([s, k]) => `<span>${s === '0' ? '弃票' : s + '号'} ${k}</span>`);
+  const ctx = {
+    mySeat, liveSeat,
+    me: v.me || null,
+    n: v.players.length || 1,
+    tally: state.voteTally || {},
+    portraits: window.AICast ? window.AICast.assignPortraits(v.players) : new Map(),
+  };
+  v.players.forEach((p, i) => {
+    patchSeatNode(state.seatNodes.get(p.seat), p, i, ctx);
+    patchSeatRow(state.seatListNodes.get(p.seat), p, i, ctx);
+  });
+}
+
+/** 结构变化时的全量重建（人数变化 / 换局 / 视角切换）：一次搭好骨架，之后只打补丁 */
+function buildSeatStructure(v, structKey) {
+  state.seatStructKey = structKey;
+  state.seatNodes = new Map();
+  state.seatListNodes = new Map();
+  const box = $('#seats');
+  box.innerHTML = '';
+  const list = $('#seats-list');
+  if (list) list.innerHTML = '';
+  // 布局：座位按椭圆均分，坐标在 JS 里算好写成 --x/--y（百分比）。
+  // 为什么不用 CSS 的 sin()/cos()：部分 WebView 没有这两个函数，退化后所有座位会叠在圆心。
   const ring = el('div', 'ring-stage');
   ring.appendChild(ringSvg());
   const core = el('div', 'ring-core');
-  const aliveNow = v.players.filter((p) => p.alive).length;
-  const liveWho = liveSeat ? `${liveSeat}号 ${escapeHtml(String(state.seatNames[liveSeat] || '').trim())} 正在行动…` : '';
-  core.innerHTML = `<div class="rc-phase">第${v.day}天</div>`
-    + `<div class="rc-sub">${escapeHtml(PHASE_LABEL[v.phase] || v.phase || '')} · 存活 ${aliveNow}/${v.players.length}</div>`
-    + (liveWho ? `<div class="rc-live">${liveWho}</div>` : '')
-    + (voteChips.length ? `<div class="rc-vote">${voteChips.join('')}</div>` : '');
+  core.id = 'ring-core';
   ring.appendChild(core);
-
   const n = v.players.length || 1;
   const portraits = window.AICast ? window.AICast.assignPortraits(v.players) : new Map();
   v.players.forEach((p, i) => {
@@ -2151,52 +2473,214 @@ function updateSeats(v) {
     const ang = (-90 + (360 / n) * i) * Math.PI / 180;
     const rad = n > 10 ? 43 : 40;
     const s = el('div', 'seat');
+    s.dataset.seat = p.seat;
     s.style.setProperty('--x', `${(Math.cos(ang) * rad).toFixed(2)}%`);
     s.style.setProperty('--y', `${(Math.sin(ang) * rad).toFixed(2)}%`);
-    s.dataset.seat = p.seat;
-    if (!p.alive) s.classList.add('dead');
-    if (p.seat === mySeat) s.classList.add('mine');
-    if (p.isSheriff) s.classList.add('sheriff');
-    // 当前正在行动/发言的人：让"轮到谁"一眼可见（这一条替代了原来那行"等待 5 号思考"的文字）
-    if (liveSeat && liveSeat === p.seat) s.classList.add('speaking');
-    // 选目标状态：可选的人给虚线环 + 手型；已选的给血红实环
-    const canPick = actionState.needTarget && actionState.candidates.includes(p.seat);
-    if (canPick) s.classList.add('targetable');
-    if (canPick && actionState.target === p.seat) s.classList.add('picked');
-    // 已知身份：头像**右下角**一枚小徽记（整块文字 chip 会把座位撑高 18px，12 人局直接撞成一团；
-    // 挂在 .snum 里面而不是座位外层，才不会压住下面的昵称），同时把头像圆染成阵营色。
-    const info = p.role ? roleInfo(p.role) : null;
-    const roleHtml = info
-      ? `<span class="role-chip" style="color:${info.color}" title="${info.emoji}${info.name}">${info.emoji}</span>` : '';
-    const badges = `${p.isSheriff ? '<span class="badge" title="警长">👑</span>' : ''}${p.lostVote ? '<span class="badge" title="失去投票权">🚫</span>' : ''}`;
-    const votes = tally[p.seat];
-    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}><span class="seat-index">${p.seat}</span>${badges}${roleHtml}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
-      + `<span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>`;
-    if (window.AICast) window.AICast.decorate(s.querySelector('.snum'), portraits.get(p.seat));
-    s.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
-    // 点座位 = 选目标（与手机端同一套交互：目标类任务时座位本身就是按钮）
-    if (canPick) s.addEventListener('click', () => selectTarget(p.seat));
-    // 身份标注（NOTE-03）：常显入口（不能只在 hover 出现——计划 §4.3），与目标选择是兄弟节点并阻止冒泡
-    const taggable = v.me && !state.godMode && p.alive && !p.revealed && p.seat !== v.me.seat;
-    if (taggable) {
-      const btn = el('button', 'btn small ghost tag-btn', '🏷');
-      btn.title = '编辑 TA 的私人笔记（AI 看不到）';
-      btn.setAttribute('aria-label', `${p.seat}号私人笔记`);
-      btn.addEventListener('click', (ev) => { ev.stopPropagation(); openTagModal(p.seat); });
-      s.appendChild(btn);
-    }
-    // 我的标注角标：倾向/候选摘要（真身公开后 role-chip 已展示真身，不重复）
-    if (!p.role) {
-      const sum = seatTagSummary(p.seat);
-      if (sum) {
-        const chip = el('span', 'role-chip tag-chip', `🏷${escapeHtml(sum)}`);
-        chip.title = '我的私人笔记摘要（AI 看不到）';
-        s.appendChild(chip);
-      }
-    }
+    s.tabIndex = 0; // 键盘选目标（V07）：Enter/Space 与点击同一入口 selectTarget
+    s.setAttribute('role', 'button');
+    const snum = el('span', 'snum');
+    snum.appendChild(elText('span', 'seat-index', String(p.seat)));
+    const bSheriff = el('span', 'badge badge-sheriff hidden', '👑');
+    bSheriff.title = '警长';
+    const bLost = el('span', 'badge badge-lost hidden', '🚫');
+    bLost.title = '失去投票权';
+    const roleChip = el('span', 'role-chip role-live hidden');
+    const votes = el('span', 'votecount hidden');
+    snum.append(bSheriff, bLost, roleChip, votes);
+    // 肖像只在结构重建/改名时创建一次（decorate 会 <img> 前插，逐帧调用会反复重建图片）
+    if (window.AICast) window.AICast.decorate(snum, portraits.get(p.seat));
+    const sname = el('span', 'sname');
+    // 身份标注（NOTE-03）：常显入口（不能只在 hover 出现——计划 §4.3），与目标选择是兄弟节点
+    const tagBtn = el('button', 'btn small ghost tag-btn', '🏷');
+    tagBtn.type = 'button';
+    tagBtn.title = '编辑 TA 的私人笔记（AI 看不到）';
+    tagBtn.setAttribute('aria-label', `${p.seat}号私人笔记`);
+    tagBtn.addEventListener('click', (ev) => { ev.stopPropagation(); openTagModal(p.seat); });
+    const tagChip = el('span', 'role-chip tag-chip hidden');
+    s.append(snum, sname, tagBtn, tagChip);
+    // 点座位 = 选目标（selectTarget 自带候选范围校验：非选目标阶段是无害 no-op）
+    s.addEventListener('click', () => selectTarget(p.seat));
+    s.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !isComposing(e)) { e.preventDefault(); selectTarget(p.seat); }
+    });
     ring.appendChild(s);
+    state.seatNodes.set(p.seat, s);
+    // ---- 列表视图行（与圆桌共用数据与选择状态；整行宽 ≥64×72，是合规的目标区） ----
+    const row = el('div', 'seat-row');
+    row.dataset.seat = p.seat;
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    const rnum = el('span', 'row-num');
+    rnum.appendChild(elText('span', 'seat-index', String(p.seat)));
+    const rrole = el('span', 'role-chip role-live hidden');
+    rnum.appendChild(rrole);
+    const rmain = el('div', 'row-main');
+    const rname = el('span', 'row-name');
+    const rmeta = el('span', 'row-meta hint');
+    rmain.append(rname, rmeta);
+    const rvotes = el('span', 'votecount hidden');
+    const rtag = el('button', 'btn small ghost tag-btn', '🏷');
+    rtag.type = 'button';
+    rtag.title = '编辑 TA 的私人笔记（AI 看不到）';
+    rtag.setAttribute('aria-label', `${p.seat}号私人笔记`);
+    rtag.addEventListener('click', (ev) => { ev.stopPropagation(); openTagModal(p.seat); });
+    const rsum = el('span', 'role-chip tag-chip hidden');
+    row.append(rnum, rmain, rvotes, rtag, rsum);
+    row.addEventListener('click', () => selectTarget(p.seat));
+    row.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' || e.key === ' ') && !isComposing(e)) { e.preventDefault(); selectTarget(p.seat); }
+    });
+    if (list) list.appendChild(row);
+    state.seatListNodes.set(p.seat, row);
   });
   box.appendChild(ring);
+}
+
+/** 圆心阶段牌：天数/阶段/存活/正在行动/亮票票数（内容签名不变则不动 DOM） */
+function updateRingCore(v) {
+  const core = document.getElementById('ring-core');
+  if (!core) return;
+  const liveSeat = v.live && v.live.seat ? Number(v.live.seat) : 0;
+  const aliveNow = v.players.filter((p) => p.alive).length;
+  const tally = state.voteTally || {};
+  const voteChips = Object.entries(tally)
+    .filter(([, k]) => k > 0)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([s, k]) => `<span>${s === '0' ? '弃票' : s + '号'} ${k}</span>`);
+  const liveWho = liveSeat ? `${liveSeat}号 ${escapeHtml(String(state.seatNames[liveSeat] || '').trim())} 正在行动…` : '';
+  const sig = `${v.day}|${v.phase}|${aliveNow}|${v.players.length}|${liveWho}|${voteChips.join('')}`;
+  if (core.dataset.sig === sig) return;
+  core.dataset.sig = sig;
+  core.innerHTML = `<div class="rc-phase">第${v.day}天</div>`
+    + `<div class="rc-sub">${escapeHtml(PHASE_LABEL[v.phase] || v.phase || '')} · 存活 ${aliveNow}/${v.players.length}</div>`
+    + (liveWho ? `<div class="rc-live">${liveWho}</div>` : '')
+    + (voteChips.length ? `<div class="rc-vote">${voteChips.join('')}</div>` : '');
+}
+
+/** 逐座位补丁：签名没变就零 DOM 写入；变了只改类别/文本/徽记，不重建节点 */
+function patchSeatNode(node, p, i, ctx) {
+  if (!node) return;
+  const canPick = actionState.needTarget && actionState.candidates.includes(p.seat);
+  // 身份标注入口（NOTE-03）：本人视角且座位未公开、未出局、不是自己
+  const taggable = !!(ctx.me && !state.godMode && p.alive && !p.revealed && p.seat !== ctx.me.seat);
+  const meSeat = ctx.mySeat || 0;
+  const info = p.role ? roleInfo(p.role) : null;
+  const sum = !p.role ? seatTagSummary(p.seat) : null;
+  const votes = ctx.tally[p.seat];
+  const sig = [p.name, p.alive ? 1 : 0, p.isSheriff ? 1 : 0, p.lostVote ? 1 : 0, p.role || '',
+    votes || 0, ctx.liveSeat === p.seat ? 1 : 0, canPick ? 1 : 0,
+    canPick && actionState.target === p.seat ? 1 : 0, taggable ? 1 : 0, i, sum || '', info ? info.id : ''].join('|');
+  if (node.dataset.sig === sig) return;
+  node.dataset.sig = sig;
+  node.classList.toggle('dead', !p.alive);
+  node.classList.toggle('mine', p.seat === meSeat);
+  node.classList.toggle('sheriff', !!p.isSheriff);
+  node.classList.toggle('speaking', !!ctx.liveSeat && ctx.liveSeat === p.seat);
+  node.classList.toggle('targetable', canPick);
+  node.classList.toggle('picked', canPick && actionState.target === p.seat);
+  // 顺序/人数变化时同步圆桌坐标（补丁路径也要能落位，不必整桌重建）
+  if (node.dataset.idx !== String(i)) {
+    node.dataset.idx = String(i);
+    const n = ctx.n || 1;
+    const ang = (-90 + (360 / n) * i) * Math.PI / 180;
+    const rad = n > 10 ? 43 : 40;
+    node.style.setProperty('--x', `${(Math.cos(ang) * rad).toFixed(2)}%`);
+    node.style.setProperty('--y', `${(Math.sin(ang) * rad).toFixed(2)}%`);
+  }
+  const snum = node.querySelector('.snum');
+  if (snum) {
+    // 已知身份：头像圆染阵营色 + 右下角徽记
+    if (info) snum.style.setProperty('border-color', info.color); else snum.style.removeProperty('border-color');
+    const idx = snum.querySelector('.seat-index');
+    if (idx) idx.textContent = p.seat;
+    const bS = snum.querySelector('.badge-sheriff');
+    if (bS) bS.classList.toggle('hidden', !p.isSheriff);
+    const bL = snum.querySelector('.badge-lost');
+    if (bL) bL.classList.toggle('hidden', !p.lostVote);
+    const rc = snum.querySelector('.role-live');
+    if (rc) {
+      rc.classList.toggle('hidden', !info);
+      if (info) { rc.textContent = info.emoji; rc.style.setProperty('color', info.color); rc.title = `${info.emoji}${info.name}`; }
+    }
+    const vt = snum.querySelector('.votecount');
+    if (vt) { vt.classList.toggle('hidden', !votes); vt.textContent = votes ? String(votes) : ''; }
+    // 肖像按名字绑定：名字变了才重画，避免逐帧重建 <img>
+    const portrait = ctx.portraits ? ctx.portraits.get(p.seat) : null;
+    if (window.AICast && portrait && snum.dataset.portrait !== portrait.id) {
+      const old = snum.querySelector('.ai-portrait');
+      if (old) old.remove();
+      snum.classList.remove('portrait-ready');
+      window.AICast.decorate(snum, portrait);
+    }
+  }
+  const sname = node.querySelector('.sname');
+  if (sname) sname.textContent = `${p.name}${p.seat === meSeat ? '（你）' : ''}`;
+  const tb = node.querySelector('.tag-btn');
+  if (tb) tb.classList.toggle('hidden', !taggable);
+  const tc = node.querySelector('.tag-chip');
+  if (tc) {
+    tc.classList.toggle('hidden', !sum);
+    if (sum) { tc.textContent = `🏷${sum}`; tc.title = '我的私人笔记摘要（AI 看不到）'; }
+  }
+  node.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
+}
+
+/** 列表行补丁：与圆桌同一份签名逻辑（共用选择状态），两视图互为镜像 */
+function patchSeatRow(row, p, i, ctx) {
+  if (!row) return;
+  const canPick = actionState.needTarget && actionState.candidates.includes(p.seat);
+  const taggable = !!(ctx.me && !state.godMode && p.alive && !p.revealed && p.seat !== ctx.me.seat);
+  const meSeat = ctx.mySeat || 0;
+  const info = p.role ? roleInfo(p.role) : null;
+  const sum = !p.role ? seatTagSummary(p.seat) : null;
+  const votes = ctx.tally[p.seat];
+  const sig = ['r', p.name, p.alive ? 1 : 0, p.isSheriff ? 1 : 0, p.lostVote ? 1 : 0, p.role || '',
+    votes || 0, ctx.liveSeat === p.seat ? 1 : 0, canPick ? 1 : 0,
+    canPick && actionState.target === p.seat ? 1 : 0, taggable ? 1 : 0, sum || '', info ? info.id : ''].join('|');
+  if (row.dataset.sig === sig) return;
+  row.dataset.sig = sig;
+  row.classList.toggle('dead', !p.alive);
+  row.classList.toggle('mine', p.seat === meSeat);
+  row.classList.toggle('speaking', !!ctx.liveSeat && ctx.liveSeat === p.seat);
+  row.classList.toggle('targetable', canPick);
+  row.classList.toggle('picked', canPick && actionState.target === p.seat);
+  const rnum = row.querySelector('.row-num');
+  if (rnum) {
+    const idx = rnum.querySelector('.seat-index');
+    if (idx) idx.textContent = p.seat;
+    if (info) rnum.style.setProperty('border-color', info.color); else rnum.style.removeProperty('border-color');
+    const rc = rnum.querySelector('.role-live');
+    if (rc) {
+      rc.classList.toggle('hidden', !info);
+      if (info) { rc.textContent = info.emoji; rc.style.setProperty('color', info.color); rc.title = `${info.emoji}${info.name}`; }
+    }
+  }
+  const rname = row.querySelector('.row-name');
+  if (rname) rname.textContent = `${p.name}${p.seat === meSeat ? '（你）' : ''}`;
+  const rmeta = row.querySelector('.row-meta');
+  if (rmeta) {
+    const bits = [];
+    if (!p.alive) bits.push('已出局');
+    if (p.isSheriff) bits.push('👑 警长');
+    if (p.lostVote) bits.push('🚫 失去投票权');
+    if (info) bits.push(`${info.emoji} ${info.name}`);
+    if (ctx.liveSeat === p.seat) bits.push('正在行动…');
+    rmeta.textContent = bits.join(' · ');
+  }
+  const rv = row.querySelector('.votecount');
+  if (rv) { rv.classList.toggle('hidden', !votes); rv.textContent = votes ? String(votes) : ''; }
+  const rtb = row.querySelector('.tag-btn');
+  if (rtb) {
+    const taggable = !!(ctx.me && !state.godMode && p.alive && !p.revealed && p.seat !== ctx.me.seat);
+    rtb.classList.toggle('hidden', !taggable);
+  }
+  const rsum = row.querySelector('.tag-chip');
+  if (rsum) {
+    rsum.classList.toggle('hidden', !sum);
+    if (sum) { rsum.textContent = `🏷${sum}`; rsum.title = '我的私人笔记摘要（AI 看不到）'; }
+  }
+  row.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
 }
 
 /** 桌沿内侧的刻度盘（纯装饰）。
@@ -2381,8 +2865,8 @@ async function confirmDuel(v) {
   if (!window.confirm(`确定决斗 ${t} 号吗？`)) return;
   try {
     await api('POST', `/api/games/${state.game.gameId}/duel`, { token: state.game.playerToken, target: t });
-    $('#pending-hint').textContent = '⚔️ 决斗请求已提交，将在当前发言结束后的间隙生效…';
-  } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+    setHint('⚔️ 决斗请求已提交，将在当前发言结束后的间隙生效…', 'ok');
+  } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
 }
 
 function mountDuelBtn(v, box) {
@@ -2412,8 +2896,8 @@ async function confirmExplode(v) {
   } else if (!window.confirm('确定随时自爆？将公开狼人身份并立即进入黑夜（在当前发言结束后的间隙生效）。')) return;
   try {
     await api('POST', `/api/games/${g.gameId}/explode`, { token: g.playerToken, target });
-    $('#pending-hint').textContent = '🔮 自爆请求已提交，将在当前发言结束后的间隙生效…';
-  } catch (e) { $('#pending-hint').textContent = '✗ ' + e.message; }
+    setHint('🔮 自爆请求已提交，将在当前发言结束后的间隙生效…', 'ok');
+  } catch (e) { setHint('✗ ' + e.message, 'err'); }
 }
 
 function mountExplodeBtn(v, box) {
@@ -2483,17 +2967,34 @@ function pickedTarget(label) {
   return actionState.target;
 }
 
+/** 操作条提示（FIN-03 状态齐全）：成功/失败/等待各有可见状态，失败文案保留在输入不丢的前提下显示 */
+function setHint(text, kind) {
+  const hint = $('#pending-hint');
+  if (!hint) return;
+  hint.className = `pending-hint${kind ? ` ${kind}` : ''}`;
+  hint.textContent = text;
+}
+
 function confirmBtn(text, buildPayload) {
   const b = el('button', 'btn primary', text || '确认');
   b.addEventListener('click', async () => {
+    if (b.disabled) return; // 双击只产生一次业务提交
+    let payload;
     try {
-      const payload = buildPayload();
+      payload = buildPayload();
+    } catch (e) {
+      setHint(`✗ ${e.message}`, 'err');
+      return;
+    }
+    b.disabled = true; // 处理中：按钮禁用但宽度不变（.btn 保持 min-width/min-height）
+    try {
       await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
       $('#action-controls').innerHTML = '';
       $('#action-controls').dataset.task = '';
-      $('#pending-hint').textContent = '已提交 ✓';
+      setHint('已提交 ✓', 'ok');
     } catch (e) {
-      $('#pending-hint').textContent = `✗ ${e.message}`;
+      b.disabled = false; // 失败：恢复可点，输入不清空
+      setHint(`✗ ${e.message}`, 'err');
     }
   });
   return b;
@@ -2565,7 +3066,7 @@ function buildActionUI(v, p, box) {
       const btnRow = el('div', 'btnrow');
       btnRow.appendChild(confirmBtn('发言', () => ({ text: ta.value.trim() })));
       const skip = el('button', 'btn', '跳过本轮');
-      skip.addEventListener('click', () => submitSimple({ text: '' }));
+      skip.addEventListener('click', () => submitSimple({ text: '' }, skip));
       btnRow.appendChild(skip);
       box.appendChild(btnRow);
       break;
@@ -2645,7 +3146,7 @@ function buildActionUI(v, p, box) {
           try {
             await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: { antidote: true, poison: 0 } });
             $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
-          } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+          } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
         });
         box.appendChild(saveBtn);
       }
@@ -2661,7 +3162,7 @@ function buildActionUI(v, p, box) {
         try {
           await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: { antidote: false, poison: 0 } });
           $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
-        } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+        } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
       });
       box.appendChild(skip);
       break;
@@ -2670,8 +3171,8 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长竞选：是否上警？';
       const run = el('button', 'btn primary', '🎩 上警');
       const norun = el('button', 'btn', '不上警');
-      run.addEventListener('click', () => submitSimple({ run: true }));
-      norun.addEventListener('click', () => submitSimple({ run: false }));
+      run.addEventListener('click', () => submitSimple({ run: true }, run));
+      norun.addEventListener('click', () => submitSimple({ run: false }, norun));
       box.append(run, norun);
       break;
     }
@@ -2679,8 +3180,8 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长：决定今天发言方向';
       const cw = el('button', 'btn primary', '顺时针');
       const ccw = el('button', 'btn', '逆时针');
-      cw.addEventListener('click', () => submitSimple({ direction: 'cw' }));
-      ccw.addEventListener('click', () => submitSimple({ direction: 'ccw' }));
+      cw.addEventListener('click', () => submitSimple({ direction: 'cw' }, cw));
+      ccw.addEventListener('click', () => submitSimple({ direction: 'ccw' }, ccw));
       box.append(cw, ccw);
       break;
     }
@@ -2690,7 +3191,7 @@ function buildActionUI(v, p, box) {
       const btnRow = el('div', 'btnrow');
       btnRow.appendChild(confirmBtn('移交给该玩家', () => ({ target: pickedTarget('接任警长') })));
       const tear = el('button', 'btn danger', '撕毁警徽');
-      tear.addEventListener('click', () => submitSimple({ target: 0 }));
+      tear.addEventListener('click', () => submitSimple({ target: 0 }, tear));
       btnRow.appendChild(tear);
       box.appendChild(btnRow);
       break;
@@ -2719,20 +3220,25 @@ function buildActionUI(v, p, box) {
 
 async function wolfTalkAction(kind, text, ta) {
   try {
-    if (kind === 'say' && !text) { $('#pending-hint').textContent = '✗ 插话内容不能为空'; return; }
+    if (kind === 'say' && !text) { setHint('✗ 插话内容不能为空', 'err'); return; }
     const r = await api('POST', `/api/games/${state.game.gameId}/wolftalk`, { token: state.game.playerToken, kind, text });
     if (kind === 'say' && ta) ta.value = '';
-    $('#pending-hint').textContent = kind === 'say' ? '已发送 ✓'
-      : kind === 'extra' ? `已追加，当前 ${r.wolfTalk.rounds} 轮 ✓` : '已通知结束讨论 ✓';
-  } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+    setHint(kind === 'say' ? '已发送 ✓'
+      : kind === 'extra' ? `已追加，当前 ${r.wolfTalk.rounds} 轮 ✓` : '已通知结束讨论 ✓', 'ok');
+  } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
 }
 
-async function submitSimple(payload) {
+async function submitSimple(payload, btn) {
+  if (btn && btn.disabled) return; // 双击只产生一次业务提交
+  if (btn) btn.disabled = true;
   try {
     await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
     $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
-    $('#pending-hint').textContent = '已提交 ✓';
-  } catch (e) { $('#pending-hint').textContent = `✗ ${e.message}`; }
+    setHint('已提交 ✓', 'ok');
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    setHint(`✗ ${e.message}`, 'err');
+  }
 }
 
 // ---------------- 身份翻牌 ----------------
@@ -2757,8 +3263,17 @@ function maybeShowRole(v) {
 }
 
 // ---------------- 规则书 ----------------
+/**
+ * 模态纪律（FIN-03）：全页只允许一个最上层模态（openModal 先清空 modal-root）；
+ * 背景不接收点击（点遮罩关闭）与 Tab（焦点循环锁在弹窗内）；Esc 关闭最上层弹窗；
+ * 关闭后焦点回到打开弹窗的来源元素。openModal/closeModal 成对使用，页面里
+ * 不再直接 `modal-root.innerHTML = ''`（那会丢掉焦点归还）。
+ */
 function openModal(inner) {
   const root = $('#modal-root');
+  if (!state.modalReturnFocus && document.activeElement && document.activeElement !== document.body) {
+    state.modalReturnFocus = document.activeElement;
+  }
   root.innerHTML = '';
   const mask = el('div', 'modal-mask');
   const modal = el('div', 'modal');
@@ -2771,10 +3286,42 @@ function openModal(inner) {
     modal.appendChild(inner);
   }
   mask.appendChild(modal);
-  mask.addEventListener('click', (e) => { if (e.target === mask) root.innerHTML = ''; });
+  mask.addEventListener('click', (e) => { if (e.target === mask) closeModal(); });
+  modal.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusables = modal.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])');
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
   root.appendChild(mask);
   return modal;
 }
+
+/** 关闭最上层模态并把焦点还给来源。链式打开下一个弹窗时来源保持不变。 */
+function closeModal() {
+  const root = $('#modal-root');
+  if (root) root.innerHTML = '';
+  const src = state.modalReturnFocus;
+  state.modalReturnFocus = null;
+  if (src && typeof src.focus === 'function') { try { src.focus({ preventScroll: true }); } catch (_) { try { src.focus(); } catch (_) { /* 来源已移除 */ } }
+  }
+}
+
+// Esc：先关最上层模态，再关笔记抽屉（上帝面板语义是"关面板=退上帝视角"，保持原入口操作）
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const root = $('#modal-root');
+  if (root && root.children.length) { closeModal(); return; }
+  const notes = $('#notes-drawer');
+  if (notes && !notes.classList.contains('hidden') && !notesDocked()) toggleNotesDrawer();
+});
+
+// 中文输入法 composing 期间 Enter 不发送（FIN-03）：桌面端所有提交都走显式按钮，
+// 唯一的 Enter 快捷路径是配对码输入 —— 这里统一守卫，composing 中不触发。
+function isComposing(e) { return !!(e.isComposing || e.keyCode === 229); }
 
 /**
  * 规则书：正文来自 web/rulebook.js（与手机端同一份内容与渲染器）。
@@ -2784,7 +3331,7 @@ function openRulebook() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#modal-root').innerHTML = ''; });
+  close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const tabs = el('div', 'tabs');
   const body = el('div', 'mbody');
@@ -2876,16 +3423,20 @@ function toggleGod() {
 }
 
 /**
- * 局后 AI 教练面板（P2-4）。
+ * 局后结算与复盘（P2-4 + FIN-04 §8.4 分层）。
  *
- * 只在终局后出现；**不自动触发**调用（要花一次 LLM 调用，由用户点），
+ * 首层（打开即见）：结束方式（自然结束/手动终止）、胜方、局别（Mock/真实/观战）、
+ *   本人角色与最终阵营、得分依据；Mock / 观战 / 平局如实标注，不伪装成正式胜败。
+ * 第二层（<details> 展开）：全员信息、时间线回看、个人标注入口、AI 复盘。
+ *
+ * AI 复盘**不自动触发**调用（要花一次 LLM 调用，由用户点），
  * 且必须一眼看出这段点评是 AI 写的还是规则生成的 —— 失败就明说原因，
  * 不做"看起来像 AI 点评、其实是模板"的静默降级。
  */
 function renderCoach(v) {
   const box = $('#coach-panel');
   if (!box) return;
-  // 复盘面板占一列：布局由 #screen-game.has-coach 决定（CSS 里就两条 grid 定义，不靠 JS 算宽）
+  // 复盘面板占中列下方：布局由 #screen-game.has-coach 决定（CSS grid，不靠 JS 算宽）
   const screen = document.getElementById('screen-game');
   if (!v || !v.finished) {
     box.classList.add('hidden'); box.innerHTML = ''; state.coachSig = null;
@@ -2894,15 +3445,15 @@ function renderCoach(v) {
   }
   const r = v.review || null;
   // 签名：内容没变就不重绘，否则每次视图更新都会把用户正在读的文本重建一遍
-  const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}|${v.day}|${(v.players || []).filter((p) => p.alive).length}`;
+  const sig = `${r ? r.status : 'none'}|${r ? r.mode || '' : ''}|${r ? (r.text || '').length : 0}|${r ? r.fallbackReason || '' : ''}|${v.day}|${(v.players || []).filter((p) => p.alive).length}|${v.winner || ''}|${state.gameMeta && state.gameMeta.mock ? 1 : 0}`;
   if (sig === state.coachSig) return;
   state.coachSig = sig;
   box.classList.remove('hidden');
-  if (screen) screen.classList.add('has-coach'); // 复盘面板出现时让出第三列
+  if (screen) screen.classList.add('has-coach'); // 复盘面板出现时让出中列下方
   box.innerHTML = '';
 
   const head = el('div', 'coach-head');
-  head.appendChild(el('h3', '', '🎓 AI 教练点评'));
+  head.appendChild(el('h3', '', '🏁 结算'));
   if (r && r.status === 'done') {
     const again = el('button', 'btn ghost small', r.mode === 'ai' ? '重新生成' : '用 AI 重新点评');
     again.addEventListener('click', () => requestCoach(true));
@@ -2910,48 +3461,94 @@ function renderCoach(v) {
   }
   box.appendChild(head);
 
-  // 本局速览：终局后这一列原本只有一颗按钮、大片留白。把"谁赢了/打了几天/还剩几人/我这局是什么"
-  // 摆在这里 —— 复盘时最先想知道的四件事，且全部来自服务端视图，不是推测。
-  const winners = { wolf: '🐺 狼人阵营获胜', good: '🕊 好人阵营获胜', third: '🎭 第三方获胜', draw: '🤝 平局（未分胜负）', none: '对局终止' };
+  // ---- 首层：结果速览（怎么结束的/谁赢/我是谁/我得分）----
+  const winners = { wolf: '🐺 狼人阵营获胜', good: '🕊 好人阵营获胜', third: '🎭 第三方获胜', draw: '🤝 平局（未分胜负）', none: '⏹ 对局终止' };
   const me = v.me || null;
+  const mock = !!(state.gameMeta && state.gameMeta.mock);
+  const spectate = !me || !me.role;
+  const endKind = v.winner === 'none' ? '手动终止（不计正式胜败）' : '自然结束（达成胜利条件）';
+  const info = me && me.role ? roleInfo(me.role) : null;
+  const myTeam = info ? info.team : null;
+  const outcome = !info ? (spectate ? '观战（不参与胜负）' : '—')
+    : v.winner === 'draw' ? '平局'
+      : v.winner === 'none' ? '—（终止局）'
+        : (myTeam === 'third' ? '随绑定对象' : ((myTeam === 'wolf') === (v.winner === 'wolf') ? '获胜 🏆' : '落败'));
+  const myScore = me && v.score && Array.isArray(v.score.rows) ? v.score.rows.find((row) => row.seat === me.seat) : null;
   const facts = [
+    `<div class="cs-row"><span>结束方式</span><b>${endKind}</b></div>`,
     `<div class="cs-row"><span>结果</span><b>${winners[v.winner] || (v.winner ? escapeHtml(String(v.winner)) : '—')}</b></div>`,
+    `<div class="cs-row"><span>局别</span><b>${mock ? 'Mock 试玩（不调用 API，不计正式战绩）' : '真实对局'}${spectate ? ' · 观战视角' : ''}</b></div>`,
     `<div class="cs-row"><span>天数</span><b>第 ${v.day} 天</b></div>`,
     `<div class="cs-row"><span>存活</span><b>${(v.players || []).filter((p) => p.alive).length} / ${(v.players || []).length}</b></div>`,
   ];
-  if (me && me.role) {
-    const info = roleInfo(me.role);
-    facts.push(`<div class="cs-row"><span>我的身份</span><b style="color:${info.color}">${info.emoji}${info.name}${me.alive ? '' : ' · 已出局'}</b></div>`);
+  if (info) {
+    facts.push(`<div class="cs-row"><span>我的身份</span><b style="color:${info.color}">${info.emoji}${info.name} · ${outcome}${me.alive ? '' : ' · 已出局'}</b></div>`);
+  }
+  if (myScore) {
+    facts.push(`<div class="cs-row"><span>我的得分</span><b>${myScore.score} 分</b></div>`);
+    facts.push(`<div class="cs-row"><span>得分依据</span><b class="cs-basis">${escapeHtml(String(v.score.title || '本局评分体系'))}</b></div>`);
   }
   const stat = el('div', 'coach-stat', facts.join(''));
   box.appendChild(stat);
 
+  // ---- 第二层：展开后的复盘详情 ----
+  const more = el('details', 'coach-more');
+  more.appendChild(el('summary', null, '展开复盘详情（全员信息 · 时间线 · 个人标注 · AI 复盘）'));
+
+  // 全员信息表
+  const table = el('div', 'coach-players');
+  table.appendChild(el('h4', null, '全员信息'));
+  table.appendChild(el('div', 'cp-row cp-head', '<span>座位</span><span>昵称</span><span>身份</span><span>状态</span><span>得分</span>'));
+  const rowsHtml = (v.players || []).slice().sort((a, b) => a.seat - b.seat).map((p) => {
+    const ri = p.role ? roleInfo(p.role) : null;
+    const sr = v.score && Array.isArray(v.score.rows) ? v.score.rows.find((x) => x.seat === p.seat) : null;
+    return `<div class="cp-row"><span class="cp-seat">${p.seat}号</span>`
+      + `<span class="cp-name">${escapeHtml(p.name)}${me && p.seat === me.seat ? '（你）' : ''}</span>`
+      + `<span class="cp-role"${ri ? ` style="color:${ri.color}"` : ''}>${ri ? `${ri.emoji}${ri.name}` : '未公开'}</span>`
+      + `<span class="cp-state">${p.alive ? '存活' : '出局'}</span>`
+      + `<span class="cp-score">${sr ? `${sr.score} 分` : ''}</span></div>`;
+  }).join('');
+  table.insertAdjacentHTML('beforeend', rowsHtml);
+  more.appendChild(table);
+
+  // 时间线回看 + 个人标注入口（复用现有流程，不重复发起付费生成）
+  const tools = el('div', 'btnrow');
+  const timelineBtn = el('button', 'btn ghost small', '⏮ 回看完整时间线');
+  timelineBtn.addEventListener('click', () => {
+    const s = $('#stream');
+    if (s) { s.scrollTop = 0; hideNewMsgPill(); }
+  });
+  tools.appendChild(timelineBtn);
+  const annoBtn = el('button', 'btn ghost small', '📝 我的标注');
+  annoBtn.addEventListener('click', () => toggleNotesDrawer());
+  tools.appendChild(annoBtn);
+  more.appendChild(tools);
+
+  // AI 复盘入口（已有结果优先读取；生成中状态可恢复；失败明确重试；页面切换/刷新不自动重复发起）
+  more.appendChild(el('h4', null, '🎓 AI 复盘'));
   if (!r) {
     const btn = el('button', 'btn', '让教练点评这一局');
     const row = el('div', 'btnrow');
     row.appendChild(btn);
-    box.append(row, el('div', 'hint', '会调用一次 AI（占用同一通道，约十几秒到一分钟）；点评会存档，重复打开不会重复花钱。'));
+    more.append(row, el('div', 'hint', '会调用一次 AI（占用同一通道，约十几秒到一分钟）；点评会存档，重复打开不会重复花钱。'));
     btn.addEventListener('click', () => requestCoach(false));
-    return;
-  }
-  if (r.status === 'running') {
-    box.appendChild(el('div', 'coach-body', '教练正在看这局的记录…（同一时间只跑一个 AI 调用，其他对局会稍等一下）'));
-    return;
-  }
-  if (r.status === 'error') {
-    box.appendChild(elText('div', 'coach-body coach-warn', `点评失败：${r.fallbackReason || '未知原因'}`));
+  } else if (r.status === 'running') {
+    more.appendChild(el('div', 'coach-body', '教练正在看这局的记录…（同一时间只跑一个 AI 调用，其他对局会稍等一下）'));
+  } else if (r.status === 'error') {
+    more.appendChild(elText('div', 'coach-body coach-warn', `点评失败：${r.fallbackReason || '未知原因'}`));
     const retry = el('button', 'btn', '重试');
     retry.addEventListener('click', () => requestCoach(true));
-    box.appendChild(retry);
-    return;
+    more.appendChild(retry);
+  } else {
+    // 安全（审核 P1-5）：复盘文本是模型输出，必须 textContent；el() 的第三参走 innerHTML
+    more.appendChild(elText('div', 'coach-body', r.text || '（空点评）'));
+    const tag = r.mode === 'ai'
+      ? '由 AI 生成；事实来自服务端统计，不含推测。'
+      : `规则点评，未使用 AI${r.fallbackReason ? `（原因：${r.fallbackReason}）` : ''}。`;
+    // tag 含 fallbackReason（服务端详情）→ 也走 textContent
+    more.appendChild(elText('div', `coach-tag${r.mode === 'ai' ? '' : ' coach-warn'}`, tag));
   }
-  // 安全（审核 P1-5）：复盘文本是模型输出，必须 textContent；el() 的第三参走 innerHTML
-  box.appendChild(elText('div', 'coach-body', r.text || '（空点评）'));
-  const tag = r.mode === 'ai'
-    ? '由 AI 生成；事实来自服务端统计，不含推测。'
-    : `规则点评，未使用 AI${r.fallbackReason ? `（原因：${r.fallbackReason}）` : ''}。`;
-  // tag 含 fallbackReason（服务端详情）→ 也走 textContent
-  box.appendChild(elText('div', `coach-tag${r.mode === 'ai' ? '' : ' coach-warn'}`, tag));
+  box.appendChild(more);
 }
 
 async function requestCoach(regenerate) {
