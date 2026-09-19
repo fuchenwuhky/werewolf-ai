@@ -41,13 +41,18 @@
   }
 
   /**
-   * 旧版 {seat: roleId} 标注 → 新版存储的**逐座位合并**（NOTE-05，审核 P1-1 复验）。
-   * 返回需要 PUT 的 fill = {seat: 规范化后的标注}；调用方 PUT 成功后才允许清理本地 key。
+   * 旧版 {seat: roleId} 标注 → 新版存储的**逐座位合并**（NOTE-05）。
+   * 返回 { fill, pending }：
+   *   · fill    = {seat: 规范化后的标注}，需要 PUT 的座位；
+   *   · pending = {seat: roleId}，**无法无损容纳**的座位（候选满且备注也放不下）。
+   * 调用方：PUT 成功后，pending 非空时必须保留本地待确认记录并提示用户；只有 pending
+   * 为空才允许清理本地 key。规范化会截断超长备注（MAX_NOTE），所以这里在拼备注**之前**
+   * 先按长度预检——绝不靠截断原备注来腾位置（复审 P1-1）。
    * 规则：
    *   · 服务端没有的座位 → 由旧标记整条转换（候选 [roleId]，倾向按阵营，把握 low）。
-   *   · 同座位冲突（服务端已有）→ 绝不覆盖：旧身份若未出现在服务端的候选/自称里，
-   *     候选还有空位就并入候选；没空位就写进备注（「旧标记：X」）。双方信息都保留。
-   *   · 旧身份已在服务端候选/自称里 → 该座位无需变更，不进 fill。
+   *   · 同座位冲突 → 绝不覆盖：旧身份未记录时，候选有位并入候选（备注一字不动）；
+   *     候选满则尝试无损追加备注（原备注+标记≤上限才写）；放不下 → 进 pending。
+   *   · 旧身份已在服务端候选/自称里 → 无需变更，不进任何返回值。
    *
    * @param serverSeats 服务端现有 {seat: 标注}（只读，不修改）
    * @param legacy      旧格式 {seat: roleId}
@@ -55,6 +60,7 @@
    */
   function mergeLegacyTags(serverSeats, legacy, roleOf) {
     const fill = {};
+    const pending = {};
     for (const [seat, rid] of Object.entries(legacy || {})) {
       if (typeof rid !== 'string' || !rid) continue;
       const info = roleOf ? roleOf(rid) : null;
@@ -73,22 +79,31 @@
       const svCands = Array.isArray(sv.candidateRoleIds) ? sv.candidateRoleIds : [];
       const alreadyKnown = svCands.includes(rid) || sv.claimedRoleId === rid;
       if (alreadyKnown) continue; // 无新增信息，保留服务端原数据
-      const merged = JSON.parse(JSON.stringify(sv));
       const tag = `旧标记：${(info && info.name) || rid}`;
-      if (merged.note && merged.note.includes(tag)) continue; // 已并过（幂等：迁移重试不重复追加）
+      if (typeof sv.note === 'string' && sv.note.includes(tag)) continue; // 已并过（幂等：迁移重试不重复追加）
       if (svCands.length < MAX_CANDIDATES) {
+        // 候选有空位：并入候选，备注一字不动（不引入截断风险）
+        const merged = JSON.parse(JSON.stringify(sv));
         merged.candidateRoleIds = [...svCands, rid];
+        const norm = normalizeSeatAnnotation(merged);
+        if (norm) fill[seat] = norm;
+        continue;
+      }
+      // 候选满：只有当"原备注 + 分隔符 + 标记（+溯源尾注）"确认放得下才写，否则 pending
+      const cur = typeof sv.note === 'string' ? sv.note : '';
+      const tail = (cur + tag).includes('旧版身份标记') ? '' : '；（含旧版合并标注）';
+      const joined = cur ? `${cur}；${tag}${tail}` : `${tag}${tail}`;
+      if (joined.length <= MAX_NOTE) {
+        const merged = JSON.parse(JSON.stringify(sv));
+        merged.note = joined;
+        const norm = normalizeSeatAnnotation(merged);
+        if (norm && norm.note === joined) fill[seat] = norm; // 双保险：规范化后不得有截断
+        else pending[seat] = rid;
       } else {
-        // 候选满：降级写进备注，信息不丢
-        merged.note = merged.note ? `${merged.note}；${tag}` : tag;
+        pending[seat] = rid; // 无损容纳失败 → 交还调用方保留待确认记录
       }
-      if (!merged.note || !merged.note.includes('旧版身份标记')) {
-        merged.note = merged.note ? `${merged.note}；（含旧版合并标注）` : '（含旧版合并标注）';
-      }
-      const norm = normalizeSeatAnnotation(merged);
-      if (norm) fill[seat] = norm;
     }
-    return fill;
+    return { fill, pending };
   }
 
   const api = { LEANINGS, LEANING_CN, CONFIDENCE_CN, MAX_CANDIDATES, MAX_NOTE, normalizeSeatAnnotation, summarize, mergeLegacyTags };

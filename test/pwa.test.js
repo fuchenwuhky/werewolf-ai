@@ -273,3 +273,37 @@ test('service worker：静态资源必须网络优先（缓存优先会让老用
   assert.match(fn, /catch \(_\)/, '网络失败必须被捕获');
   assert.match(fn, /cache\.match\(req\)/, '失败时回退缓存');
 });
+
+test('静态服务：HTML 引用的本地 js/css 必须带内容哈希版本 URL（复审 P1-2 升级安全）', async () => {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    serveStatic(req, res, decodeURIComponent(u.pathname), { webDir: WEB });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    for (const page of ['/', '/m/']) {
+      const res = await fetch(base + page);
+      const html = await res.text();
+      // app.js / m.js / shared 模型：必须带 ?v= 且哈希与文件内容一致
+      const wanted = page === '/' ? ['app.js', 'shared/annotations-model.js', 'pwa.js'] : ['m.js', '../shared/annotations-model.js'];
+      const esc = (c) => String.fromCharCode(92) + c;
+      for (const ref of wanted) {
+        const pat = `src="([^"]*${ref.replace(/[/.]/g, esc)})\\?v=([0-9a-f]{12})"`;
+        const m = html.match(new RegExp(pat));
+        assert.ok(m, `${page} 必须引用版本化的 ${ref}`);
+        const fs = require('fs');
+        const path = require('path');
+        const crypto = require('crypto');
+        const base = page === '/' ? WEB : path.join(WEB, 'm');
+        const full = path.resolve(base, ref);
+        const expect = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex').slice(0, 12);
+        assert.strictEqual(m[2], expect, `${ref} 的版本哈希必须等于其内容 sha256（内容变→URL 变→旧缓存必 miss）`);
+      }
+      // 旧 Worker 的缓存按完整 URL 匹配：带 ?v= 的请求在旧缓存里必然不存在
+      assert.doesNotMatch(html, /src="(app|m)\.js"/, `${page} 不得残留无版本引用`);
+    }
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});

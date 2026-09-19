@@ -1578,10 +1578,39 @@ class Api {
     } catch (e) { return Promise.resolve({ status: e.code || 400, body: { error: e.message } }); }
   }
 
+  /** 重试清理历史导入残留（复审 P2-3）：读取 saveDir 下的 .import-recovery-*.json，
+   *  再次删除清单文件并回收档案；全部成功才删除记录。逐条尽力而为，失败保留记录下次再试。 */
+  async _retryImportRecoveries() {
+    let files = [];
+    try { files = fs.readdirSync(this.saveDir).filter((f) => f.startsWith('.import-recovery-') && f.endsWith('.json')); } catch (_) { return; }
+    for (const name of files) {
+      const full = path.join(this.saveDir, name);
+      let rec = null;
+      try { rec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { continue; }
+      let dirty = false;
+      for (const f of rec.files || []) {
+        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { dirty = true; }
+        if (fs.existsSync(f)) dirty = true;
+      }
+      if (rec.profileId) {
+        try {
+          let prof = null;
+          try { prof = this.profiles.get(rec.profileId); } catch (_) { prof = null; } // 已不存在 = 早已清理干净，不是失败
+          if (prof) {
+            try { await this.profiles.update(rec.profileId, { archive: true }); } catch (_) { /* 已归档则直接删 */ }
+            await this.profiles.trash(rec.profileId);
+          }
+        } catch (_) { dirty = true; }
+      }
+      if (!dirty) { try { fs.unlinkSync(full); } catch (_) {} }
+    }
+  }
+
   importApplyRes(pkg) {
     return Promise.resolve().then(async () => {
       // 校验前移（审核 P2-4）：validateImportPackage 现在逐记录检查 players/events/board/rules/notes，
       // 任何一条不合法都在**写盘之前**整体拒绝。写入循环里的错误只剩真实 I/O 故障。
+      await this._retryImportRecoveries(); // 先清理上一次失败的残留（若失败未清理完会保留记录）
       const checked = transfer.validateImportPackage(pkg);
       const prof = await this.profiles.create({
         nickname: checked.profile.nickname + '（导入）',
@@ -1590,7 +1619,8 @@ class Api {
         preferences: checked.profile.preferences, // 偏好随包继承（PROF-04）
       });
       const gameMap = transfer.buildGameIdMap(checked);
-      const written = []; // 已落地的存档文件：失败回滚清单
+      const written = []; // 已 rename 成功的存档：回滚清单
+      const tmps = [];    // 已写出的 .tmp-*（rename 失败时会残留）：同样必须回收（复审 P2-3）
       try {
         const notes = checked.notes || {};
         let importedNotes = 0;
@@ -1601,6 +1631,7 @@ class Api {
             ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null, profileSchemaVersion: 1,
             game: { ...g, id: newId, finished: true }, anchor: null, review: null, savedAt: Date.now() };
           const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
+          tmps.push(tmpFile);
           await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
           const finalFile = path.join(this.saveDir, newId + '.json');
           await fs.promises.rename(tmpFile, finalFile);
@@ -1615,15 +1646,35 @@ class Api {
         }
         return { status: 200, body: { ok: true, profileId: prof.id, gameMap, importedNotes } };
       } catch (writeErr) {
-        // 事务回滚：删掉已写存档 + 回收刚建的档案（全新档案无历史，回收区保留可追责）
-        for (const f of written) { try { fs.unlinkSync(f); } catch (_) { /* 回滚尽力而为 */ } }
+        // 事务回滚（复审 P2-3）：尽力删除已写存档与残留临时文件，然后**核实**清理结果——
+        // 只有核实干净才允许声称 rolledBack:true；仍有残留则落一条可重试的恢复记录。
+        const targets = [...written, ...tmps];
+        const residue = [];
+        for (const f of targets) {
+          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { /* 下方 existsSync 复核 */ }
+          if (fs.existsSync(f)) residue.push(path.basename(f));
+        }
+        let profileCleaned = true;
         try {
           await this.profiles.update(prof.id, { archive: true });
           await this.profiles.trash(prof.id);
-        } catch (_) { /* 档案回收失败不掩盖原始错误 */ }
+        } catch (_) { profileCleaned = false; }
+        let recoveryFile = null;
+        if (residue.length || !profileCleaned) {
+          recoveryFile = `.import-recovery-${prof.id}-${Date.now()}.json`;
+          try {
+            await fs.promises.writeFile(path.join(this.saveDir, recoveryFile), JSON.stringify({
+              profileId: prof.id, files: targets, createdAt: Date.now(),
+              residue, profileCleaned, error: String(writeErr.message),
+            }, null, 2));
+          } catch (_) { recoveryFile = null; /* 连恢复记录都写不下时只能如实报 rolledBack:false */ }
+        }
         // 只有数字语义码（4xx/5xx）才作为 HTTP 状态；真实 fs 错误的 code 是 EPERM 等字符串 → 500
         const n = Number(writeErr.code);
         const status = Number.isInteger(n) && n >= 400 && n < 600 ? n : 500;
+        if (recoveryFile) {
+          return { status, body: { error: `导入失败，回滚未完成（已保留恢复记录 ${recoveryFile}，可在排除故障后重试导入自动清理）：${writeErr.message}`, rolledBack: false, cleanupPending: true, recoveryFile } };
+        }
         return { status, body: { error: `导入失败，已回滚本次写入：${writeErr.message}`, rolledBack: true } };
       }
     }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));

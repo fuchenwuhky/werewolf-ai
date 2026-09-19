@@ -17,6 +17,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -94,11 +95,7 @@ function serveStatic(req, res, pathname, opts) {
       }
       // SPA 兜底：只有无扩展名的"路由"才回落到首页
       const index = path.join(webDir, 'index.html');
-      return fs.readFile(index, (e2, d2) => {
-        if (e2) { res.writeHead(404); return res.end('not found'); }
-        res.writeHead(200, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ...HTML_SECURITY_HEADERS });
-        res.end(d2);
-      });
+      return sendHtml(res, index, webDir, { 'Content-Type': MIME['.html'], 'Cache-Control': 'no-cache', ...HTML_SECURITY_HEADERS });
     }
     const etag = etagOf(stat);
     if (req.headers['if-none-match'] === etag) { res.writeHead(304); return res.end(); }
@@ -109,7 +106,10 @@ function serveStatic(req, res, pathname, opts) {
       ETag: etag,
       'X-Content-Type-Options': 'nosniff', // 防止把 HTML 当脚本执行
     };
-    if (ext === '.html') Object.assign(headers, HTML_SECURITY_HEADERS); // CSP 只约束文档
+    if (ext === '.html') {
+      Object.assign(headers, HTML_SECURITY_HEADERS); // CSP 只约束文档
+      return sendHtml(res, target, webDir, headers);
+    }
     res.writeHead(200, headers);
     fs.readFile(target, (e3, data) => {
       if (e3) { res.writeHead(404); return res.end('not found'); }
@@ -118,4 +118,51 @@ function serveStatic(req, res, pathname, opts) {
   });
 }
 
-module.exports = { MIME, cacheControlFor, etagOf, looksLikeAsset, serveStatic };
+// ---------- HTML 资源版本化（复审 P1-2） ----------
+// 背景：旧 Worker（缓存优先）控制页面时，首次升级仍会执行缓存里的旧 app.js——
+// HTML 是网络优先的，但它引用的脚本 URL 不变，旧缓存就能一直命中。
+// 解法：服务端下发 HTML 时把本地 .js/.css 引用改写成 `?v=<内容哈希>`。
+// 内容变 → URL 变 → 旧缓存（按完整 URL 匹配）必然 miss → 首次加载即新代码；
+// 命中缓存 ⟺ 哈希一致 ⟺ 内容相同，缓存永远不会有"同 URL 旧内容"。
+const _htmlCache = new Map(); // target -> { mtimeMs, out }
+
+/** 引用文件的版本号：内容 sha256 前 12 位；读不到返回 null（保持原样，不改写） */
+function assetVersionOf(fullPath) {
+  try {
+    return crypto.createHash('sha256').update(fs.readFileSync(fullPath)).digest('hex').slice(0, 12);
+  } catch (_) { return null; }
+}
+
+/** 把 HTML 里的本地 .js/.css 引用改写为内容哈希版本 URL（外部/内联引用原样保留）。
+ *  相对引用（"m.js"、("../shared/a.js"）按 HTML 所在目录解析；根引用（"/style.css"）按站点根解析。 */
+function rewriteHtmlAssets(html, baseDir, webDir) {
+  return html.replace(/(src|href)="([^"#?]+?)\.(js|css)"/gi, (m, attr, ref, ext) => {
+    if (/^(https?:)?\/\//i.test(ref) || /^(data|blob):/i.test(ref)) return m;
+    const relFile = `${ref}.${ext}`;
+    const full = relFile.startsWith('/')
+      ? path.join(webDir, relFile.slice(1))
+      : path.resolve(baseDir, relFile);
+    const v = assetVersionOf(full);
+    return v ? `${attr}="${ref}.${ext}?v=${v}"` : m;
+  });
+}
+
+/** 读取并（对 HTML）版本化后发送；带 mtime 缓存，避免每个请求重复哈希 */
+function sendHtml(res, target, webDir, headers) {
+  let stat;
+  try { stat = fs.statSync(target); } catch (_) { res.writeHead(404); return res.end('not found'); }
+  const cached = _htmlCache.get(target);
+  if (cached && cached.mtimeMs === stat.mtimeMs) {
+    res.writeHead(200, headers);
+    return res.end(cached.out);
+  }
+  fs.readFile(target, (e, data) => {
+    if (e) { res.writeHead(404); return res.end('not found'); }
+    const out = rewriteHtmlAssets(data.toString('utf8'), path.dirname(target), webDir);
+    _htmlCache.set(target, { mtimeMs: stat.mtimeMs, out });
+    res.writeHead(200, headers);
+    res.end(out);
+  });
+}
+
+module.exports = { MIME, cacheControlFor, etagOf, looksLikeAsset, serveStatic, rewriteHtmlAssets, assetVersionOf };

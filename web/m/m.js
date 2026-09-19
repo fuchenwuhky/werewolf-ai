@@ -1566,8 +1566,9 @@ const AM = () => window.WWAnnotationsModel;
 async function initAnnotations() {
   const gid = state.game.gameId;
   const token = state.game.playerToken || state.game.godToken;
-  // --- 迁移（NOTE-05，复验 P1-1）：**逐座位合并**（共享 mergeLegacyTags）；确认落盘后才清理本地 key ---
-  // 同座位冲突不再跳过：旧身份并入候选（满则写备注），双方信息都保留；PUT 失败保留本地旧格式。
+  // --- 迁移（NOTE-05，复审 P1-1）：逐座位合并 + 无损容纳检查；确认落盘后才清理本地 key ---
+  // mergeLegacyTags 返回 { fill, pending }：pending 是候选/备注都放不下的座位 ——
+  // 保留在本地 key 里待确认并弹提示，绝不静默丢弃，也绝不靠截断原备注腾位置。
   let legacy = null;
   try { legacy = JSON.parse(localStorage.getItem(`mww_tags_${gid}`)) || null; } catch (_) {}
   if (legacy && Object.keys(legacy).length) {
@@ -1575,17 +1576,25 @@ async function initAnnotations() {
     try {
       const cur = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
       const serverSeats = (cur.annotations && cur.annotations.seats) || {};
-      const fill = AM().mergeLegacyTags(serverSeats, legacy, (rid) => (state.meta.roles && state.meta.roles[rid]) || null);
+      const { fill, pending } = AM().mergeLegacyTags(serverSeats, legacy, (rid) => (state.meta.roles && state.meta.roles[rid]) || null);
+      let rev = cur.revision;
+      let seats = serverSeats;
       if (Object.keys(fill).length) {
         const put = await api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: cur.revision, seats: fill });
-        state.anno.rev = put.revision;
-        state.anno.seats = put.annotations.seats || {};
-      } else {
-        state.anno.rev = cur.revision; // 旧数据全部已在服务端：无需写入
-        state.anno.seats = serverSeats;
+        rev = put.revision;
+        seats = put.annotations.seats || {};
       }
-      localStorage.removeItem(`mww_tags_${gid}`); // 服务端已确认接受（或无需写）才清理
-      state.tags = {};
+      state.anno.rev = rev;
+      state.anno.seats = seats;
+      if (Object.keys(pending).length) {
+        // 待确认：本地 key 只保留未解决的座位，下次迁移仍会尝试
+        try { localStorage.setItem(`mww_tags_${gid}`, JSON.stringify(pending)); } catch (_) {}
+        state.tags = pending;
+        openLegacyPendingPrompt(pending);
+      } else {
+        localStorage.removeItem(`mww_tags_${gid}`); // 全部落盘确认后才清理
+        state.tags = {};
+      }
       migrated = true;
     } catch (_) { /* 迁移失败（无归属档案/离线/409）：保留本地旧格式继续显示，不阻塞对局 */ }
     if (!migrated) { try { state.tags = legacy; } catch (_) {} }
@@ -1599,6 +1608,51 @@ async function initAnnotations() {
   } catch (_) { /* 旧局无归属档案（404）：标注功能降级为旧格式本地标记，不阻塞对局 */ }
   state.anno.loaded = true;
   if (state.view) updateSeats(state.view); // 角标按最新标注重画
+}
+
+/** 旧标记待确认提示（复审 P1-1，与桌面端 openLegacyPendingPrompt 同语义）：
+ *  候选与备注都满的座位无法自动并入；本地 key 已保留这些座位，给出可见入口让用户编辑并入或显式丢弃。 */
+function openLegacyPendingPrompt(pending) {
+  const seats = Object.keys(pending);
+  if (!seats.length) return;
+  const wrap = el('div');
+  const head = el('div', 'mhead', '<h2>🏷 旧标记待确认</h2>');
+  const close = el('button', 'btn ghost small', '✕');
+  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  head.appendChild(close);
+  const body = el('div', 'mbody');
+  body.appendChild(el('p', 'hint', '以下座位的旧版标记无法自动并入你的笔记（该座位的候选与备注已满）。旧数据仍保留在本机，不会丢失；请选择编辑并入或显式丢弃：'));
+  const list = el('div', 'pm-list');
+  for (const seat of seats) {
+    const rid = pending[seat];
+    const r = state.meta.roles && state.meta.roles[rid];
+    const row = el('div', 'pm-row');
+    const main = el('div', 'pm-main');
+    main.appendChild(elText('div', 'pm-name', `${seat} 号 · 旧标记：${r ? r.name : rid}`));
+    row.appendChild(main);
+    const ops = el('div', 'pm-ops');
+    const edit = el('button', 'btn ghost small', '编辑并入');
+    edit.addEventListener('click', () => {
+      $('#m-modal').innerHTML = '';
+      openTagModal(Number(seat)); // 保存成功后即并入；取消则仍留在待确认记录里
+    });
+    const drop = el('button', 'btn small danger', '丢弃旧标记');
+    drop.addEventListener('click', () => {
+      delete pending[seat];
+      try {
+        if (Object.keys(pending).length) localStorage.setItem(`mww_tags_${state.game.gameId}`, JSON.stringify(pending));
+        else localStorage.removeItem(`mww_tags_${state.game.gameId}`);
+      } catch (_) {}
+      $('#m-modal').innerHTML = '';
+      if (Object.keys(pending).length) openLegacyPendingPrompt(pending);
+    });
+    ops.append(edit, drop);
+    row.appendChild(ops);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+  wrap.append(head, body);
+  openModal(wrap);
 }
 
 /** 座位角标文案：倾向中文 · 首个候选身份 emoji+名（与桌面端 seatTagSummary 同一规则） */

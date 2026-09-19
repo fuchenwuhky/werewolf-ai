@@ -504,3 +504,73 @@ test('导入时笔记写盘故障：不报成功、回滚已写存档与档案�
     assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('磁盘故障')).length, 0, '导入档案必须已回收');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('回滚未完成：清理失败必须如实报 rolledBack:false + 落恢复记录；重试导入自动清理（复审 P2-3）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('rollback2');
+  const realUnlink = fs.unlinkSync;
+  try {
+    // 故障组合：笔记写盘失败（触发回滚）+ unlink 失败（回滚也不完整）
+    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM: 注入写盘失败'), { code: 'EPERM' }); };
+    fs.unlinkSync = (p) => {
+      if (String(p).startsWith(savesDir)) throw Object.assign(new Error('EPERM: 注入清理失败'), { code: 'EPERM' });
+      return realUnlink(p);
+    };
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-5', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 1 } },
+      profile: { nickname: '回滚未完', avatarId: 'scholar', bio: '' },
+      games: [{ id: 'g-rb-1', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} }],
+      notes: { 'g-rb-1': { schemaVersion: 2, profileId: 'o', gameId: 'g-rb-1', revision: 1, seats: { 1: { leaning: 'lean_wolf' } } } },
+    };
+    const out = await api.importApplyRes(pkg);
+    assert.strictEqual(out.status, 500);
+    assert.strictEqual(out.body.rolledBack, false, '清理未完成绝不能声称已回滚');
+    assert.strictEqual(out.body.cleanupPending, true, '必须声明待清理状态');
+    assert.match(out.body.recoveryFile, /^\.import-recovery-/);
+    const recPath = path.join(savesDir, out.body.recoveryFile);
+    assert.ok(fs.existsSync(recPath), '恢复记录必须落盘（可重试）');
+    const rec = JSON.parse(fs.readFileSync(recPath, 'utf8'));
+    assert.strictEqual(rec.profileId, out.body.profileId ?? rec.profileId, '记录必须含档案 id');
+    assert.ok(rec.files.length >= 1, '记录必须含待清理文件清单');
+    // 残留确实存在（如实性对照）
+    assert.ok(fs.readdirSync(savesDir).some((f) => f.endsWith('.json') && !f.startsWith('.import-recovery-')), '注入场景下应有真实残留（重映射 UUID 的存档）');
+
+    // 恢复：解除故障后，下一次导入入口自动重试清理，记录被消化
+    fs.unlinkSync = realUnlink;
+    delete api.annotations.putSync;
+    const okPkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-6', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 0, notes: 0 } },
+      profile: { nickname: '触发重试', avatarId: 'scholar', bio: '' },
+      games: [],
+    };
+    const ok = await call(api, 'POST', '/api/profiles/import', { package: okPkg });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    const leftovers = fs.readdirSync(savesDir).filter((f) => (f.endsWith('.json') && !f.startsWith('.import-recovery-')) || f.startsWith('.tmp-') || f.startsWith('.import-recovery-'));
+    assert.strictEqual(leftovers.length, 0, `重试后残留与恢复记录必须被清空（实际 ${leftovers}）`);
+  } finally { fs.unlinkSync = realUnlink; fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('rename 失败：.tmp-* 进回滚清单，清理成功后如实报 rolledBack:true（复审 P2-3 tmp 记录）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('tmpres');
+  const realRename = fs.promises.rename;
+  try {
+    fs.promises.rename = async (from, to) => {
+      // 只拦截"落进存档目录"的 rename（导入写盘）；ProfileStore 自身的 tmp→final 原子写不受影响
+      if (String(from).includes('.tmp-') && String(to).startsWith(savesDir)) {
+        throw Object.assign(new Error('EPERM: 注入 rename 失败'), { code: 'EPERM' });
+      }
+      return realRename(from, to);
+    };
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-7', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 0 } },
+      profile: { nickname: '临时残留', avatarId: 'scholar', bio: '' },
+      games: [{ id: 'g-tmprs-1', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} }],
+    };
+    const out = await api.importApplyRes(pkg);
+    assert.strictEqual(out.status, 500);
+    assert.strictEqual(out.body.rolledBack, true, 'tmp 已被记录且清理成功 → 可以如实声称已回滚');
+    const leftovers = fs.readdirSync(savesDir).filter((f) => f.startsWith('.tmp-') || f.includes('g-tmprs') || f.startsWith('.import-recovery-'));
+    assert.strictEqual(leftovers.length, 0, `tmp 残留必须被回滚清空（实际 ${leftovers}）`);
+  } finally { fs.promises.rename = realRename; fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
