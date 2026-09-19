@@ -805,6 +805,10 @@ class Api {
         if (sub === '/annotations' && method === 'PUT') {
           return this.gameAnnotationsPut(res, entry, req, await this.readBody(req));
         }
+        if (sub === '/annotations' && method === 'DELETE') {
+          // 撤销/清除单个座位的笔记（FIN-07 缺口收口）：凭对局令牌或管理会话
+          return this.gameAnnotationDelete(res, entry, req, query);
+        }
         if (sub === '/agent' && method === 'GET') return this.agentDebug(res, entry, query);
         if (sub === '/replay' && method === 'GET') return this.replay(res, entry, query);
       }
@@ -1859,6 +1863,26 @@ class Api {
     } catch (e) {
       if (e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
       return this.json(res, 400, { error: e.message });
+    }
+  }
+
+  /** 清除单个座位笔记（撤销语义的存储端原语）：权限矩阵同 PUT，expectedRevision 乐观并发 */
+  async gameAnnotationDelete(res, entry, req, query) {
+    const pid = entry.ownerProfileId;
+    if (!pid) return this.json(res, 404, { error: '该对局没有归属档案' });
+    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
+    const seat = query.get('seat');
+    if (!/^[0-9]{1,3}$/.test(String(seat || ''))) return this.json(res, 400, { error: 'seat 必须是数字座位号' });
+    const rev = query.get('expectedRevision');
+    try {
+      const doc = await this.annotations.clearSeat({
+        profileId: pid, gameId: entry.game.id, seat: Number(seat),
+        expectedRevision: rev === null ? undefined : Number(rev),
+      });
+      return this.json(res, 200, { annotations: doc, revision: doc.revision });
+    } catch (e) {
+      if (e.name === 'AnnotationConflict' || e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
+      return this.json(res, e.code && Number.isInteger(Number(e.code)) ? Number(e.code) : 400, { error: e.message });
     }
   }
 

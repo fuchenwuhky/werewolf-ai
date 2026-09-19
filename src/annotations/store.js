@@ -133,16 +133,28 @@ class AnnotationStore {
 
   /** 清除某座位标注（撤销/清除当前标注） */
   async clearSeat({ profileId, gameId, seat, expectedRevision }) {
-    const doc = this._read(profileId, gameId);
-    if (Number.isInteger(expectedRevision) && expectedRevision !== doc.revision) {
-      throw new AnnotationConflict('另一窗口更新了笔记，请刷新后合并');
-    }
-    delete doc.seats[String(seat)];
-    doc.revision += 1;
+    // 与 put() 同一条每文件串行队列：读-校验-删除-写全部在锁内（P2-6 同型竞态，不能裸跑）
     const file = this.file(profileId, gameId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    await fs.promises.writeFile(file, JSON.stringify(doc, null, 2), 'utf8');
-    return doc;
+    const prev = this._queues.get(file) || Promise.resolve();
+    const job = prev.catch(() => {}).then(async () => {
+      const doc = this._read(profileId, gameId);
+      if (Number.isInteger(expectedRevision) && expectedRevision !== doc.revision) {
+        throw new AnnotationConflict('另一窗口更新了笔记，请刷新后合并');
+      }
+      delete doc.seats[String(seat)];
+      doc.revision += 1;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+      await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
+      await fs.promises.rename(tmp, file);
+      return doc;
+    });
+    this._queues.set(file, job);
+    try {
+      return await job;
+    } finally {
+      if (this._queues.get(file) === job) this._queues.delete(file);
+    }
   }
 }
 
