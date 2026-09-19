@@ -125,7 +125,7 @@ class ProfileStore {
       if (!includeArchived && prof.archivedAt) continue;
       out.push({
         id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, bio: prof.bio,
-        createdAt: prof.createdAt, updatedAt: prof.updatedAt,
+        createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
         archivedAt: prof.archivedAt || null,
         lastUsedAt: prof.lastUsedAt || prof.updatedAt,
       });
