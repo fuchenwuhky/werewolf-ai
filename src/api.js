@@ -1663,7 +1663,7 @@ class Api {
           terminated: rows.filter((r) => r.bucket === 'terminated').length,
         },
       });
-    } catch (e) { return this.json(res, 500, { error: e.message }); }
+    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
   }
 
   /** 档案对局列表（仅本档案，字段白名单） */
@@ -1680,7 +1680,7 @@ class Api {
         rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock, savedAt: doc.savedAt || null });
       }
       return this.json(res, 200, { rows });
-    } catch (e) { return this.json(res, 500, { error: e.message }); }
+    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
   }
 
   /**
@@ -1710,7 +1710,7 @@ class Api {
         'Cache-Control': 'no-store',
       });
       return void res.end(body);
-    } catch (e) { return this.json(res, 500, { error: e.message }); }
+    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
   }
 
   // ---------- 私人标注（NOTE-02）----------

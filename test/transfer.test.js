@@ -101,3 +101,48 @@ test('导入 API：preview 不写盘、apply 落地为新档案（含 profileId 
   assert.strictEqual(listed.ownerProfileId, ap.body.profileId, '导入局归属导入档案');
   assert.strictEqual(listed.game.id, newGameId, 'gameId 必须重映射');
 });
+
+test('导入校验 400 语义：缺 manifest/exportVersion 缺失或错误/未结束局/非法 id 一律 code 400', () => {
+  const cases = [
+    { name: '包不是对象', pkg: null, msg: /导入包/ },
+    { name: 'manifest 缺失', pkg: { profile: { nickname: 'X' }, games: [] }, msg: /导出版本/ },
+    { name: 'exportVersion 缺失', pkg: { manifest: {}, profile: { nickname: 'X' }, games: [] }, msg: /导出版本/ },
+    { name: 'exportVersion 错误', pkg: { manifest: { exportVersion: 2 }, profile: { nickname: 'X' }, games: [] }, msg: /导出版本/ },
+    { name: '缺档案昵称', pkg: { manifest: { exportVersion: 1 }, profile: {}, games: [] }, msg: /昵称/ },
+    { name: 'games 不是数组', pkg: { manifest: { exportVersion: 1 }, profile: { nickname: 'X' }, games: 'not-array' }, msg: /对局列表/ },
+    { name: '含未结束局', pkg: { manifest: { exportVersion: 1 }, profile: { nickname: 'X' }, games: [{ id: 'g1', finished: false }] }, msg: /未结束/ },
+    { name: '非法对局 id', pkg: { manifest: { exportVersion: 1 }, profile: { nickname: 'X' }, games: [{ id: '../evil', finished: true }] }, msg: /非法对局 id/ },
+  ];
+  for (const { name, pkg, msg } of cases) {
+    try {
+      transfer.validateImportPackage(pkg);
+      assert.fail(`${name}：应拒绝 ${JSON.stringify(pkg)}`);
+    } catch (e) {
+      assert.strictEqual(e.code, 400, `${name}：必须携带 400 语义（实际 ${e.code}：${e.message}）`);
+      assert.match(e.message, msg, `${name}：错误信息应说明原因`);
+    }
+  }
+});
+
+test('导出包：manifest.counts（games/notes）与 notes 随包计数正确', () => {
+  const games = [
+    { id: 'g-a', finished: true, day: 2, winner: 'good', winReason: '', mock: false, savedAt: 1, players: [], events: [], board: { wolf: 1 }, rules: {} },
+    { id: 'g-b', finished: true, day: 4, winner: 'wolf', winReason: '', mock: true, savedAt: 2, players: [], events: [], board: { wolf: 1 }, rules: {} },
+  ];
+  const notes = {
+    'g-a': { schemaVersion: 2, profileId: 'p', gameId: 'g-a', revision: 1, seats: { 2: { leaning: 'lean_wolf', note: '贴脸发言' } } },
+  };
+  const pkg = transfer.buildExportPackage({ profile: { nickname: '砚舟', avatarId: 'scholar' }, games, notes, hostLabel: '测试机导出' });
+  assert.strictEqual(pkg.manifest.exportVersion, transfer.EXPORT_VERSION, '导出版本号与模块常量一致');
+  assert.strictEqual(pkg.manifest.counts.games, 2, 'counts.games 等于对局数');
+  assert.strictEqual(pkg.manifest.counts.notes, 1, 'counts.notes 等于带笔记的局数');
+  assert.strictEqual(pkg.manifest.source, '测试机导出');
+  assert.ok(pkg.manifest.packageId && pkg.manifest.createdAt, 'packageId/createdAt 必须存在');
+  assert.strictEqual(pkg.profile.nickname, '砚舟', '档案昵称随包携带');
+  assert.deepStrictEqual(Object.keys(pkg.notes), ['g-a'], 'notes 随包携带且键为 gameId');
+
+  const pv = transfer.previewImport(pkg);
+  assert.strictEqual(pv.games, 2, '预览的对局数一致');
+  assert.strictEqual(pv.notes, 1, '预览的 notes 计数一致');
+  assert.strictEqual(pv.finishedOnly, true, '预览标记只允许已结束局');
+});

@@ -817,7 +817,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .pm-row.current { border-color: rgba(216, 178, 95, .55); }
 .pm-row.archived { opacity: .6; }
 .pm-main { min-width: 0; }
-.pm-name { font-weight: 700; color: var(--fg); overflow-wrap: anywhere; }
+.pm-name { font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
 .pm-ops { display: flex; gap: var(--sp-1); flex-wrap: wrap; justify-content: flex-end; }
 
 /* ---------- 私人笔记抽屉（NOTE-03）：与上帝抽屉同款，稍窄 ---------- */

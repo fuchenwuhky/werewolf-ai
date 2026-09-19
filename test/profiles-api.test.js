@@ -22,6 +22,38 @@ function makeApi(tag) {
   return { api, dir };
 }
 
+// 隔离变体：saveDir 嵌套在独立 dataDir 下。makeApi 的平铺布局会让 ProfileStore 根目录
+// 落在共享的 <tmp>/profiles（dirname(saveDir)），"最后一份可用档案"这类全库断言需要隔离根。
+function makeIsolatedApi(tag) {
+  const dataDir = tmpDir(tag);
+  const savesDir = path.join(dataDir, 'saves');
+  const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: savesDir });
+  return { api, dataDir, savesDir };
+}
+
+// 照抄 transfer.test.js 的存档字段结构，额外带上 tokens/anchor/journal 敏感字段用于验证导出脱敏
+function mkSaveDoc(id, ownerProfileId, finished) {
+  return {
+    schemaVersion: 2,
+    tokens: { player: 'SECRET-PLAYER-TOKEN', god: 'SECRET-GOD-TOKEN' },
+    mock: true,
+    ownerProfileId,
+    ownerNicknameSnapshot: '快照昵称',
+    anchor: { secret: 'ANCHOR-SECRET' },
+    journal: { decisions: 'JOURNAL-SECRET' },
+    review: null,
+    savedAt: 1,
+    game: {
+      id, day: 3, phase: finished ? 'ended' : 'night', started: true, finished,
+      winner: finished ? 'good' : null, winReason: finished ? '狼人全部出局' : '',
+      players: [{ seat: 1, name: '快照昵称', isHuman: true, role: 'seer' }],
+      events: [{ seq: 1, type: 'night' }],
+      board: { wolf: 3, seer: 1, witch: 1, villager: 4 },
+      rules: {},
+    },
+  };
+}
+
 function stubReq({ method = 'GET', headers = {}, body = null } = {}) {
   const req = new events.EventEmitter();
   req.method = method;
@@ -37,7 +69,8 @@ function stubReq({ method = 'GET', headers = {}, body = null } = {}) {
 function stubRes() {
   const box = { headers: {} };
   box.res = {
-    writeHead(code) { box.code = code; },
+    // 捕获 writeHead 携带的响应头（json 与导出路由的 Content-Type/Content-Disposition 都走这里）
+    writeHead(code, headers) { box.code = code; Object.assign(box.headers, headers || {}); },
     end(b) { box.raw = b; },
     setHeader(k, v) { box.headers[k.toLowerCase()] = v; },
   };
@@ -54,7 +87,10 @@ async function call(api, method, pathname, body) {
   const box = stubRes();
   const req = stubReq({ method, headers: { ...HOST }, body });
   await api.handle(req, box.res, cleanPath, q);
-  return { status: box.code, body: box.raw ? JSON.parse(box.raw) : null };
+  // headers 统一转小写键，断言大小写不敏感；raw 供脱敏等原文断言使用
+  const headers = {};
+  for (const [k, v] of Object.entries(box.headers)) headers[k.toLowerCase()] = v;
+  return { status: box.code, headers, raw: box.raw != null ? String(box.raw) : null, body: box.raw ? JSON.parse(box.raw) : null };
 }
 
 test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全链', async () => {
@@ -139,4 +175,155 @@ test('导出收集：collectExportableGames 只收已结束且归属正确的对
   fs.writeFileSync(path.join(dir, 'c.json'), JSON.stringify(mk('c', pid, false)));
   const games = transfer.collectExportableGames(dir, pid);
   assert.deepStrictEqual(games.map((g) => g.id), ['a'], '只收集该档案已结束局');
+});
+
+test('导出路由：不存在的档案 id 返回 404/500 语义，绝不 200', async () => {
+  const { api, dir } = makeApi('exp404');
+  try {
+    const miss = await call(api, 'GET', '/api/profiles/00000000-0000-4000-8000-000000000000/export');
+    // 语义上应是 404；当前实现 profileExport 的 catch 吞掉 NotFoundError.code 固定回 500
+    // （与"删除后 stats"用例同一容断言口径：404 或 500 都不算回归，但绝不能 200）
+    assert.ok(miss.status === 404 || miss.status === 500, `不存在的档案导出不应 200（实际 ${miss.status}）`);
+    assert.ok(miss.body && miss.body.error, '错误响应必须带 error 说明');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('导出路由：包体只含本档案已结束局并脱敏（响应头/清单/无令牌）', async () => {
+  const { api, dir } = makeApi('expok');
+  try {
+    const c = await call(api, 'POST', '/api/profiles', { nickname: '砚舟导出', avatarId: 'scholar', bio: '' });
+    assert.strictEqual(c.status, 200);
+    const pid = c.body.profile.id;
+
+    // 本档案已结束局 + 别人档案的局 + 本档案未结束局
+    fs.writeFileSync(path.join(dir, 'exp-a.json'), JSON.stringify(mkSaveDoc('exp-a', pid, true)));
+    fs.writeFileSync(path.join(dir, 'exp-b.json'), JSON.stringify(mkSaveDoc('exp-b', '99999999-8888-7777-6666-555555555555', true)));
+    fs.writeFileSync(path.join(dir, 'exp-c.json'), JSON.stringify(mkSaveDoc('exp-c', pid, false)));
+
+    const exp = await call(api, 'GET', `/api/profiles/${pid}/export`);
+    assert.strictEqual(exp.status, 200, `导出失败：${exp.raw}`);
+    assert.match(exp.headers['content-type'] || '', /application\/json/, 'Content-Type 必须含 application/json');
+    assert.ok((exp.headers['content-disposition'] || '').includes('attachment'), 'Content-Disposition 必须含 attachment');
+    assert.strictEqual(exp.body.manifest.exportVersion, 1, '导出版本必须为 1');
+    assert.strictEqual(exp.body.profile.nickname, '砚舟导出', '包内档案昵称必须正确');
+    assert.strictEqual(exp.body.manifest.counts.games, 1, 'manifest.counts.games 必须正确');
+    assert.strictEqual(exp.body.games.length, 1, '只导出本档案的已结束局');
+    assert.strictEqual(exp.body.games[0].id, 'exp-a');
+    assert.ok(exp.body.notes && typeof exp.body.notes === 'object', '导出包含 notes 字段');
+
+    // 脱敏：令牌/锚点/journal 的值与字段名都不得出现在包内
+    assert.ok(!exp.raw.includes('SECRET-PLAYER-TOKEN'), '导出包不得包含玩家令牌');
+    assert.ok(!exp.raw.includes('SECRET-GOD-TOKEN'), '导出包不得包含上帝令牌');
+    assert.ok(!exp.raw.includes('ANCHOR-SECRET'), '导出包不得包含锚点数据');
+    assert.ok(!exp.raw.includes('JOURNAL-SECRET'), '导出包不得包含 journal 数据');
+    assert.ok(!/"tokens"/.test(exp.raw), '包内不得出现 tokens 字段');
+    assert.ok(!exp.raw.includes('playerToken') && !exp.raw.includes('godToken'), '包内不得出现 playerToken/godToken 字段');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('导出路由：私人标注跟随导出（手写 profiles/<pid>/annotations/<gameId>.json）', async () => {
+  const { api, dir } = makeApi('expnote');
+  try {
+    const c = await call(api, 'POST', '/api/profiles', { nickname: '砚记笔记' });
+    assert.strictEqual(c.status, 200);
+    const pid = c.body.profile.id;
+    fs.writeFileSync(path.join(dir, 'exp-a.json'), JSON.stringify(mkSaveDoc('exp-a', pid, true)));
+    fs.writeFileSync(path.join(dir, 'exp-b.json'), JSON.stringify(mkSaveDoc('exp-b', pid, true)));
+
+    // 进行中的内存局才能走 PUT /api/games/:gid/annotations；存档局直接按 AnnotationStore
+    // 的文件布局手写（结构见 src/annotations/store.js 的 emptyDoc：schemaVersion/profileId/gameId/revision/seats）
+    const annoDir = path.join(api.profiles.root, pid, 'annotations');
+    fs.mkdirSync(annoDir, { recursive: true });
+    fs.writeFileSync(path.join(annoDir, 'exp-a.json'), JSON.stringify({
+      schemaVersion: 2, profileId: pid, gameId: 'exp-a', revision: 1,
+      seats: {
+        3: {
+          leaning: 'lean_wolf', note: '悍跳预言家', candidateRoleIds: ['wolf'], claimedRoleId: 'seer',
+          confidence: 'medium', evidenceSeq: 12, day: 1, phase: 'day', updatedAt: new Date().toISOString(),
+        },
+      },
+    }));
+
+    const exp = await call(api, 'GET', `/api/profiles/${pid}/export`);
+    assert.strictEqual(exp.status, 200, `导出失败：${exp.raw}`);
+    assert.strictEqual(exp.body.manifest.counts.notes, 1, 'notes 计数只算有笔记的局');
+    assert.deepStrictEqual(Object.keys(exp.body.notes), ['exp-a'], '只有写了标注的局进入 notes');
+    assert.strictEqual(exp.body.notes['exp-a'].seats[3].leaning, 'lean_wolf', '标注内容随包导出');
+    assert.strictEqual(exp.body.games.length, 2, '没标注的已结束局仍照常导出');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('导出路由：归档档案导出仍 200（归档=只读保留）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('exparch');
+  try {
+    // 等迁移默认档案就绪，"最后一份可用档案不可归档"的保护才有确定语义
+    await api._profileMigrationReady;
+    const c = await call(api, 'POST', '/api/profiles', { nickname: '砚归档' });
+    assert.strictEqual(c.status, 200);
+    const pid = c.body.profile.id;
+    fs.writeFileSync(path.join(savesDir, 'arch-g1.json'), JSON.stringify(mkSaveDoc('arch-g1', pid, true)));
+
+    const ar = await call(api, 'PATCH', `/api/profiles/${pid}`, { archive: true });
+    assert.strictEqual(ar.status, 200, `归档失败：${JSON.stringify(ar.body)}`);
+
+    const exp = await call(api, 'GET', `/api/profiles/${pid}/export`);
+    assert.strictEqual(exp.status, 200, '归档档案导出仍应 200');
+    assert.strictEqual(exp.body.profile.nickname, '砚归档', '归档档案的包内容不变');
+    assert.strictEqual(exp.body.games.length, 1, '归档档案的已结束局照常导出');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('档案管理链：归档→列表可见→恢复→再归档→删除→stats 不可达；最后一份可用档案归档被拒', async () => {
+  const { api, dataDir } = makeIsolatedApi('chain');
+  try {
+    await api._profileMigrationReady;
+    const list0 = await call(api, 'GET', '/api/profiles');
+    assert.strictEqual(list0.status, 200);
+    const def = list0.body.profiles.find((p) => p.nickname === '默认玩家');
+    assert.ok(def, '迁移默认档案必须存在');
+
+    const c1 = await call(api, 'POST', '/api/profiles', { nickname: '阿澈' });
+    const c2 = await call(api, 'POST', '/api/profiles', { nickname: '阿岚' });
+    assert.strictEqual(c1.status, 200);
+    assert.strictEqual(c2.status, 200);
+    const pid1 = c1.body.profile.id;
+    const pid2 = c2.body.profile.id;
+
+    // 链路①：归档 → GET /api/profiles 仍可见（includeArchived）→ 恢复 → 再归档 → 删除 → stats 不可达
+    const ar1 = await call(api, 'PATCH', `/api/profiles/${pid1}`, { archive: true });
+    assert.strictEqual(ar1.status, 200, `归档失败：${JSON.stringify(ar1.body)}`);
+    assert.ok(ar1.body.profile.archivedAt, '归档后 archivedAt 必须置位');
+    const list1 = await call(api, 'GET', '/api/profiles');
+    assert.ok(list1.body.profiles.some((p) => p.id === pid1 && p.archivedAt), '归档档案仍出现在 GET /api/profiles（includeArchived）');
+
+    const rs1 = await call(api, 'PATCH', `/api/profiles/${pid1}`, { restore: true });
+    assert.strictEqual(rs1.status, 200, `恢复失败：${JSON.stringify(rs1.body)}`);
+    assert.strictEqual(rs1.body.profile.archivedAt, null, '恢复后 archivedAt 必须清空');
+
+    const ar2 = await call(api, 'PATCH', `/api/profiles/${pid1}`, { archive: true });
+    assert.strictEqual(ar2.status, 200, '再次归档应成功');
+    const del1 = await call(api, 'DELETE', `/api/profiles/${pid1}`);
+    assert.strictEqual(del1.status, 200, `删除失败：${JSON.stringify(del1.body)}`);
+    assert.ok(del1.body.ok === true && del1.body.archiveId, '删除返回 ok 与回收区 archiveId');
+    const gone1 = await call(api, 'GET', `/api/profiles/${pid1}/stats`);
+    assert.ok(gone1.status === 404 || gone1.status === 500, `已删除档案的 stats 不应 200（实际 ${gone1.status}）`);
+
+    // 链路②：把可用档案压到只剩 pid2 → 归档被拒；未归档删除被拒；补一份档案后放行
+    const arDef = await call(api, 'PATCH', `/api/profiles/${def.id}`, { archive: true });
+    assert.strictEqual(arDef.status, 200, `归档默认档案失败：${JSON.stringify(arDef.body)}`);
+    const arLast = await call(api, 'PATCH', `/api/profiles/${pid2}`, { archive: true });
+    assert.strictEqual(arLast.status, 400, '最后一份可用档案归档必须被拒');
+    assert.match(arLast.body.error, /最后一份/, '错误信息应说明最后一份可用档案保护');
+    const delNotArchived = await call(api, 'DELETE', `/api/profiles/${pid2}`);
+    assert.strictEqual(delNotArchived.status, 409, '未归档档案删除必须 409');
+
+    const c3 = await call(api, 'POST', '/api/profiles', { nickname: '阿石' });
+    assert.strictEqual(c3.status, 200);
+    const ar3 = await call(api, 'PATCH', `/api/profiles/${pid2}`, { archive: true });
+    assert.strictEqual(ar3.status, 200, '不再是最后一份可用档案后归档应放行');
+    const del2 = await call(api, 'DELETE', `/api/profiles/${pid2}`);
+    assert.strictEqual(del2.status, 200, `删除失败：${JSON.stringify(del2.body)}`);
+    const gone2 = await call(api, 'GET', `/api/profiles/${pid2}/stats`);
+    assert.ok(gone2.status === 404 || gone2.status === 500, `已删除档案的 stats 不应 200（实际 ${gone2.status}）`);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
