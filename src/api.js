@@ -1665,7 +1665,8 @@ class Api {
   /** 档案对局列表（仅本档案，字段白名单） */
   profileGames(res, pid) {
     try {
-      this.profiles.get(pid);
+      const prof = this.profiles.get(pid);
+      if (prof.archivedAt) return this.json(res, 404, { error: '该档案已归档' });
       const rows = [];
       for (const f of fs.readdirSync(this.saveDir)) {
         if (!f.endsWith('.json') || f === 'experiences.json') continue;

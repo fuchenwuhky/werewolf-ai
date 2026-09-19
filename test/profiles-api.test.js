@@ -94,9 +94,16 @@ test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全�
   const put2 = await call(api, 'PUT', `/api/games/anno-g1/annotations`, { token: 'pt', expectedRevision: 0, seats: { 3: { leaning: 'neutral' } } });
   assert.strictEqual(put2.status, 409, '过期 revision 必须 409');
 
-  await call(api, 'DELETE', `/api/profiles/${pid}`);
+  // 结束该局（进行中的局会阻止删除），再验证删除链
+  g.finished = true; g.phase = 'ended'; g.winner = 'good';
+  api.games.get('anno-g1').game = g;
+
+  // 先归档再删除（DELETE 只接受已归档档案）
+  await call(api, 'PATCH', `/api/profiles/${pid}`, { archive: true });
+  const del = await call(api, 'DELETE', `/api/profiles/${pid}`);
+  assert.strictEqual(del.status, 200, `删除应成功：${JSON.stringify(del.body)}`);
   const gone = await call(api, 'GET', `/api/profiles/${pid}/stats`);
-  assert.ok(gone.status === 404 || gone.status === 500, '已删除档案的 stats 不应 200');
+  assert.ok(gone.status === 404 || gone.status === 500, `已删除档案的 stats 不应 200（实际 ${gone.status}）`);
 });
 
 test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply 落地档案与对局', async () => {
@@ -131,5 +138,5 @@ test('导出收集：collectExportableGames 只收已结束且归属正确的对
   fs.writeFileSync(path.join(dir, 'b.json'), JSON.stringify(mk('b', 'other', true)));
   fs.writeFileSync(path.join(dir, 'c.json'), JSON.stringify(mk('c', pid, false)));
   const games = transfer.collectExportableGames(dir, pid);
-  assert.deepStrictEqual(games.map((g) => g.gameId), ['a'], '只收集该档案已结束局');
+  assert.deepStrictEqual(games.map((g) => g.id), ['a'], '只收集该档案已结束局');
 });
