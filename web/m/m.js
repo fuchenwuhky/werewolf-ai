@@ -1097,6 +1097,7 @@ function updateSeats(v) {
   const mySeat = v.me ? v.me.seat : 0;
   const half = Math.ceil(ps.length / 2);
   const pick = actionState.needTarget ? new Set(actionState.candidates) : null;
+  const portraits = window.AICast ? window.AICast.assignPortraits(ps) : new Map();
   ps.forEach((p, i) => {
     const s = el('div', 'srow'
       + (p.seat === mySeat ? ' mine' : '')
@@ -1105,7 +1106,9 @@ function updateSeats(v) {
       + (pick && p.alive && pick.has(p.seat) ? ' pickable' : '')
       + (actionState.target === p.seat ? ' picked' : ''));
     s.dataset.seat = String(p.seat);
-    const ring = el('span', 'num', String(p.seat));
+    const ring = el('span', 'num');
+    ring.appendChild(el('span', 'seat-index', String(p.seat)));
+    if (window.AICast) window.AICast.decorate(ring, portraits.get(p.seat));
     s.appendChild(ring);
     if (p.isSheriff) s.appendChild(el('span', 'b', '👑'));
     if (p.role && p.revealed) {

@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>月夜集会 · 双端体验设计稿</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="icon" href="../brand/v2/export/icon-32.png" />
+  </head>
+  <body>
+    <header class="book-head">
+      <a href="#brand">AI 狼人杀 <span>月夜集会</span></a
+      ><span>施工视觉参照 · 本地演示，不操作真实数据</span>
+    </header>
+    <main>
+      <section id="brand" class="hero">
+        <div>
+          <p class="eyebrow">月夜狼冠 / BRAND V2</p>
+          <h1>同赴长夜，<br />各有判断。</h1>
+          <p class="lede">用更清晰的玩家档案、更可靠的推理笔记和更从容的操作，让每一局有据可循。</p>
+          <div class="principles"><span>本机档案</span><span>私有标注</span><span>双端一致</span></div>
+          <a class="text-link" href="../../docs/dual-platform-optimization-plan.md">查看施工方案 ↗</a>
+        </div>
+        <figure class="brand-hero">
+          <img src="../brand/v2/wolf-emblem.svg" alt="月夜狼冠：古金圆环内的银灰狼首与猩红双眼" />
+          <figcaption>手绘 SVG · 原始矢量 · 不依赖外部图片或字体</figcaption>
+        </figure>
+      </section>
+
+      <section class="chapter">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">电脑端 / 对局工作台</p>
+            <h2>事实、推测、操作，各有位置。</h2>
+          </div>
+          <p>“已公开”与“我的推测”分层。座位用于选人，笔记有独立入口。</p>
+        </div>
+        <div class="desktop-demo">
+          <div class="game-top">
+            <span class="brand-mini"><img src="../brand/v2/export/icon-48.png" alt="" />月夜集会</span><span>第 2 天 <b>放逐投票</b></span
+            ><button class="profile-trigger" data-open-profiles>砚舟 ▾</button>
+          </div>
+          <div class="desktop-grid">
+            <aside class="roster">
+              <div class="pane-heading">
+                <h3>玩家（节选）</h3>
+                <span>8 / 12 存活</span>
+              </div>
+              <div id="desktop-seats"></div>
+              <p class="legend">✓ 已公开　? 我的推测</p>
+            </aside>
+            <section class="conversation">
+              <div class="phase">
+                <span class="eyebrow">本轮任务</span>
+                <h3>选出你最怀疑的玩家</h3>
+                <p>先选目标，再确认投票。身份标注不会提交行动。</p>
+              </div>
+              <article class="speech">
+                <div><img src="../../web/assets/avatars/minimalist.png" alt="霜句头像" /><strong>3 号 · 霜句</strong><span>本轮发言</span></div>
+                <p>我更怀疑 7 号。他先说自己没听清票型，之后又用同一票型保了 2 号。这个前后变化需要解释。</p>
+              </article>
+              <article class="speech">
+                <div><img src="../../web/assets/avatars/closer.png" alt="终章头像" /><strong>7 号 · 终章</strong><span>回应质疑</span></div>
+                <p>我调整的是对 2 号的判断，不是票型记录。请把我的两段话放在各自的时间点看。</p>
+              </article>
+              <button class="subtle new-message" id="latest-message">已在最新位置</button>
+              <div class="action-panel">
+                <span>已选目标 <strong id="target-label">尚未选择</strong></span>
+                <div><button class="subtle" id="clear-target">清除选择</button><button class="primary" id="confirm-vote" disabled>确认投票</button></div>
+                <small>演示不会提交真实对局。</small>
+              </div>
+            </section>
+            <aside class="notebook">
+              <div class="pane-heading">
+                <h3>推理笔记</h3>
+                <span class="private">仅当前档案</span>
+              </div>
+              <div class="person-heading">
+                <img src="../../web/assets/avatars/closer.png" alt="" />
+                <div>
+                  <h3>7 号 · 终章</h3>
+                  <p>真实身份尚未公开</p>
+                </div>
+              </div>
+              <p class="field-title">我的倾向 <span>不是事实</span></p>
+              <div class="choice-group" id="leaning">
+                <button data-value="待观察">待观察</button><button data-value="偏好">偏好</button
+                ><button class="selected suspicion" data-value="偏狼" aria-pressed="true">偏狼</button>
+              </div>
+              <p class="field-title">候选身份 <span>最多 3 个</span></p>
+              <div class="choice-group" id="role-choices">
+                <button class="selected" aria-pressed="true">狼人</button><button>狼王</button><button>平民</button><button>预言家</button>
+              </div>
+              <label class="field-title" for="note">依据</label><textarea id="note" maxlength="200">第 2 天发言前后对 2 号的立场变化，需要回看。</textarea>
+              <p class="muted small">记在第 2 天 · 不进入 AI 上下文</p>
+              <div class="note-actions"><button class="primary" id="save-note">保存标注</button><button class="subtle" id="undo-note">还原草稿</button></div>
+              <p class="inline-status" id="note-status" role="status">演示可尝试选择倾向、候选身份和保存。</p>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="chapter mobile-chapter">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">手机端 / 单手操作</p>
+            <h2>读得完整，点得准确。</h2>
+          </div>
+          <p>默认“发言 / 玩家 / 笔记”分栏切换；不再用两侧窄座位挤压正文。</p>
+        </div>
+        <div class="mobile-layout">
+          <div class="phone">
+            <div class="phone-top">
+              <button aria-label="打开对局菜单">☰</button>
+              <div><strong>第 2 天 · 投票</strong><small>8 人存活</small></div>
+              <button aria-label="打开规则">?</button>
+            </div>
+            <nav class="mobile-tabs">
+              <button class="active">发言</button><button>玩家 <span>12</span></button><button>笔记 <span>3</span></button>
+            </nav>
+            <div class="phone-content">
+              <div class="speaker">
+                <img src="../../web/assets/avatars/minimalist.png" alt="" />
+                <div><strong>3 号 · 霜句</strong><small>本轮发言</small></div>
+              </div>
+              <p>我更怀疑 7 号。他先说自己没听清票型，之后又用同一票型保了 2 号。</p>
+              <p>这个前后变化需要解释。</p>
+              <div class="fact">✓ 已公开：5 号已出局<br /><span>身份未公开，不作推断。</span></div>
+              <div class="my-note">? 我的推测：7 号偏狼<br /><span>与你的笔记同步，不代表真相。</span></div>
+            </div>
+            <div class="phone-dock">
+              <button class="target-button">目标：7 号 · 终章 <span>更换</span></button>
+              <div><button class="subtle">弃票</button><button class="primary">确认投给 7 号</button></div>
+              <small>底部操作区为独立触区，避开系统手势。</small>
+            </div>
+          </div>
+          <div class="mobile-spec">
+            <h3>尺寸不是把所有东西放大。</h3>
+            <dl>
+              <div>
+                <dt>48 × 48</dt>
+                <dd>手机图标按钮的最小点击区，图形本身 20–24px。</dd>
+              </div>
+              <div>
+                <dt>52px</dt>
+                <dd>手机核心行动按钮高度：发言、投票、技能确认。</dd>
+              </div>
+              <div>
+                <dt>16 / 1.65</dt>
+                <dd>正文默认字号与行高，昵称与标注不缩成装饰。</dd>
+              </div>
+              <div>
+                <dt>8px</dt>
+                <dd>相邻触区的常规间距；危险操作与确认动作分开。</dd>
+              </div>
+            </dl>
+            <p class="muted">这是推荐默认布局。可保留旧式双列座位为“紧凑桌面”，但不能牺牲触区和正文宽度。</p>
+            <p class="prototype-note">本页手机部分为静态布局样张；真实软键盘、系统返回和安全区交给施工阶段真机验收。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="chapter">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">玩家档案 / LOCAL PROFILES</p>
+            <h2>每个人，留下自己的足迹。</h2>
+          </div>
+          <p>不注册、不设密码、不上传云端。共享设备上的资料整理，不冒充安全隔离。</p>
+        </div>
+        <div class="profiles" id="profiles">
+          <button class="profile-card active" data-profile="砚舟">
+            <img src="../../web/assets/avatars/scholar.png" alt="" /><span><strong>砚舟</strong><small>当前档案 · 示例 18 局</small></span
+            ><em>使用中</em></button
+          ><button class="profile-card" data-profile="晚灯">
+            <img src="../../web/assets/avatars/softie.png" alt="" /><span><strong>晚灯</strong><small>示例 6 局 · 独立笔记</small></span
+            ><em>切换</em></button
+          ><button class="profile-card add-profile">
+            ＋ <span><strong>新建玩家档案</strong><small>填写昵称并选择头像</small></span>
+          </button>
+        </div>
+        <p id="profile-status" class="inline-status" role="status">示例数据。正在对局时，正式版本需先安全暂停才能切换。</p>
+      </section>
+
+      <section class="chapter icon-sheet">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">应用图标 / DELIVERY</p>
+            <h2>从桌面到掌心，同一个狼首。</h2>
+          </div>
+          <p>完整纹章、透明贴图、PWA 安全区与 Windows 多尺寸图标。</p>
+        </div>
+        <div class="icon-samples">
+          <figure>
+            <img class="large-icon" src="../brand/v2/export/icon-512.png" alt="软件图标" />
+            <figcaption>软件图标 · PNG</figcaption>
+          </figure>
+          <figure>
+            <div class="checker"><img class="large-icon" src="../brand/v2/export/wolf-decal-1024.png" alt="透明狼头贴图" /></div>
+            <figcaption>透明贴图 · PNG</figcaption>
+          </figure>
+          <figure>
+            <img class="large-icon round" src="../brand/v2/export/icon-maskable-512.png" alt="圆形裁切预览" />
+            <figcaption>安全区 · 圆形裁切预览</figcaption>
+          </figure>
+        </div>
+        <div class="sizes">
+          <span>实际小尺寸</span><img src="../brand/v2/export/icon-16.png" width="16" height="16" alt="16像素图标" /><img
+            src="../brand/v2/export/icon-24.png"
+            width="24"
+            height="24"
+            alt="24像素图标"
+          /><img src="../brand/v2/export/icon-32.png" width="32" height="32" alt="32像素图标" /><img
+            src="../brand/v2/export/icon-48.png"
+            width="48"
+            height="48"
+            alt="48像素图标"
+          /><img src="../brand/v2/export/icon-64.png" width="64" height="64" alt="64像素图标" />
+        </div>
+        <div class="downloads">
+          <a href="../brand/v2/wolf-emblem.svg">SVG 母版 ↗</a><a href="../brand/v2/export/icon-1024.png">1024px 软件图标 ↗</a
+          ><a href="../brand/v2/export/wolf-decal-1024.png">透明贴图 ↗</a><a href="../brand/v2/export/app.ico">Windows ICO ↗</a>
+        </div>
+      </section>
+    </main>
+    <footer>施工参照稿，不替代实施文档与真实设备验收。© 项目自有矢量设计 · 2026</footer>
+    <script src="preview.js"></script>
+  </body>
+</html>

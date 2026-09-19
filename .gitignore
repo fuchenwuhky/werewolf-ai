@@ -10,6 +10,10 @@ saves/
 .play-state.json
 .play-log*.md
 
+# 本地浏览器验收快照与截图
+.playwright-cli/
+output/playwright/
+
 # 依赖
 node_modules/
 

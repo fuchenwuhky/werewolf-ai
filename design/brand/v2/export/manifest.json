@@ -1,0 +1,175 @@
+{
+  "source": "design/brand/v2/wolf-emblem.svg",
+  "sourceSha256": "fa55ba9a4122fcdc1041d8982fdea462f35fec07d9431a4100ffbc119e259bfb",
+  "renderer": "sharp 0.35.4",
+  "files": [
+    {
+      "name": "app-icon.svg",
+      "width": 1024,
+      "height": 1024,
+      "bytes": 7591,
+      "sha256": "4aa47f599b2080753aea2a8d1f99edd8b9dfedb19318e94f50dc32567c0c5db9"
+    },
+    {
+      "name": "icon-16.png",
+      "width": 16,
+      "height": 16,
+      "bytes": 559,
+      "sha256": "34ed6e9f0464f37ebc771555fb74fdc842c64cb71459640f633e95be7cdae5a6"
+    },
+    {
+      "name": "icon-24.png",
+      "width": 24,
+      "height": 24,
+      "bytes": 1048,
+      "sha256": "71d39d01d905017a59814b58ed24d967676dc912577fe690e1c1d7252bcf68cc"
+    },
+    {
+      "name": "icon-32.png",
+      "width": 32,
+      "height": 32,
+      "bytes": 1651,
+      "sha256": "a895f2b79f42f9f465d663c94d04feaf1e4f6cb77bfd7bdb8677a1a30960c6e0"
+    },
+    {
+      "name": "icon-48.png",
+      "width": 48,
+      "height": 48,
+      "bytes": 3224,
+      "sha256": "50f1a37c8468a3981255c6204be94d855e026679831bbf3a1f99a3a36baaae1e"
+    },
+    {
+      "name": "icon-64.png",
+      "width": 64,
+      "height": 64,
+      "bytes": 5263,
+      "sha256": "d02dfc9f128c5794964c6a200555d290cbea70e3928f31007a07c5d2a04a9061"
+    },
+    {
+      "name": "icon-72.png",
+      "width": 72,
+      "height": 72,
+      "bytes": 6394,
+      "sha256": "c2c6f35d18a838d1c7d44067daefd2fe29dfcd2539f6b06a2b0828cb914a7c3f"
+    },
+    {
+      "name": "icon-96.png",
+      "width": 96,
+      "height": 96,
+      "bytes": 10433,
+      "sha256": "0bddfff45630bc6abec68e37c166f8e77889e4d860e061a49473cb9fabda8068"
+    },
+    {
+      "name": "icon-128.png",
+      "width": 128,
+      "height": 128,
+      "bytes": 16681,
+      "sha256": "ff7931f8bc0a19a119dc5199d778665064511f9d463cdca57c518233887e657d"
+    },
+    {
+      "name": "icon-144.png",
+      "width": 144,
+      "height": 144,
+      "bytes": 19817,
+      "sha256": "a9a1f1a3c90d0de90046320acb5888fe5d7aaedce7aabacbc73037f155bfbab5"
+    },
+    {
+      "name": "icon-180.png",
+      "width": 180,
+      "height": 180,
+      "bytes": 27868,
+      "sha256": "7d6604860ceb9dfbfbbb8ec016f3514d98c20bfd28781388cb0a7842afa5962a"
+    },
+    {
+      "name": "icon-192.png",
+      "width": 192,
+      "height": 192,
+      "bytes": 30544,
+      "sha256": "088b0d0deb5ab55a8531c054e20b3f0bc92bb378da45a1e0d1491591684477d6"
+    },
+    {
+      "name": "icon-256.png",
+      "width": 256,
+      "height": 256,
+      "bytes": 45876,
+      "sha256": "6e96feb9e4eca5279d1a53e7f3a256dbd6a9237875b711e94ee6914596792477"
+    },
+    {
+      "name": "icon-512.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 112289,
+      "sha256": "31a1bce0712a18bc068d568b85122aeddb5a986a946170db53a375eb4d23d08d"
+    },
+    {
+      "name": "icon-1024.png",
+      "width": 1024,
+      "height": 1024,
+      "bytes": 255097,
+      "sha256": "3e1355380c50483da7ac1464e9d5c63daccc4e59c8cdfcb683e05bcee9f327a2"
+    },
+    {
+      "name": "wolf-decal-1024.png",
+      "width": 1024,
+      "height": 1024,
+      "bytes": 266822,
+      "sha256": "a4674677f2999682d28056537aa3d97adcae9566c7a3e8b5ff91dc3efff56aa5"
+    },
+    {
+      "name": "icon-maskable-512.png",
+      "width": 512,
+      "height": 512,
+      "bytes": 90931,
+      "sha256": "352a8c6aeb123094c8d9232075a1a1c26ae94c2013286d540975d29c86664d75"
+    },
+    {
+      "name": "adaptive-foreground-108.png",
+      "width": 108,
+      "height": 108,
+      "bytes": 7754,
+      "sha256": "37afc79204f93d8613b4d154a2e55b644ea639bf045b7d758082478b5535e13f"
+    },
+    {
+      "name": "adaptive-foreground-162.png",
+      "width": 162,
+      "height": 162,
+      "bytes": 14976,
+      "sha256": "7d194e8040afa284851e303ab3bf82c70eaf587c9b75658fd4a24a1c0c05cd17"
+    },
+    {
+      "name": "adaptive-foreground-216.png",
+      "width": 216,
+      "height": 216,
+      "bytes": 23046,
+      "sha256": "3cda4703989c63715aa9448bf01c642cd7443a339aa832daadde6f3ff87e4486"
+    },
+    {
+      "name": "adaptive-foreground-324.png",
+      "width": 324,
+      "height": 324,
+      "bytes": 41199,
+      "sha256": "aabd4d46ad09a774f00c38fcbec1aeda1f190ae9c390e67fe15497cf4312ffa7"
+    },
+    {
+      "name": "adaptive-foreground-432.png",
+      "width": 432,
+      "height": 432,
+      "bytes": 61004,
+      "sha256": "c1226341f9e45a85a9f036377dd2d88c333f83c1e89e0fe0fd6384e1f632e391"
+    },
+    {
+      "name": "app.ico",
+      "sizes": [
+        16,
+        24,
+        32,
+        48,
+        64,
+        128,
+        256
+      ],
+      "bytes": 74420,
+      "sha256": "5f12e8e174ad81428b81107e638c7e346e3bd20facf9f9ee2a4dcea057d667d4"
+    }
+  ]
+}

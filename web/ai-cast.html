@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#06090f">
+  <title>AI 来客名册 · 长夜集会</title>
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="ai-cast.css">
+</head>
+<body class="cast-page">
+  <main class="cast-book">
+    <nav class="cast-nav"><a id="cast-back" href="/">← 返回游戏</a><span>长夜集会 · 来客名册</span></nav>
+    <header class="cast-intro">
+      <p class="cast-eyebrow">同一张圆桌，不同的声音</p>
+      <h1>今夜，谁与你同席？</h1>
+      <p>24 张面孔，24 种发言气质。有人追问证据，有人耐心听完，有人用三句话收拢整桌分歧。</p>
+      <p class="cast-note">头像是玩家外观，不代表身份或阵营。把下方任一昵称填进桌面端 AI 昵称栏，即可邀请对应来客；自定义性格仍优先。</p>
+    </header>
+    <section id="cast-grid" class="cast-grid" aria-label="AI 肖像与昵称"></section>
+    <p id="cast-status" class="cast-status" role="status" aria-live="polite"></p>
+    <footer class="cast-footer">旧昵称和自定义昵称也会获得稳定头像；同局 24 位 AI 以内不重复，刷新与切换视角不换脸。</footer>
+  </main>
+  <script src="ai-cast.js"></script>
+  <script src="ai-cast-page.js"></script>
+</body>
+</html>

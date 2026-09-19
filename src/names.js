@@ -39,6 +39,8 @@ const GROUPS = {
 };
 
 const ALL = [];
+// 24 位具名 AI 各有 4 个昵称，与公开头像名册共用，避免前后端映射漂移。
+GROUPS.长夜来客 = require('../web/ai-cast').NAMES;
 for (const list of Object.values(GROUPS)) {
   for (const n of list) if (!ALL.includes(n)) ALL.push(n);
 }

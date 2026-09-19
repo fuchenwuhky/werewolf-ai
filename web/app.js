@@ -435,7 +435,7 @@ function renderPersonas() {
     const input = el('input');
     input.dataset.seat = seat;
     input.setAttribute('list', 'persona-list');
-    input.placeholder = `留空＝随机性格（可选：毒舌贵妇、十年老油条…）`;
+    input.placeholder = `留空＝名册默认／随机性格（也可选择或自定义）`;
     input.maxLength = 60;
     if (existing[seat]) input.value = existing[seat];
     box.appendChild(input);
@@ -1610,6 +1610,7 @@ function updateSeats(v) {
   ring.appendChild(core);
 
   const n = v.players.length || 1;
+  const portraits = window.AICast ? window.AICast.assignPortraits(v.players) : new Map();
   v.players.forEach((p, i) => {
     // -90° 起（正上方），顺时针铺开；半径按人数微调（人越多越贴边，避免互相压住）
     const ang = (-90 + (360 / n) * i) * Math.PI / 180;
@@ -1634,8 +1635,9 @@ function updateSeats(v) {
       ? `<span class="role-chip" style="color:${info.color}" title="${info.emoji}${info.name}">${info.emoji}</span>` : '';
     const badges = `${p.isSheriff ? '<span class="badge" title="警长">👑</span>' : ''}${p.lostVote ? '<span class="badge" title="失去投票权">🚫</span>' : ''}`;
     const votes = tally[p.seat];
-    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}>${p.seat}${badges}${roleHtml}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
+    s.innerHTML = `<span class="snum"${info ? ` style="border-color:${info.color}"` : ''}><span class="seat-index">${p.seat}</span>${badges}${roleHtml}${votes ? `<span class="votecount">${votes}</span>` : ''}</span>`
       + `<span class="sname">${escapeHtml(p.name)}${p.seat === mySeat ? '（你）' : ''}</span>`;
+    if (window.AICast) window.AICast.decorate(s.querySelector('.snum'), portraits.get(p.seat));
     s.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
     // 点座位 = 选目标（与手机端同一套交互：目标类任务时座位本身就是按钮）
     if (canPick) s.addEventListener('click', () => selectTarget(p.seat));
