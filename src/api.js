@@ -777,6 +777,10 @@ class Api {
           if (!mgmt) return this._denyManagement(res);
           return this.profileGames(res, pid);
         }
+        if (psub === 'export' && method === 'GET') {
+          if (!mgmt) return this._denyManagement(res);
+          return this.profileExport(res, pid);
+        }
       }
       if (gameMatch) {
         const id = gameMatch[1];
@@ -1676,6 +1680,36 @@ class Api {
         rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock, savedAt: doc.savedAt || null });
       }
       return this.json(res, 200, { rows });
+    } catch (e) { return this.json(res, 500, { error: e.message }); }
+  }
+
+  /**
+   * 档案导出（PROF-04，§3.5）：生成脱敏的版本化 JSON 包（用户主动下载，不联网上传）。
+   * 内容 = 档案资料 + 已结束局 + 各局笔记；不含密钥/令牌/Cookie/锚点/journal。
+   */
+  profileExport(res, pid) {
+    try {
+      const prof = this.profiles.get(pid);
+      const games = transfer.collectExportableGames(this.saveDir, pid);
+      const notes = {};
+      for (const g of games) {
+        try {
+          const doc = this.annotations.get(pid, g.id);
+          if (doc && Object.keys(doc.seats || {}).length) notes[g.id] = doc;
+        } catch (_) { /* 单局笔记读取失败不阻断导出 */ }
+      }
+      const pkg = transfer.buildExportPackage({ profile: prof, games, notes, hostLabel: '本机导出' });
+      const body = JSON.stringify(pkg, null, 2);
+      if (Buffer.byteLength(body) > transfer.MAX_BYTES) {
+        return this.json(res, 413, { error: `导出包超过上限（${Math.round(transfer.MAX_BYTES / 1048576)} MiB），请减少可导出对局后重试` });
+      }
+      const fname = `ww-profile-${(prof.nickname || 'player').replace(/[^\w\u4e00-\u9fa5-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.json`;
+      res.writeHead(200, {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(fname)}`,
+        'Cache-Control': 'no-store',
+      });
+      return void res.end(body);
     } catch (e) { return this.json(res, 500, { error: e.message }); }
   }
 

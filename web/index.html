@@ -337,6 +337,13 @@
         <!-- 玩家 -->
         <div class="card" id="card-players">
           <h2 data-no="③" data-i18n="players.title">玩家</h2>
+          <!-- 玩家档案（PROF-01）：本机多档案，切换不换 API 配置；对局创建时把归属固化到所选档案 -->
+          <div class="profile-strip" id="profile-strip">
+            <label class="profile-pick"><span class="profile-label">👤 我的档案</span>
+              <select id="profile-select" title="对局将归属到该档案（战绩/笔记/经验池按档案隔离）"></select>
+            </label>
+            <button class="btn ghost small" id="btn-profile-manage" type="button">管理档案…</button>
+          </div>
           <div class="mode-picker">
             <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
             <label class="mode-card"><input type="radio" name="mode" value="watch"> <span class="mode-body"><b data-i18n="players.modeWatch">纯观战（上帝视角看 AI 互杀）</b></span></label>
@@ -413,6 +420,7 @@
       </div>
       <div class="top-actions">
         <span class="alive-meter" id="g-alive" title="存活人数"></span>
+        <button class="btn ghost" id="btn-notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记">📝</button>
         <button class="btn ghost" id="btn-gear" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置">⚙</button>
       </div>
     </header>
@@ -433,6 +441,17 @@
       <div id="pending-hint" class="pending-hint"></div>
       <div id="action-controls"></div>
     </footer>
+
+    <!-- 私人笔记抽屉（NOTE-03）：常显入口在顶栏 📝；列出全部座位标注，点击进编辑。
+         与上帝抽屉同一套抽屉样式；Esc 关闭，焦点回顶栏按钮。 -->
+    <aside id="notes-drawer" class="god-drawer hidden" aria-label="私人笔记">
+      <div class="drawer-head">
+        <h3>📝 私人笔记</h3>
+        <button class="btn ghost small" id="btn-notes-close"><span>✕ 关闭</span></button>
+      </div>
+      <p class="hint">只是你自己的推理笔记，AI 完全看不到；按对局与档案保存。已公开的身份会自动覆盖你的推测。</p>
+      <div id="notes-list"></div>
+    </aside>
 
     <aside id="god-drawer" class="god-drawer hidden">
       <div class="drawer-head">
@@ -508,6 +527,7 @@
 <script src="rulebook.js"></script>
 <script src="pwa.js"></script>
 <script src="ai-cast.js"></script>
+<script src="shared/annotations-model.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

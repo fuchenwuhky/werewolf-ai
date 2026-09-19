@@ -22,7 +22,7 @@
       ? [...new Set(raw.candidateRoleIds.filter((r) => typeof r === 'string' && /^[a-z_]{1,32}$/.test(r)))].slice(0, MAX_CANDIDATES)
       : [];
     out.claimedRoleId = typeof raw.claimedRoleId === 'string' && /^[a-z_]{1,32}$/.test(raw.claimedRoleId) ? raw.claimedRoleId : null;
-    out.confidence = CONFIDENCE_CN(raw.confidence) === undefined && typeof raw.confidence === 'string' && CONFIDENCE_CN[raw.confidence] ? raw.confidence : (CONFIDENCE_CN[raw.confidence] ? raw.confidence : 'low');
+    out.confidence = typeof raw.confidence === 'string' && CONFIDENCE_CN[raw.confidence] ? raw.confidence : 'low';
     out.note = typeof raw.note === 'string' ? raw.note.slice(0, MAX_NOTE) : '';
     out.evidenceSeq = Number.isInteger(raw.evidenceSeq) && raw.evidenceSeq > 0 ? raw.evidenceSeq : null;
     out.day = Number.isInteger(raw.day) && raw.day > 0 ? raw.day : null;

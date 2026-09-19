@@ -790,13 +790,38 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid rgba(255, 255, 255, .25); color: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
 }
-.seat .tag-btn { position: absolute; right: -6px; top: -6px; opacity: 0; transition: opacity var(--dur) var(--ease); }
-.seat:hover .tag-btn { opacity: 1; }
+/* 标注入口常显（计划 §4.3：不能只在 hover 出现）；hover 提亮 */
+.seat .tag-btn { position: absolute; right: -6px; top: -6px; opacity: .55; transition: opacity var(--dur) var(--ease); }
+.seat:hover .tag-btn, .seat .tag-btn:focus-visible { opacity: 1; }
 .tag-btn {
   min-height: 20px !important; padding: 0 6px !important; font-size: var(--fs-xs) !important;
   border-radius: var(--r-pill) !important;
 }
-.tag-chip { opacity: .9; }
+.tag-chip { opacity: .9; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 玩家档案（PROF-01） ---------- */
+.profile-strip {
+  display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3);
+  background: rgba(146, 174, 235, .06); border: 1px solid rgba(146, 174, 235, .18); border-radius: var(--r-md);
+}
+.profile-strip .profile-pick { display: flex; align-items: center; gap: var(--sp-2); flex: 1; min-width: 200px; margin: 0; }
+.profile-strip .profile-label { font-size: var(--fs-sm); color: var(--gold-dim); white-space: nowrap; }
+.profile-strip select { flex: 1; min-width: 0; }
+.pm-list { display: flex; flex-direction: column; gap: var(--sp-2); margin: var(--sp-2) 0 var(--sp-3); max-height: 46vh; overflow-y: auto; }
+.pm-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3);
+  background: rgba(10, 14, 26, .6); border: 1px solid rgba(146, 174, 235, .14); border-radius: var(--r-md);
+}
+.pm-row.current { border-color: rgba(216, 178, 95, .55); }
+.pm-row.archived { opacity: .6; }
+.pm-main { min-width: 0; }
+.pm-name { font-weight: 700; color: var(--fg); overflow-wrap: anywhere; }
+.pm-ops { display: flex; gap: var(--sp-1); flex-wrap: wrap; justify-content: flex-end; }
+
+/* ---------- 私人笔记抽屉（NOTE-03）：与上帝抽屉同款，稍窄 ---------- */
+#notes-drawer { width: min(400px, 92vw); }
 
 /* ---------- 事件流 ---------- */
 .stream {
