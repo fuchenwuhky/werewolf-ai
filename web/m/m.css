@@ -4,9 +4,29 @@
 html, body { height: 100%; overscroll-behavior: none; }
 /* position/z-index 是给氛围层让位的：.atmosphere 是 position:fixed + z-index:0，
    静态的 #m-app 在层叠顺序上会被它盖住（桌面版 #app 一直带着 z-index:1 才没出问题）。 */
-#m-app { height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1; }
+#m-app {
+  height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1;
+  /* FIN-03 手机控件 token：普通控件 ≥48、主操作 ≥52（视图随支持情况用 dvh 兜动态视口） */
+  --hctl-m: 48px;
+  --hctl-main-m: 52px;
+}
+/* FIN-06 §10.5：动态视口（dvh）——软键盘/浏览器工具栏收展时以可视高度为准；不支持则维持 100% */
+@supports (height: 100dvh) {
+  html, body { height: 100dvh; }
+  #m-app { height: 100dvh; }
+}
 .m-screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .m-screen.hidden { display: none !important; }
+#m-app .hidden { display: none !important; }
+/* FIN-03：输入类字体 ≥16px（防 iOS 聚焦自动放大）；控件统一抬到 48px，主操作 52px */
+#m-app input:not([type=checkbox]):not([type=radio]):not([type=range]),
+#m-app select, #m-app textarea { font-size: 16px; }
+#m-app .btn { min-height: var(--hctl-m); }
+#m-app .btn.primary, #m-app .btn.big { min-height: var(--hctl-main-m); }
+#m-app .btn.small { min-height: var(--hctl-m); padding: 0 var(--sp-3); }
+#m-app .btn:disabled { cursor: not-allowed; }
+/* 处理中：保持宽度（不用更短的文案把按钮缩掉），吞掉点击避免双击双提交的观感 */
+#m-app .m-busy { pointer-events: none; opacity: .72; }
 
 .m-head {
   padding: calc(env(safe-area-inset-top, 0px) + var(--sp-3)) var(--sp-4) var(--sp-3);
@@ -30,25 +50,29 @@ html, body { height: 100%; overscroll-behavior: none; }
   border-bottom: 1px solid var(--gold-dim);
   background: linear-gradient(180deg, #0b1120, #070b16);
 }
-/* 顶栏只有两个按钮（设置 / 规则书），都很小：整条 44px 高，别抢牌桌的竖向空间 */
+/* 顶栏只有两个按钮（设置 / 规则书）：视觉 ≤38px 不抢牌桌竖向空间，
+   但用 ::after 把**命中区**外扩到 ≥48px（FIN-03：返回/关闭/设置/笔记图标 48×48） */
 .m-gear {
-  flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
+  flex: none; position: relative; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
   background: linear-gradient(180deg, #18223c, #0d1425);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
   font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
+.m-gear::after, .m-bar-btn::after { content: ''; position: absolute; inset: -6px; }
 /* 日期/阶段居中：齿轮与规则书在两端（flex:1 占满中间，规则书才会被顶到最右） */
 .m-status { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; justify-content: center; gap: var(--sp-2); flex-wrap: wrap; }
 .m-gear:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
 /* 顶栏右上角：规则书（用户指定放这边，正好利用空位） */
 .m-bar-btn {
-  flex: none; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
+  flex: none; position: relative; width: 36px; height: 36px; border-radius: var(--r-sm); cursor: pointer;
   background: linear-gradient(180deg, #18223c, #0d1425);
   border: 1px solid rgba(201,162,39,.4); color: var(--gold-bright);
   font-size: 17px; line-height: 1;
   display: flex; align-items: center; justify-content: center;
 }
+/* 局中顶栏小狼冠（FIN-08）：18-22px 低干扰标识，不挤阶段文案 */
+.m-bar-mark { flex: none; opacity: .92; filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
 .m-bar-btn:active { border-color: var(--gold); color: #fff; transform: scale(.96); }
 #m-day { font-family: var(--font-goth); color: var(--gold-bright); }
 .m-phase-chip {
@@ -96,9 +120,9 @@ html, body { height: 100%; overscroll-behavior: none; }
   border-radius: var(--r-sm); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2);
 }
 .m-custom-row .cnt { display: flex; align-items: center; gap: var(--sp-2); }
-/* ± 按钮：原来 26×26，拇指基本点不中；手机上一律 ≥40px */
+/* ± 按钮：手机上一律 ≥48px（FIN-03 加减控件 48px） */
 .m-custom-row button {
-  width: 40px; height: 40px; border-radius: var(--r-sm); border: 1px solid var(--line);
+  width: 48px; height: 48px; border-radius: var(--r-sm); border: 1px solid var(--line);
   background: var(--card); color: var(--text); font-size: var(--fs-lg); line-height: 1; cursor: pointer;
 }
 .m-custom-row button:active { border-color: var(--gold); color: var(--gold-bright); }
@@ -138,16 +162,16 @@ html, body { height: 100%; overscroll-behavior: none; }
   padding: 7px 6px 18px;
   background: linear-gradient(180deg, rgba(30,23,46,.5), rgba(12,9,20,.72));
   border: 1px solid var(--line-dim); border-radius: var(--r-md);
-  font-size: var(--fs-base); line-height: 1.7;
+  font-size: 16px; line-height: 1.7; /* §7.1：手机正文默认 16px（长阅读面） */
 }
 /* 消息一律左对齐、占满整列宽：窄列上"AI 左 / 我右"等于白扔一半宽度。
    身份改用颜色区分（我=金边、狼聊=红边、私密=紫边），见下面的 .mine */
 .m-flow .msg {
   align-self: stretch; max-width: 100%;
   padding: 6px 8px; border-radius: var(--r-sm);
-  font-size: var(--fs-md); line-height: 1.7;
+  font-size: 16px; line-height: 1.7;
 }
-.m-flow .msg .meta { font-size: 10px; margin-bottom: 2px; gap: 5px; }
+.m-flow .msg .meta { font-size: 12px; margin-bottom: 2px; gap: 5px; }
 .m-flow .msg .meta .who { font-weight: 600; }
 .m-flow .msg.mine {
   background: linear-gradient(180deg, #1c2740, #141d33);
@@ -161,7 +185,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 「↓ 最新」：往上翻看历史时出现，避免"信息跑出视野后回不去" */
 .m-to-bottom {
   position: absolute; right: 8px; bottom: 8px; z-index: 3;
-  min-height: 34px; padding: 0 var(--sp-3); cursor: pointer;
+  min-height: 44px; padding: 0 var(--sp-3); cursor: pointer;
   border-radius: var(--r-pill); border: 1px solid var(--gold-dim);
   background: rgba(24,17,36,.94); color: var(--gold-bright); font-size: var(--fs-sm);
   box-shadow: 0 4px 14px rgba(0,0,0,.6);
@@ -238,7 +262,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .pending-hint {
   border-left: 3px solid var(--accent); padding-left: 6px;
-  font-size: var(--fs-xs); line-height: 1.4; color: var(--text-dim);
+  font-size: 12px; line-height: 1.4; color: var(--text-dim); /* §7.1：次级文字不低于 12px */
 }
 .pending-hint.mine { color: #ffd98a; border-left-color: var(--gold); }
 .pending-hint.waiting { border-left-color: var(--line); color: var(--muted); }
@@ -420,7 +444,7 @@ html, body { height: 100%; overscroll-behavior: none; }
 #m-codex .m-head h2 { flex: 1 1 auto; }
 #m-codex .m-head .btn.small.ghost { flex: none; font-size: var(--fs-xs); padding: 0 10px; }
 #m-codex .cdx-sub { margin: 6px var(--sp-4) 0; font-size: var(--fs-xs); }
-#m-codex #cdx-search { width: auto; margin: 8px var(--sp-4); height: 38px; }
+#m-codex #cdx-search { width: auto; margin: 8px var(--sp-4); height: 48px; }
 /* 筛选条：一行横滑。换行会把三行筛选按钮堆到牌上面，占掉半屏 */
 #m-codex .cdx-filters {
   padding: 0 var(--sp-4) var(--sp-3); border-bottom: none;
@@ -476,7 +500,7 @@ html, body { height: 100%; overscroll-behavior: none; }
   border: 1px solid var(--line); background: linear-gradient(180deg, rgba(24, 34, 60, .72), rgba(12, 18, 34, .72));
 }
 .cdx-pager button {
-  flex: none; width: 40px; height: 34px; border-radius: var(--r-sm); cursor: pointer;
+  flex: none; width: 48px; height: 44px; border-radius: var(--r-sm); cursor: pointer;
   border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--gold-bright);
   font-size: 18px; line-height: 1; font-family: inherit;
 }
@@ -584,3 +608,191 @@ html, body { height: 100%; overscroll-behavior: none; }
   font-size: 9px; line-height: 1.6; padding: 0 5px; border-radius: var(--r-pill);
   color: #e6c876; background: rgba(60,45,14,.55); border: 1px solid rgba(201,162,39,.4);
 }
+
+/* ============================================================
+   FIN-04 手机首页信息架构 + FIN-06 局内页签 + FIN-08 品牌
+   ------------------------------------------------------------
+   首页：品牌区（狼冠 + 应用名）→ 当前档案 → 继续上局 → 开始新局
+         → 第一步选板子 → 次级入口 → 底部主入口（≤4 个）。
+   局中：顶栏（小狼冠 + 阶段）→ 局内页签（发言 | 玩家 | 笔记）
+         → 全宽主体 → 底部行动区（任务 → 已选目标 → 确认）。
+   两套导航条分属不同屏（#m-tabbar 只在首页、#m-tabs 只在对局屏），
+   不会叠加挤占行动区。
+   ============================================================ */
+
+/* ---------- 首页品牌区（FIN-08：狼冠 60-90px 主标识 + 清晰应用名，去 🦇） ---------- */
+.m-hero {
+  flex: none; display: flex; align-items: center; gap: var(--sp-4);
+  padding: calc(env(safe-area-inset-top, 0px) + var(--sp-4)) var(--sp-4) var(--sp-3);
+  border-bottom: 1px solid var(--gold-dim);
+  background: linear-gradient(180deg, #0b1120, #070b16);
+}
+.m-brand-mark {
+  width: 72px; height: 72px; flex: none;
+  filter: drop-shadow(0 4px 14px rgba(0,0,0,.55));
+}
+.m-brand-txt { min-width: 0; }
+.m-brand-name {
+  margin: 0; font-family: var(--font-cn-title); font-size: 24px; letter-spacing: 3px;
+  color: var(--gold-bright); text-shadow: 0 1px 0 rgba(0,0,0,.6), 0 0 10px rgba(201,162,39,.25);
+}
+.m-brand-sub { margin: 2px 0 0; color: var(--muted); font-size: var(--fs-sm); letter-spacing: 2px; }
+
+/* 首页滚动主体：品牌区与底部主入口之间的全部内容 */
+.m-home-scroll {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-3);
+}
+
+/* 当前档案行（复用现有档案体系）：头像 emoji + 昵称 + 管理 */
+.m-profile-chip {
+  display: flex; align-items: center; gap: var(--sp-2); min-height: 48px;
+  padding: 6px var(--sp-3); border-radius: var(--r-pill); cursor: pointer;
+  border: 1px solid var(--line); background: rgba(146, 174, 235, .06);
+  color: var(--text); font-size: var(--fs-md); font-family: inherit; text-align: left;
+}
+.m-profile-chip:active { border-color: var(--gold-dim); }
+.m-profile-chip .m-profile-avatar { font-size: 18px; flex: none; }
+.m-profile-chip .m-profile-nick { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-profile-chip .m-profile-manage { margin-left: auto; flex: none; color: var(--gold-bright); font-size: var(--fs-sm); }
+
+/* 继续上局卡：有可恢复局才显示（模式 / 阶段 / 保存时间在 meta 行） */
+.m-resume {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3); border-radius: var(--r-md);
+  border: 1px solid rgba(201, 162, 39, .45); border-left: 3px solid var(--gold);
+  background: linear-gradient(180deg, rgba(201, 162, 39, .12), rgba(10, 15, 28, .7));
+}
+.m-resume-info { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-resume-info b { color: var(--gold-bright); font-size: var(--fs-lg); letter-spacing: 1px; }
+.m-resume-info .hint { overflow-wrap: anywhere; }
+.m-resume .btn { flex: none; min-height: var(--hctl-main-m); padding: 0 var(--sp-4); }
+
+/* 主行动：开始新局（主按钮占满主宽，≥52px） */
+.m-home-cta { width: 100%; min-height: 56px; font-size: var(--fs-xl); letter-spacing: 6px; }
+.m-home-hints { display: flex; align-items: center; gap: var(--sp-3); }
+.m-home-hints .btn { flex: none; min-height: var(--hctl-m); }
+.m-home-hints .hint { flex: 1 1 auto; min-width: 0; }
+
+/* 开始新局 · 第一步：选板子 */
+.m-step-title { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 0 0; }
+.m-step-title::before { content: none; }
+.m-step-no {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  width: 24px; height: 24px; border-radius: 50%;
+  border: 1px solid var(--gold-dim); color: var(--gold-bright); font-size: 13px;
+}
+.m-step-label { margin: 0 0 var(--sp-2); color: var(--muted); font-size: var(--fs-sm); letter-spacing: 1px; }
+/* 板子网格在首页滚动容器内：不再自己滚 */
+.m-grid-home { flex: none; overflow: visible; padding: 0; }
+
+/* 次级入口 + 说明：收纳在首屏下方，不占主视区 */
+.m-more-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.m-more-row .btn { min-height: var(--hctl-m); }
+.m-home-note { margin: 0; }
+
+/* 首页底部主入口（≤4：开始 / 对局 / 资料 / 我的） */
+.m-tabbar {
+  flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
+  padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));
+  border-top: 1px solid var(--gold-dim);
+  background: linear-gradient(180deg, #0b1120, #060a14);
+}
+.m-tab-btn {
+  min-height: var(--hctl-m); padding: 0 var(--sp-2); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  border: 1px solid var(--line-dim); border-radius: var(--r-sm);
+  background: linear-gradient(180deg, #131b2e, #0b1120); color: var(--text-dim);
+  font-size: var(--fs-md); font-family: inherit; letter-spacing: 1px;
+}
+.m-tab-btn:active { transform: translateY(1px); }
+.m-tab-btn.active {
+  color: var(--gold-bright); border-color: rgba(201, 162, 39, .55);
+  background: linear-gradient(180deg, #1d2440, #101728);
+  box-shadow: inset 0 0 0 1px rgba(201, 162, 39, .25), 0 0 12px rgba(201, 162, 39, .14);
+}
+
+/* 首页旧 m-foot 改为行内（下一步按钮跟在板子网格后） */
+.m-foot-inline { border-top: none; background: none; padding: 0; justify-content: flex-end; }
+.m-foot-inline #m-next { min-width: 9em; }
+
+/* ---------- 局内页签：发言 | 玩家 | 笔记（FIN-06 §10.1） ---------- */
+.m-tabs {
+  flex: none; display: flex; gap: 6px;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--gold-dim);
+  background: linear-gradient(180deg, #0b1120, #070b16);
+}
+.m-tabs .m-tab-btn { flex: 1 1 0; min-height: 44px; }
+
+/* 发言页：两侧座位列收起，流程区全宽阅读 */
+#m-game.tab-speech .m-seatcol { display: none; }
+
+/* 玩家页：两列座位容器重排成卡片网格 —— 320px 两列、≥460px 三列，每卡 ≥96px */
+#m-game.tab-players .m-flow-wrap { display: none; }
+#m-game.tab-players .m-board {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--sp-2); align-content: start;
+  overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+  padding: var(--sp-2);
+}
+#m-game.tab-players .m-seatcol { display: contents; }
+@media (min-width: 460px) {
+  #m-game.tab-players .m-board { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+/* 卡片化覆盖（基础 .srow 仍是发言时代的无框样式，这里只加玩家页的卡面） */
+#m-game.tab-players .srow {
+  min-height: 96px; gap: 5px; padding: var(--sp-2) 4px;
+  border: 1px solid var(--line-dim); border-radius: var(--r-md);
+  background: linear-gradient(180deg, rgba(24, 34, 60, .55), rgba(10, 15, 28, .72));
+}
+#m-game.tab-players .srow:active { transform: scale(.98); }
+#m-game.tab-players .srow.dead { opacity: .55; }
+#m-game.tab-players .srow .num { width: 44px; height: 44px; font-size: 17px; }
+#m-game.tab-players .srow .nm {
+  font-size: 13px; line-height: 1.3; white-space: normal;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+#m-game.tab-players .srow .tag-pill { font-size: 11px; }
+#m-game.tab-players .srow .b { font-size: 14px; top: 2px; right: 4px; }
+#m-game.tab-players .srow .b.l { left: auto; right: 4px; }
+
+/* 笔记页：全部座位标注列表（行高 ≥56，点行进编辑弹层） */
+.m-pane {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch;
+  padding: var(--sp-3) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-3));
+}
+.m-notes-list { display: flex; flex-direction: column; gap: var(--sp-2); }
+.m-note-row {
+  display: flex; align-items: center; gap: var(--sp-3); width: 100%; min-height: 56px;
+  padding: var(--sp-2) var(--sp-3); text-align: left; cursor: pointer;
+  border: 1px solid var(--line-dim); border-radius: var(--r-md);
+  background: linear-gradient(180deg, rgba(24, 34, 60, .45), rgba(10, 15, 28, .6));
+  color: var(--text); font-family: inherit; font-size: var(--fs-md);
+}
+.m-note-row:active { border-color: var(--gold-dim); }
+.m-note-row .n-num {
+  flex: none; width: 34px; height: 34px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--font-goth); font-weight: 700; color: var(--gold-dim);
+  background: radial-gradient(circle at 35% 28%, #26355c, #101728 72%);
+  border: 1px solid rgba(201, 162, 39, .3);
+}
+.m-note-row.dead .n-num { opacity: .5; }
+.m-note-row .n-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.m-note-row .n-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-note-row .n-sum { font-size: var(--fs-sm); color: #e6c876; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-note-row .n-note { font-size: var(--fs-sm); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-note-row .n-edit { flex: none; color: var(--gold-bright); font-size: var(--fs-sm); }
+.m-note-row.empty .n-sum { color: var(--muted); }
+
+/* 「去玩家页选人」：目标任务的可见入口（不依赖长按/hover） */
+.m-goto-players { align-self: flex-start; min-height: 44px; margin-top: 4px; }
+
+/* 「↓ N 条新发言」：上翻时新增条数可见（FIN-10 §13.1.3） */
+.m-to-bottom .newcnt { color: #ffd7dd; font-weight: 700; }
+
+/* 主操作键（发送/确认/投票/技能确认）：≥52px 且优先占主宽（FIN-03）；次要键 ≥44（chip 档） */
+.m-keys [data-confirm] { min-height: 52px; flex: 1 1 auto; }
+.m-keys .key { min-height: 44px; }

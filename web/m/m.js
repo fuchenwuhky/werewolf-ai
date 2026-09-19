@@ -21,8 +21,131 @@ const state = {
   profiles: [], profileId: null,
   // 私人标注 V2（NOTE-04）：enterGame 时初始化；loaded=已拉取过，available=服务端可读写
   anno: null,
+  // FIN-04 首页：可恢复局信息（tryResume 拉到的句柄+视图摘要）；FIN-06 局内页签当前页
+  resume: null, gameTab: 'speech',
+  // FIN-06 §10.10：切后台时的状态快照（回前台比对，变更则作废已选目标）
+  hiddenSnap: null,
+  // 防双击双提交（FIN-03：双击只产生一次业务提交）
+  submitting: false,
 };
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
+
+// ---------------- 系统返回栈（FIN-06 §10.5/§10.6） ----------------
+// 返回优先级：关闭最上层面板 → 当前功能页返回（页签/规则页）→ 离局确认。
+// 原生返回（popstate）与页面返回按钮走同一条栈：每开一层（弹窗/弹层/检视/图鉴/规则页/对局）
+// push 一条 history state（{mww: 深度}），返回时按深度逐层关，**一次返回只关一层**，
+// 不出现"既关编辑又退局"。game 是栈底哨兵：返回到它时先回到发言页签、再弹离局确认，
+// 确认前把 state 推回去（不真正离局）。
+const backStack = []; // [{kind:'game'|'modal'|'sheet'|'inspect'|'flip'|'screen-codex'|'screen-rules', closeDom, veto}]
+let overlayReplaceNext = false; // 置位后下一次 track() 顶层换内容不加深（弹窗换弹窗/弹窗换弹层）
+
+function overlayAlive(kind) {
+  if (kind === 'modal') return !!document.querySelector('#m-modal .modal-mask');
+  if (kind === 'sheet') return !!$('#m-sheet').firstChild;
+  if (kind === 'inspect') return !!document.querySelector('.inspect-stage');
+  if (kind === 'flip') return !$('#m-flip').classList.contains('hidden');
+  if (kind === 'screen-codex') return !$('#m-codex').classList.contains('hidden');
+  if (kind === 'screen-rules') return !$('#m-rules').classList.contains('hidden');
+  return true;
+}
+
+/** 登记一层。三种走向：① 显式 replace / swapIfOpen（换页不加深）② 顶层同类且还活着（换内容）③ 正常压栈 */
+function trackOverlay(kind, closeDom, opts) {
+  const o = opts || {};
+  const top = backStack[backStack.length - 1];
+  const replace = overlayReplaceNext || o.swapIfOpen;
+  overlayReplaceNext = false;
+  if (replace && top && top.kind !== 'game') { top.kind = kind; top.closeDom = closeDom; top.veto = o.veto || null; return; }
+  if (top && top.kind === kind && kind !== 'game' && (o.swapIfOpen || overlayAlive(kind))) {
+    top.closeDom = closeDom;
+    top.veto = o.veto || null;
+    return;
+  }
+  backStack.push({ kind, closeDom, veto: o.veto || null });
+  try { history.pushState({ mww: backStack.length }, ''); } catch (_) { /* 无痕模式等极端环境：退化为无历史管理 */ }
+}
+
+
+/** UI 关闭最上层（X/取消/遮罩/页面返回按钮）：弹栈 + 把当前 history state 对账到新深度。
+ *  不调 history.back() —— back 是异步遍历，随后再开新层会互相踩（实测会把新弹层关掉）。 */
+function dropTopOverlay() {
+  const top = backStack.pop();
+  if (!top) return null;
+  try { if (history.state && history.state.mww) history.replaceState({ mww: backStack.length }, ''); } catch (_) {}
+  return top;
+}
+
+/** 关闭最上层并执行 DOM 清理（页面返回按钮的统一入口） */
+function dismissTop() {
+  const top = dropTopOverlay();
+  if (top) { try { top.closeDom(); } catch (_) {} }
+  return top;
+}
+
+// 原生返回：与页面返回一致 —— 按深度逐层关；game 哨兵 = 先回发言页签，再离局确认
+window.addEventListener('popstate', (e) => {
+  const target = (e.state && e.state.mww) || 0;
+  while (backStack.length > target) {
+    const top = backStack[backStack.length - 1];
+    if (top.kind === 'game') {
+      // 不能一次返回既关面板又退局：先确认；确认框开着时再按返回 = 取消
+      const depthBefore = backStack.length;
+      if (state.gameTab && state.gameTab !== 'speech') { setGameTab('speech'); }
+      else { askLeaveGame(); }
+      // askLeaveGame 自己压了确认层时不再叠加哨兵，避免留下"死条目"（按一次返回没反应）
+      if (backStack.length === depthBefore) { try { history.pushState({ mww: backStack.length }, ''); } catch (_) {} }
+      return;
+    }
+    if (top.veto && top.veto()) { try { history.pushState({ mww: backStack.length }, ''); } catch (_) {} return; }
+    backStack.pop();
+    try { top.closeDom(); } catch (_) {}
+    if (top.kind === 'modal' && state.leaveAskOpen) {
+      // 返回键关掉的是"离局确认"= 取消离局：停在这一层（一次返回只关一层），不穿透到退局
+      state.leaveAskOpen = false;
+      try { history.pushState({ mww: backStack.length }, ''); } catch (_) {}
+      return;
+    }
+  }
+});
+
+function closeModalDom() { $('#m-modal').innerHTML = ''; }
+function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; $('#m-sheet').innerHTML = ''; }
+/** UI 关闭中部弹窗（X / 取消 / 按钮） */
+function closeModalTop() {
+  const top = backStack[backStack.length - 1];
+  if (top && top.kind === 'modal') dropTopOverlay();
+  closeModalDom();
+}
+/** UI 关闭底部弹层：有未保存修改时先过 veto（确认放弃），通过才真正关 */
+function sheetDismiss() {
+  const top = backStack[backStack.length - 1];
+  if (top && top.kind === 'sheet' && top.veto && top.veto()) return;
+  if (top && top.kind === 'sheet') dropTopOverlay();
+  closeSheetDom();
+}
+/** 关闭底部弹层（保存成功/放弃等既有调用点）：直接关，不再询问 */
+function closeSheet() {
+  const top = backStack[backStack.length - 1];
+  if (top && top.kind === 'sheet') dropTopOverlay();
+  closeSheetDom();
+}
+
+/** 离局确认（返回栈的 game 哨兵触发；进度已落盘，可从首页「继续上局」回来） */
+function askLeaveGame() {
+  if (state.leaveAskOpen) return;
+  state.leaveAskOpen = true;
+  const wrap = el('div');
+  wrap.appendChild(el('h3', 'mtitle', '退出对局？'));
+  wrap.appendChild(el('p', null, '对局进度已保存，退出后可从首页「▶ 继续上局」回来。要退出吗？'));
+  const row = el('div', 'btnrow');
+  const leave = el('button', 'btn danger', '退出到首页');
+  leave.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); localStorage.removeItem('mww_current'); location.reload(); });
+  const stay = el('button', 'btn primary', '继续对局');
+  stay.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); });
+  row.append(leave, stay);
+  wrap.appendChild(row);
+  openModal(wrap);
+}
 
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
@@ -76,7 +199,7 @@ const roleInfo = (rid) => state.meta.roles[rid];
 const seatLabel = (seat) => { const raw = state.seatNames[seat] || ''; const n = escapeHtml(raw); return `${seat}号${n && n !== `${seat}号` ? ' ' + n : ''}`; };
 const isMine = (e) => state.view && state.view.me && e.actor === state.view.me.seat;
 
-// ---------------- 屏1：板子选择 ----------------
+// ---------------- 屏1：首页（品牌 / 档案 / 继续上局 / 开始新局） ----------------
 async function init() {
   state.meta = await api('GET', '/api/meta');
   state.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
@@ -84,7 +207,7 @@ async function init() {
   renderBoardGrid();
   wireSettings();
   $('#m-next').addEventListener('click', gotoRules);
-  $('#m-back').addEventListener('click', () => showScreen('m-boards'));
+  $('#m-back').addEventListener('click', () => { if (!dismissTop()) showScreen('m-boards'); });
   $('#m-start').addEventListener('click', startGame);
   // P2-b：试玩开关必须一眼可见。它原来只藏在「⚙ 设置」弹窗最底下，
   // 实测出现过"以为在试玩、其实在花额度"（设置弹窗里的勾选状态看不见）。
@@ -99,8 +222,8 @@ async function init() {
     syncMockBtn();
   }
   $('#m-gear').addEventListener('click', openGear);
-  $('#m-codex-btn').addEventListener('click', openCodex);
-  $('#m-codex-back').addEventListener('click', closeCodex);
+  $('#m-codex-btn').addEventListener('click', () => openCodex());
+  $('#m-codex-back').addEventListener('click', () => { if (!dismissTop()) closeCodexDom(); });
   $('#m-rulebook-btn').addEventListener('click', openRulebook);
   $('#m-mycard').addEventListener('click', showMyCard);
   $('#m-to-bottom').addEventListener('click', () => { scrollFlow(true); });
@@ -111,13 +234,47 @@ async function init() {
   });
   $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
   $('#m-flip-card').addEventListener('click', () => $('#m-flip-card').classList.add('flipped'));
-  $('#m-flip-done').addEventListener('click', () => $('#m-flip').classList.add('hidden'));
+  // 翻牌浮层也要进返回栈：返回键先收翻牌，而不是穿透到离局确认
+  $('#m-flip-done').addEventListener('click', () => dismissFlip());
   // 玩家档案（PROF-01）：选择 + 管理 + "我的昵称"手改标记。加载失败不阻塞开局（服务端会归默认档案）
   $('#m-profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#m-profile-manage').addEventListener('click', openProfileManager);
   $('#m-my-name').addEventListener('input', () => { $('#m-my-name').dataset.touched = '1'; });
+  // ---- FIN-04 首页 ----
+  $('#m-play-new').addEventListener('click', () => {
+    const grid = $('#m-board-grid');
+    if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    flash('第一步：选择板子', '');
+  });
+  $('#m-profile-chip').addEventListener('click', openProfileManager);
+  $('#m-resume-go').addEventListener('click', resumeGame);
+  $('#m-tab-start').addEventListener('click', () => {
+    $('.m-home-scroll') && $('.m-home-scroll').scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  $('#m-tab-game').addEventListener('click', () => {
+    if (state.resume) resumeGame();
+    else { $('#m-resume-card').scrollIntoView({ behavior: 'smooth', block: 'center' }); flash('没有进行中的对局——先开始一局吧', ''); }
+  });
+  $('#m-tab-codex').addEventListener('click', () => openCodex());
+  $('#m-tab-me').addEventListener('click', openProfileManager);
+  // ---- FIN-06 局内页签 ----
+  $('#m-tabbtn-speech').addEventListener('click', () => setGameTab('speech'));
+  $('#m-tabbtn-players').addEventListener('click', () => setGameTab('players'));
+  $('#m-tabbtn-notes').addEventListener('click', () => setGameTab('notes'));
+  // ---- FIN-06 §10.10：回前台从服务端重新确认状态（锁屏/切后台/切网） ----
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      const v = state.view;
+      state.hiddenSnap = v ? { day: v.day, phase: v.phase, task: (v.pending && v.pending.task) || '' } : null;
+      persistGameHandle(true); // 离开前台：立即落一次"保存时间"
+    } else if (state.game && state.game.gameId) {
+      if (!state.stream) startPolling(); // 后台被系统杀掉的定时器/SSE 在这里救活
+      poll();
+    }
+  });
+  window.addEventListener('online', () => { if (state.game && state.game.gameId) poll(); });
   loadProfiles();
-  tryResume();
+  loadResumeCard();
   window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
 }
 
@@ -131,12 +288,13 @@ function openGear() {
   const over = !!(v && v.finished);
   const rows = [];
   if (inGame && v && v.me && v.me.role) {
-    rows.push(['🎴 查看我的身份牌', () => openInspect(v.me.role)]);
+    // 检视大卡替换齿轮这一层（replace）：返回键一层一层关，不留下已关闭的影子层
+    rows.push(['🎴 查看我的身份牌', () => { closeModalDom(); openInspect(v.me.role, true); }]);
   }
-  // 规则书已挪到顶栏右上角的专用按钮，齿轮里不再重复列一项
+  // 设置弹窗由 openModal 自动"换内容"（同一层），返回深度不变
   rows.push(['⚙ 设置', () => openSettingsModal()]);
-  rows.push([I18N.t('codex.entry'), () => openCodex()]);
-  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang()]);
+  rows.push([I18N.t('codex.entry'), () => { closeModalDom(); openCodex(true); }]);
+  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => { closeModalTop(); toggleLang(); }]);
   if (inGame && !over) {
     rows.push(['⏹ 结束本局', () => askTerminate()]);
   } else {
@@ -150,7 +308,7 @@ function openGear() {
   const box = el('div', 'gear-list');
   rows.forEach(([label, fn]) => {
     const b = el('button', 'gear-item' + (/结束本局/.test(label) ? ' danger' : ''), label);
-    b.addEventListener('click', () => { $('#m-modal').innerHTML = ''; fn(); });
+    b.addEventListener('click', fn);
     box.appendChild(b);
   });
   wrap.appendChild(box);
@@ -158,7 +316,7 @@ function openGear() {
     ? `对局 ${state.game.gameId}${v && v.day ? ` · 第 ${v.day} 天` : ''}${over ? ' · 已结算' : ''}`
     : ''));
   const close = el('button', 'btn ghost', '关闭');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   wrap.appendChild(close);
   openModal(wrap);
 }
@@ -172,9 +330,9 @@ function askTerminate() {
   wrap.appendChild(el('p', null, '结束后本局不可恢复，将直接结算并公开所有身份。确定要结束吗？'));
   const row = el('div', 'btnrow');
   const yes = el('button', 'btn danger', '确定结束');
-  yes.addEventListener('click', () => { $('#m-modal').innerHTML = ''; terminateGame(); });
+  yes.addEventListener('click', () => { closeModalTop(); terminateGame(); });
   const no = el('button', 'btn', '取消');
-  no.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  no.addEventListener('click', closeModalTop);
   row.append(yes, no);
   wrap.appendChild(row);
   openModal(wrap);
@@ -197,6 +355,8 @@ function openSettingsModal() {
   const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const body = el('div', 'mbody');
+  // FIN-03/§8.3：API 配置是安装级的——说明归属，避免"切档案怎么 Key 也变了"的误解
+  body.appendChild(el('p', 'hint', '🔑 接口 / 模型 / Key 属于安装级配置：此设备共享，不随玩家档案切换。'));
 
   if (inGame && v) {
     const alive = (v.players || []).filter((p) => p.alive).length;
@@ -215,12 +375,12 @@ function openSettingsModal() {
   const list = el('div', 'gear-list');
   const add = (label, fn, danger) => {
     const b = el('button', 'gear-item' + (danger ? ' danger' : ''), label);
-    b.addEventListener('click', () => { $('#m-modal').innerHTML = ''; fn(); });
+    b.addEventListener('click', fn);
     list.appendChild(b);
   };
-  add(I18N.t('codex.entry'), () => openCodex());
-  if (inGame && v && v.me && v.me.role) add('🎴 查看我的身份牌', () => openInspect(v.me.role));
-  add(`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => toggleLang());
+  add(I18N.t('codex.entry'), () => { closeModalDom(); openCodex(true); });
+  if (inGame && v && v.me && v.me.role) add('🎴 查看我的身份牌', () => { closeModalDom(); openInspect(v.me.role, true); });
+  add(`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => { closeModalTop(); toggleLang(); });
   // 这条是"真路"而不是假开关：回首页 = 重载页面，本局存在浏览器里（mww_current），
   // 首页会出现"继续对局"卡片，所以可以放心去改设置再回来。
   add('⚙ 去首页改接口 / 模型 / 节奏（本局会保存）', () => { location.reload(); });
@@ -232,11 +392,11 @@ function openSettingsModal() {
   const row = el('div', 'btnrow');
   if (inGame && !(v && v.finished)) {
     const end = el('button', 'btn danger', '⏹ 结束本局');
-    end.addEventListener('click', () => { $('#m-modal').innerHTML = ''; askTerminate(); });
+    end.addEventListener('click', () => askTerminate());
     row.appendChild(end);
   }
   const home = el('button', 'btn danger', '🏠 退出到首页（放弃本局）');
-  home.addEventListener('click', () => { $('#m-modal').innerHTML = ''; localStorage.removeItem('mww_current'); location.reload(); });
+  home.addEventListener('click', () => { localStorage.removeItem('mww_current'); location.reload(); });
   row.appendChild(home);
   wrap.appendChild(row);
   openModal(wrap);
@@ -330,7 +490,7 @@ async function openSummarySheet() {
   coach.addEventListener('click', () => requestReview());
   row.appendChild(coach);
   const close = el('button', 'btn', '关闭');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   row.appendChild(close);
   wrap.appendChild(row);
   openModal(wrap);
@@ -394,10 +554,19 @@ async function requestReview() {
 }
 
 /** 点身份牌：已经发过牌就直接亮正面，否则走翻牌浮层 */
+function hideFlipDom() { $('#m-flip').classList.add('hidden'); }
+function dismissFlip() {
+  const top = backStack[backStack.length - 1];
+  if (top && top.kind === 'flip') dropTopOverlay(); // 返回键/完成键同一条路径：只关翻牌这一层
+  hideFlipDom();
+}
 function showMyCard() {
   if (!state.view || !state.view.me || !state.view.me.role) return;
-  $('#m-flip').classList.remove('hidden');
+  const wasOpen = !$('#m-flip').classList.contains('hidden');
+  hideFlipDom();
   $('#m-flip-card').classList.add('flipped'); // 直接亮正面
+  $('#m-flip').classList.remove('hidden');
+  trackOverlay('flip', hideFlipDom, { swapIfOpen: wasOpen });
 }
 
 /** 底部坞左侧的身份牌（常驻；旧版要点顶部 🎴 才看得到） */
@@ -471,7 +640,7 @@ function wireSettings() {
     const wrap = el('div');
     const head = el('div', 'mhead', '<h2>⚙ AI 设置</h2>');
     const close = el('button', 'btn ghost small', '✕');
-    close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+    close.addEventListener('click', closeModalTop);
     head.appendChild(close);
     const body = el('div', 'mbody');
     const paces = (state.meta && state.meta.paces) || [];
@@ -585,9 +754,12 @@ function wireSettings() {
 
 // ---------------- 屏2：角色图鉴 ----------------
 /** 挂载共享图鉴（web/codex.js）。手机端用 sheet 模式：点牌不挤右侧栏，而是弹层看细节。 */
-function openCodex() {
+function openCodex(replace) {
   state.codexFrom = ['m-boards', 'm-rules', 'm-game'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
   showScreen('m-codex');
+  // 进入返回栈：从齿轮/设置弹窗里进来时替换那一层（replace），返回键不空关一层
+  if (replace) overlayReplaceNext = true;
+  trackOverlay('screen-codex', closeCodexDom);
   window.Codex.mount({
     meta: state.meta,
     mode: 'pages', // 手机端按阵营分页：每页一屏、满页续下一页，点牌弹层看细节
@@ -600,7 +772,7 @@ function openCodex() {
   });
 }
 
-function closeCodex() { showScreen(state.codexFrom || 'm-boards'); }
+function closeCodexDom() { showScreen(state.codexFrom || 'm-boards'); }
 
 /** 细节弹层：内容与桌面版右侧栏同源（Codex.detailHtml），只是换个容器。
  *  两个坑：① openModal 只把**无类名容器**的孩子提升到 .modal 下，给它一个 .modal 类会变成
@@ -614,7 +786,7 @@ function showCodexDetail(rid) {
   const wrap = el('div'); // 同样无类名
   wrap.appendChild(body);
   const close = el('button', 'btn ghost', '关闭');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   wrap.appendChild(close);
   // 监听挂在**具体按钮**上：wrap 本身不会被挂进 DOM，挂它上面的委托永远不会触发
   const ins = body.querySelector('.cdx-act-inspect');
@@ -631,6 +803,7 @@ function showScreen(id) {
 
 function gotoRules() {
   showScreen('m-rules');
+  trackOverlay('screen-rules', () => showScreen('m-boards')); // 返回键：从第二步回到第一步（保留已选项）
   const tpl = state.meta.boards[state.boardId];
   $('#m-rules-title').textContent = tpl ? tpl.name : '自定义板子';
   // 摘要
@@ -711,6 +884,7 @@ function openSheet(title, bodyEl, footEl, opts) {
   const o = opts || {};
   const root = $('#m-sheet');
   if (!root) return null;
+  const wasOpen = !!root.firstChild; // 弹层内换页（档案列表↔编辑）：同一层换内容，返回深度不加深
   if (sheetViewportCleanup) sheetViewportCleanup(); // 换页前先摘掉上一层的视口监听（避免叠加）
   root.innerHTML = '';
   const mask = el('div', 'm-sheet-mask');
@@ -719,15 +893,17 @@ function openSheet(title, bodyEl, footEl, opts) {
   const t = el('h3'); t.textContent = title || ''; // 标题可能拼座位昵称：textContent，不进 innerHTML
   head.appendChild(t);
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => (o.onClose ? o.onClose() : closeSheet()));
+  close.addEventListener('click', sheetDismiss);
   head.appendChild(close);
   const body = el('div', 'm-sheet-body');
   if (bodyEl) body.appendChild(bodyEl);
   sheet.append(head, body);
   if (footEl) { const foot = el('div', 'm-sheet-foot'); foot.appendChild(footEl); sheet.appendChild(foot); }
   mask.appendChild(sheet);
-  mask.addEventListener('click', (e) => { if (e.target === mask) (o.onClose ? o.onClose() : closeSheet()); });
+  mask.addEventListener('click', (e) => { if (e.target === mask) sheetDismiss(); });
   root.appendChild(mask);
+  // 返回栈：底部弹层也占一层；vetoClose（有未保存修改）时返回键先确认，不静默丢草稿
+  trackOverlay('sheet', closeSheetDom, { swapIfOpen: wasOpen, veto: o.vetoClose || null });
   // 软键盘遮挡补偿（简单实现）：输入框聚焦或视口被键盘压矮时，把焦点元素滚进可视区
   const revealFocused = () => {
     const ae = document.activeElement;
@@ -740,10 +916,6 @@ function openSheet(title, bodyEl, footEl, opts) {
     sheetViewportCleanup = null;
   };
   return sheet;
-}
-function closeSheet() {
-  if (sheetViewportCleanup) sheetViewportCleanup();
-  $('#m-sheet').innerHTML = '';
 }
 
 // ---------------- 玩家档案（PROF-01，与桌面端同一套 API） ----------------
@@ -773,15 +945,27 @@ function profileLabel(p) {
 
 function renderProfileStrip(err) {
   const sel = $('#m-profile-select');
-  if (!sel) return;
-  sel.innerHTML = '';
-  for (const p of state.profiles.filter((x) => !x.archivedAt)) {
-    const o = el('option'); o.value = p.id; o.textContent = profileLabel(p); // 昵称不可信：textContent
-    sel.appendChild(o);
+  if (sel) {
+    sel.innerHTML = '';
+    for (const p of state.profiles.filter((x) => !x.archivedAt)) {
+      const o = el('option'); o.value = p.id; o.textContent = profileLabel(p); // 昵称不可信：textContent
+      sel.appendChild(o);
+    }
+    if (state.profileId) sel.value = state.profileId;
+    sel.disabled = !state.profiles.length;
+    if (err) sel.title = err; else sel.removeAttribute('title');
   }
-  if (state.profileId) sel.value = state.profileId;
-  sel.disabled = !state.profiles.length;
-  if (err) sel.title = err; else sel.removeAttribute('title');
+  renderHomeProfile(err); // FIN-04：首页「当前档案」行与规则页选择器同一份数据
+}
+
+/** 首页档案行：头像 emoji + 昵称 + 管理入口（点整行进档案管理弹层） */
+function renderHomeProfile(err) {
+  const av = $('#m-profile-avatar'), nick = $('#m-profile-nick');
+  if (!av || !nick) return;
+  const p = state.profiles.find((x) => x.id === state.profileId && !x.archivedAt);
+  av.textContent = p ? (AVATAR_EMOJI[p.avatarId] || '👤') : '👤';
+  nick.textContent = p ? p.nickname : (err ? '档案加载失败' : '默认档案');
+  if (err) nick.title = err; else nick.removeAttribute('title');
 }
 
 function onSelectProfile(pid) {
@@ -946,6 +1130,9 @@ function openProfileImport() {
 
 async function startGame() {
   $('#m-err').textContent = '';
+  const startBtn = $('#m-start');
+  if (startBtn && startBtn.disabled) return; // FIN-03：双击只产生一次业务提交（处理中保持宽度）
+  if (startBtn) { startBtn.disabled = true; startBtn.classList.add('m-busy'); startBtn.textContent = '⏳ 开局中…'; }
   try {
     const counts = state.boardCounts;
     const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -977,37 +1164,106 @@ async function startGame() {
     if (state.profileId) body.profileId = state.profileId;
     try { localStorage.setItem('ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
     const created = await api('POST', '/api/games', body);
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat };
+    // mock 随句柄保存：首页「继续上局」卡要如实标出试玩/真实（防止恢复时误标花钱）
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!created.mock || useMock, savedAt: Date.now() };
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGame();
   } catch (e) { $('#m-err').textContent = `✗ ${e.message}`; }
+  finally {
+    if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('m-busy'); startBtn.textContent = I18N.t('m.start'); }
+  }
 }
 
-async function tryResume() {
+/**
+ * FIN-04 首页「▶ 继续上局」卡：不再一进页面就跳进对局——首页先给出
+ * 模式 / 阶段 / 保存时间，由玩家点「继续」再进（恢复前核对归属与模式）。
+ * 句柄仍存在本机 localStorage（mww_current），只恢复本机自己的局。
+ */
+async function loadResumeCard() {
+  const card = $('#m-resume-card');
+  if (!card) return;
   const saved = localStorage.getItem('mww_current');
-  if (!saved) return;
+  if (!saved) { card.classList.add('hidden'); return; }
+  let g = null;
+  try { g = JSON.parse(saved); } catch (_) { localStorage.removeItem('mww_current'); card.classList.add('hidden'); return; }
   try {
-    const g = JSON.parse(saved);
     const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
     // inMemory = 对局还在服务端内存里（v.live 是流式缓冲，空闲时为 null，不能用来判断能否继续）
-    if (v && !v.finished && v.started && v.inMemory) { state.game = g; enterGame(); }
-    else localStorage.removeItem('mww_current'); // 已结束或从未开局 → 不恢复
-  } catch (_) { localStorage.removeItem('mww_current'); }
+    if (v && !v.finished && v.started && v.inMemory) {
+      state.resume = { handle: g, view: v };
+      $('#m-resume-meta').textContent = resumeMetaText(g, v);
+      card.classList.remove('hidden');
+    } else {
+      localStorage.removeItem('mww_current'); // 已结束或从未开局 → 不再展示
+      card.classList.add('hidden');
+    }
+  } catch (_) { card.classList.add('hidden'); } // 网络失败：首页不显示卡，也不删句柄（联网后刷新可恢复）
+}
+
+function resumeMetaText(g, v) {
+  const seats = (v.players || []).length;
+  const phase = `第 ${v.day || 0} 天 · ${PHASE_LABEL[v.phase] || v.phase}`;
+  const mode = g.mock === undefined ? '' : ` · ${g.mock ? '🧪 Mock 试玩' : '💳 真实对局'}`;
+  const at = g.savedAt ? ` · 保存于 ${new Date(g.savedAt).toLocaleString()}` : '';
+  return `${seats} 人局${mode} · ${phase}${at}`;
+}
+
+function resumeGame() {
+  if (!state.resume) return;
+  state.game = state.resume.handle;
+  enterGame();
+}
+
+/** 把对局句柄（含保存时间）落回 localStorage；immediate=true 跳过 60s 节流 */
+function persistGameHandle(immediate) {
+  const g = state.game;
+  if (!g || !g.gameId) return;
+  const now = Date.now();
+  if (!immediate && now - (state.lastHandleWrite || 0) < 60000) return;
+  state.lastHandleWrite = now;
+  g.savedAt = now;
+  try { localStorage.setItem('mww_current', JSON.stringify(g)); } catch (_) { /* 隐私模式忽略 */ }
 }
 
 // ---------------- 屏3：对局 ----------------
 function enterGame() {
-  localStorage.setItem('mww_current', JSON.stringify(state.game));
+  persistGameHandle(true);
   showScreen('m-game');
   state.playerAfter = 0; state.roleShown = false; state.lastNightStep = null;
   state.speakingSeat = 0;
+  // FIN-06：进对局默认落在发言页；返回栈压 game 哨兵（返回键→回发言页→离局确认）
+  flowPinned = true; flowNewCount = 0; state.voteProgress = null; state.liveSince = null;
+  setGameTab('speech');
+  const top = backStack[backStack.length - 1];
+  if (!top || top.kind !== 'game') trackOverlay('game', () => {});
   // 私人标注 V2（NOTE-04/05）：先读旧 key（迁移的输入，读不到新存储时兜底显示），
   // 再异步拉服务端标注（含旧数据一次性迁移）。拉到后 updateSeats 刷新角标。
   state.anno = { rev: 0, seats: {}, loaded: false, available: false, gameId: state.game.gameId };
   try { state.tags = JSON.parse(localStorage.getItem(`mww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#m-flow').innerHTML = '';
+  const mycard = $('#m-mycard');
+  if (mycard) mycard.dataset.sig = ''; // 换局强制重画身份牌（sig 相同的旧局残影）
+  const paused = $('#m-paused-banner');
+  if (paused) { paused.classList.add('hidden'); paused.innerHTML = ''; paused.dataset.sig = ''; }
   startPolling();
   initAnnotations();
+}
+
+// ---------------- 局内页签（FIN-06 §10.1：发言 | 玩家 | 笔记） ----------------
+function setGameTab(name) {
+  state.gameTab = name;
+  const game = $('#m-game');
+  game.classList.toggle('tab-speech', name === 'speech');
+  game.classList.toggle('tab-players', name === 'players');
+  game.classList.toggle('tab-notes', name === 'notes');
+  const map = { speech: 'm-tabbtn-speech', players: 'm-tabbtn-players', notes: 'm-tabbtn-notes' };
+  for (const [tab, id] of Object.entries(map)) {
+    const b = document.getElementById(id);
+    if (!b) continue;
+    b.classList.toggle('active', tab === name);
+    b.setAttribute('aria-selected', tab === name ? 'true' : 'false');
+  }
+  if (name === 'notes') renderNotesListM(); // 每次进笔记页重读最新标注（保存过/别的窗口改过都能看到）
 }
 
 function startPolling() {
@@ -1083,6 +1339,17 @@ async function poll() {
 /** 渲染一份视图。SSE 与轮询共用；事件按 seq 游标过滤，重连重发也不会画两遍。 */
 function applyView(v) {
   if (!v) return;
+  // FIN-06 §10.10：切后台/锁屏/切网回前台后，若服务端阶段/任务已推进，
+  // 之前选的目标一律作废（不允许沿用过期目标直接提交），动作区按新任务重建。
+  if (state.hiddenSnap) {
+    const h = state.hiddenSnap;
+    state.hiddenSnap = null;
+    if ((v.day !== h.day) || (v.phase !== h.phase) || (((v.pending || {}).task) || '') !== h.task) {
+      actionState.target = 0;
+      const keys = $('#m-keys');
+      if (keys) keys.dataset.task = ''; // 强制动作区下一次重建（目标作废要可见）
+    }
+  }
   state.view = v;
   const freshFrom = state.playerAfter; // 只有新事件才触发横幅/闪光
   if (state.playerAfter === 0) {
@@ -1100,7 +1367,11 @@ function applyView(v) {
       if (!state.nightOpen) { clearNightWaitM(); flushNightBroadcastM(); } // 天亮 → 收等待提示，并把没播完的补上
     }
     const node = renderEventNode(e);
-    if (node) $('#m-flow').appendChild(node);
+    if (node) {
+      $('#m-flow').appendChild(node);
+      // FIN-10 §13.1.3：用户上翻阅读时不拉走视野，改记"N 条新发言"，由「↓ 最新」提示
+      if (!flowPinned && e.seq > freshFrom && (e.type === 'speech' || e.type === 'system' || e.type === 'night_step')) flowNewCount++;
+    }
     feedStage(e, e.seq > freshFrom);
   }
   if (state.nightQueue && state.nightQueue.length) playNightBroadcastM();
@@ -1114,6 +1385,7 @@ function applyView(v) {
   updatePausedBanner(v);
   updateMemoryChip(v);
   maybeShowRole(v);
+  persistGameHandle(false); // 节流落"保存时间"：首页继续上局卡显示最近保存点
 }
 
 /** 夜晚播报播放器（手机端）：与桌面端同一套节奏，只是等待提示挂在自己的节点上。
@@ -1237,10 +1509,11 @@ async function resumePausedGame() {
  */
 let flowPinned = true;
 let flowSelfScroll = false;
+let flowNewCount = 0; // 上翻期间新增的发言条数（FIN-10：不拉走视野，改提示）
 function scrollFlow(force) {
   const s = $('#m-flow');
   if (!s) return;
-  if (force) flowPinned = true;
+  if (force) { flowPinned = true; flowNewCount = 0; }
   if (flowPinned) {
     flowSelfScroll = true;
     s.scrollTop = s.scrollHeight;
@@ -1252,14 +1525,18 @@ function onFlowScroll() {
   if (flowSelfScroll) return; // 程序自己滚的不算用户操作
   const s = $('#m-flow');
   if (!s) return;
-  flowPinned = s.scrollHeight - s.scrollTop - s.clientHeight < 60;
+  const pinned = s.scrollHeight - s.scrollTop - s.clientHeight < 60;
+  if (pinned) flowNewCount = 0; // 回到底部：未读清零
+  flowPinned = pinned;
   updateToBottomBtn();
 }
-/** 往上翻历史时浮出「↓ 最新」：信息滚出视野后必须有一条随时回到底部的路 */
+/** 往上翻历史时浮出「↓ 最新 / ↓ N 条新发言」：信息滚出视野后必须有一条随时回到底部的路 */
 function updateToBottomBtn() {
   const b = $('#m-to-bottom');
   if (!b) return;
   b.classList.toggle('hidden', flowPinned);
+  const label = flowNewCount > 0 ? `↓ <span class="newcnt">${flowNewCount} 条新发言</span>` : '↓ 最新';
+  if (b.dataset.label !== label) { b.dataset.label = label; b.innerHTML = label; }
 }
 function appendSys(text) { $('#m-flow').appendChild(el('div', 'sysline', text)); scrollFlow(false); }
 
@@ -1352,53 +1629,110 @@ function updateSeats(v) {
   const ps = v.players || [];
   const left = $('#m-seats-l'), right = $('#m-seats-r');
   if (!left || !right) return;
-  left.innerHTML = ''; right.innerHTML = '';
-  if (!ps.length) return;
-  const mySeat = v.me ? v.me.seat : 0;
+  if (!ps.length) { left.innerHTML = ''; right.innerHTML = ''; left.dataset.roster = ''; right.dataset.roster = ''; return; }
+  const roster = ps.map((p) => p.seat).join(',');
   const half = Math.ceil(ps.length / 2);
+  // FIN-10 §13.1.1：座位以 seat 为 key 增量更新（发言字块/状态变化不再清空重建全部座位）；
+  // 只有开局/换局（人数或座位集合变化）才走全量重建兜底。
+  if (left.dataset.roster !== roster || right.dataset.roster !== roster) {
+    left.dataset.roster = roster; right.dataset.roster = roster;
+    left.innerHTML = ''; right.innerHTML = '';
+    const portraits = window.AICast ? window.AICast.assignPortraits(ps) : new Map();
+    ps.forEach((p) => {
+      const s = el('div', 'srow');
+      s.dataset.seat = String(p.seat);
+      const ring = el('span', 'num');
+      ring.appendChild(el('span', 'seat-index', String(p.seat)));
+      if (window.AICast) window.AICast.decorate(ring, portraits.get(p.seat)); // 头像只在创建时画一次
+      s.appendChild(ring);
+      s.appendChild(el('div', 'nm'));
+      s.addEventListener('click', () => {
+        // 每次点击取**最新**玩家快照（onSeatTap 语义保留：选目标 / 开笔记 / 查看翻牌）
+        const cur = ((state.view || {}).players || []).find((x) => x.seat === p.seat);
+        if (cur) onSeatTap(cur);
+      });
+      (p.seat <= half ? left : right).appendChild(s);
+    });
+  }
+  const mySeat = v.me ? v.me.seat : 0;
   const pick = actionState.needTarget ? new Set(actionState.candidates) : null;
-  const portraits = window.AICast ? window.AICast.assignPortraits(ps) : new Map();
-  ps.forEach((p, i) => {
-    const s = el('div', 'srow'
-      + (p.seat === mySeat ? ' mine' : '')
-      + (p.alive ? '' : ' dead')
-      + (p.alive && p.seat === state.speakingSeat ? ' speaking' : '')
-      + (pick && p.alive && pick.has(p.seat) ? ' pickable' : '')
-      + (actionState.target === p.seat ? ' picked' : ''));
-    s.dataset.seat = String(p.seat);
-    const ring = el('span', 'num');
-    ring.appendChild(el('span', 'seat-index', String(p.seat)));
-    if (window.AICast) window.AICast.decorate(ring, portraits.get(p.seat));
-    s.appendChild(ring);
-    if (p.isSheriff) s.appendChild(el('span', 'b', '👑'));
-    if (p.role && p.revealed) {
-      const rr = roleInfo(p.role);
-      const rc = el('span', 'b l', rr.emoji);
-      rc.style.color = rr.color;
-      s.appendChild(rc);
-    } else {
-      // 我的标注角标（NOTE-04）：倾向中文 · 首个候选身份 emoji+名。
-      // 真身公开后走上面分支由真身覆盖，不重复显示。
-      const sum = seatTagSummary(p.seat);
-      if (sum) {
-        const pill = el('span', 'tag-pill', `🏷${escapeHtml(sum)}`);
-        pill.title = '我的私人笔记摘要（AI 看不到）';
-        s.appendChild(pill);
-      } else {
-        // 旧格式兜底（无归属档案的旧局尚未迁移成功时）：保留旧 🏷 显示
-        const tag = state.tags[p.seat];
-        const tagR = tag && roleInfo(tag);
-        if (tagR) {
-          const b = el('span', 'b l', '🏷');
-          b.style.color = tagR.color;
-          s.appendChild(b);
-        }
-      }
-    }
-    s.appendChild(el('div', 'nm', escapeHtml(p.name)));
-    s.addEventListener('click', () => onSeatTap(p));
-    (i < half ? left : right).appendChild(s);
+  ps.forEach((p) => {
+    const s = (p.seat <= half ? left : right).querySelector(`[data-seat="${p.seat}"]`);
+    if (!s) return;
+    s.classList.toggle('mine', p.seat === mySeat);
+    s.classList.toggle('dead', !p.alive);
+    s.classList.toggle('speaking', !!(p.alive && p.seat === state.speakingSeat));
+    s.classList.toggle('pickable', !!(pick && p.alive && pick.has(p.seat)));
+    s.classList.toggle('picked', actionState.target === p.seat);
+    patchSeatBadges(s, p);
+    const nm = s.querySelector('.nm');
+    if (nm && nm.textContent !== p.name) nm.textContent = p.name; // 昵称不可信：textContent
   });
+}
+
+/** 座位角标增量同步：警徽 / 翻牌真身 / 我的标注摘要 / 旧格式兜底标记。签名不变不动 DOM。 */
+function patchSeatBadges(s, p) {
+  const revealed = !!(p.role && p.revealed);
+  const sum = revealed ? '' : (seatTagSummary(p.seat) || '');
+  const legacy = (!revealed && !sum && state.tags[p.seat] && roleInfo(state.tags[p.seat])) ? state.tags[p.seat] : null;
+  const sig = `${p.isSheriff ? 1 : 0}|${revealed ? p.role : ''}|${sum}|${legacy || ''}`;
+  if (s.dataset.badges === sig) return;
+  s.dataset.badges = sig;
+  const nm = s.querySelector('.nm');
+  for (const old of [...s.querySelectorAll('.b, .tag-pill')]) old.remove();
+  const put = (node) => { if (nm) s.insertBefore(node, nm); else s.appendChild(node); };
+  if (p.isSheriff) put(el('span', 'b', '👑'));
+  if (revealed) {
+    const rr = roleInfo(p.role);
+    const rc = el('span', 'b l', rr.emoji);
+    rc.style.color = rr.color;
+    put(rc);
+  } else if (sum) {
+    // 我的标注角标（NOTE-04）：倾向中文 · 首个候选身份 emoji+名。真身公开后由真身覆盖。
+    const pill = el('span', 'tag-pill', `🏷${escapeHtml(sum)}`);
+    pill.title = '我的私人笔记摘要（AI 看不到）';
+    put(pill);
+  } else if (legacy) {
+    // 旧格式兜底（无归属档案的旧局尚未迁移成功时）：保留旧 🏷 显示
+    const b = el('span', 'b l', '🏷');
+    b.style.color = roleInfo(legacy).color;
+    put(b);
+  }
+}
+
+// ---------------- 笔记页（FIN-06 §10.3）：全部座位标注列表 + 点击编辑 ----------------
+// 复用桌面 renderNotesList 的语义（同一套 anno 数据与 seatTagSummary 摘要），布局按手机自实现：
+// 全部座位各占一行（行高 ≥56），有笔记的排前面显示摘要，点任意一行进 openTagModal 底部弹层。
+function renderNotesListM() {
+  const box = $('#m-notes-list');
+  if (!box) return;
+  box.innerHTML = '';
+  const v = state.view;
+  if (!state.anno || !state.anno.loaded) { box.appendChild(el('p', 'hint', '标注加载中…')); return; }
+  if (!v || !(v.players || []).length) { box.appendChild(el('p', 'hint', '对局尚未开始，还没有可标注的座位。')); return; }
+  let hasAny = false;
+  for (const p of [...v.players].sort((a, b) => a.seat - b.seat)) {
+    const a = (state.anno.seats || {})[p.seat];
+    const has = !!(a && (a.leaning !== 'neutral' || (a.candidateRoleIds || []).length || a.claimedRoleId || a.note));
+    if (has) hasAny = true;
+    const row = el('button', 'm-note-row' + (has ? '' : ' empty') + (p.alive ? '' : ' dead'));
+    row.type = 'button';
+    row.setAttribute('role', 'listitem');
+    row.appendChild(el('span', 'n-num', String(p.seat)));
+    const main = el('div', 'n-main');
+    main.appendChild(elText('div', 'n-name', `${p.seat}号 ${p.name}${p.alive ? '' : '（出局）'}`));
+    main.appendChild(elText('div', 'n-sum', has ? (seatTagSummary(p.seat) || '有笔记') : '未记录 · 点这里写笔记'));
+    if (a && a.note) main.appendChild(elText('div', 'n-note', a.note));
+    row.appendChild(main);
+    row.appendChild(el('span', 'n-edit', has ? '编辑 ›' : '＋'));
+    row.addEventListener('click', () => openTagModal(p.seat));
+    box.appendChild(row);
+  }
+  if (!hasAny) {
+    const tip = el('p', 'hint', '还没有任何笔记。点上面任意座位开始记录；笔记只是你的推理，AI 看不到。');
+    tip.style.marginTop = 'var(--sp-2)';
+    box.appendChild(tip);
+  }
 }
 
 /** 点座位：有待选目标就当选择器用，否则开笔记（记可能的身份） */
@@ -1430,7 +1764,8 @@ function setTarget(seat) {
     const conf = box.querySelector('[data-confirm]');
     if (conf) setKeyEnabled(conf, seat > 0 || !!conf.dataset.allowZero);
   }
-  $('#m-dialog-seat').textContent = seat ? `${seat} 号` : '未选择';
+  const seatEl = $('#m-dialog-seat');
+  if (seatEl) seatEl.textContent = seat ? `${seat} 号` : '未选择';
 }
 
 // ---------------- 事件副作用（全屏横幅 / 发言高亮）与"正在发言"节点 ----------------
@@ -1493,7 +1828,8 @@ function feedStage(e, fresh) {
   }
 }
 
-/** 流程区底部的"正在发言/正在思考"节点（流式打字）：把漫长的空白等待变成即时反馈 */
+/** 流程区底部的"正在发言/正在思考"节点（流式打字）：把漫长的空白等待变成即时反馈。
+ *  FIN-10 §13.1.2：流式文本只更新当前节点的文本子节点，秒表只重建 meta 行 —— 不整块重建。 */
 function updateLive(v) {
   const flow = $('#m-flow');
   if (!flow) return;
@@ -1502,11 +1838,15 @@ function updateLive(v) {
   // 那是这个阶段唯一能让玩家知道"程序在跑"的信号，不能因为 live 为空就把节点收掉。
   const vpRaw = v && v.finished ? null : state.voteProgress;
   const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
-  const node = $('#m-live');
+  let node = $('#m-live');
   if (!live && !vp) { if (node) node.remove(); state.liveSince = null; return; }
-  const n = node || (() => { const x = el('div', 'msg live'); x.id = 'm-live'; return x; })();
-  if (n.parentNode !== flow) flow.appendChild(n);
-  else if (n !== flow.lastElementChild) flow.appendChild(n); // 始终贴底
+  if (!node) {
+    node = el('div', 'msg live'); node.id = 'm-live';
+    node.appendChild(el('div', 'meta'));
+    node.appendChild(el('div', 'live-body'));
+  }
+  if (node.parentNode !== flow) flow.appendChild(node);
+  else if (node !== flow.lastElementChild) flow.appendChild(node); // 始终贴底
   const lp = live ? (v.players || []).find((x) => x.seat === live.seat) : null;
   // 秒表：实测单条发言平均等 103.6s、最长 362s，而这段时间手机上**完全不动**。
   // 只显示"已 N 秒"，不泄露任何私密内容（秒数进 sig，让 1.2s 轮询把表走起来）。
@@ -1514,21 +1854,39 @@ function updateLive(v) {
   if (live && (!state.liveSince || state.liveSince.key !== lkey)) state.liveSince = { key: lkey, at: Date.now() };
   const secs = live ? Math.max(0, Math.round((Date.now() - state.liveSince.at) / 1000))
     : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
-  const sig = `${live ? live.seat : 0}|${live && live.public ? 1 : 0}|${(live && live.text) || ''}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
-  if (n.dataset.sig === sig) return; // 1.2s 轮询：内容没变不重建 DOM
-  n.dataset.sig = sig;
+  const meta = node.querySelector('.meta');
+  const body = node.querySelector('.live-body');
   if (!live) {
     // 只有投票进度：明确告诉玩家"已经收到几票、等了多久"，而不是让他盯着空白
-    n.innerHTML = '<div class="meta"><span class="hint">… 正在收集投票</span></div>'
-      + `<div class="hint">已思考 ${vp.done}/${vp.total} · ${secs}s</div>`;
+    const msig = `vp|${vp.done}/${vp.total}|${secs}`;
+    if (node.dataset.msig !== msig) {
+      node.dataset.msig = msig;
+      meta.innerHTML = '<span class="hint">… 正在收集投票</span>';
+      body.innerHTML = '';
+      body.appendChild(elText('div', 'hint', `已思考 ${vp.done}/${vp.total} · ${secs}s`));
+    }
     return;
   }
   const work = live.text ? '… 正在决策' : '… 正在思考';
-  n.innerHTML = `<div class="meta"><span class="who">${escapeHtml(lp ? lp.name : '')} · ${live.seat}号</span>`
-    + ` <span class="hint">${live.public && live.text ? '✍ 正在发言' : work} · 已 ${secs}s${vp ? ` · ${vp.done}/${vp.total}` : ''}</span></div>`
-    + (live.public && live.text
-      ? `<div>${escapeHtml(live.text)}<span class="caret"></span></div>`
-      : '<div class="hint">正在思考…</div>');
+  const msig = `${live.seat}|${live.public ? 1 : 0}|${live.public && live.text ? 'say' : work}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}|${lp ? lp.name : ''}`;
+  if (node.dataset.msig !== msig) {
+    node.dataset.msig = msig;
+    meta.innerHTML = '<span class="who"></span> <span class="hint"></span>';
+    meta.querySelector('.who').textContent = `${lp ? lp.name : ''} · ${live.seat}号`;
+    meta.querySelector('.hint').textContent = `${live.public && live.text ? '✍ 正在发言' : work} · 已 ${secs}s${vp ? ` · ${vp.done}/${vp.total}` : ''}`;
+  }
+  if (node.dataset.txt !== (live.public && live.text ? live.text : '')) {
+    node.dataset.txt = live.public && live.text ? live.text : '';
+    body.innerHTML = '';
+    if (live.public && live.text) {
+      const txt = document.createElement('span');
+      txt.className = 'typing-live';
+      txt.textContent = live.text; // 模型输出：按纯文本渲染
+      body.append(txt, el('span', 'caret'));
+    } else {
+      body.appendChild(elText('div', 'hint', '正在思考…'));
+    }
+  }
 }
 
 let flashTimer = null;
@@ -1608,6 +1966,7 @@ async function initAnnotations() {
   } catch (_) { /* 旧局无归属档案（404）：标注功能降级为旧格式本地标记，不阻塞对局 */ }
   state.anno.loaded = true;
   if (state.view) updateSeats(state.view); // 角标按最新标注重画
+  renderNotesListM(); // 笔记页（若已打开）同步可编辑列表
 }
 
 /** 旧标记待确认提示（复审 P1-1，与桌面端 openLegacyPendingPrompt 同语义）：
@@ -1618,7 +1977,7 @@ function openLegacyPendingPrompt(pending) {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>🏷 旧标记待确认</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   head.appendChild(close);
   const body = el('div', 'mbody');
   body.appendChild(el('p', 'hint', '以下座位的旧版标记无法自动并入你的笔记（该座位的候选与备注已满）。旧数据仍保留在本机，不会丢失；请选择编辑并入或显式丢弃：'));
@@ -1633,7 +1992,9 @@ function openLegacyPendingPrompt(pending) {
     const ops = el('div', 'pm-ops');
     const edit = el('button', 'btn ghost small', '编辑并入');
     edit.addEventListener('click', () => {
-      $('#m-modal').innerHTML = '';
+      // 编辑弹层替换本提示层（返回键一层层关，不留下已关闭的影子层）
+      overlayReplaceNext = true;
+      closeModalDom();
       openTagModal(Number(seat)); // 保存成功后即并入；取消则仍留在待确认记录里
     });
     const drop = el('button', 'btn small danger', '丢弃旧标记');
@@ -1643,7 +2004,7 @@ function openLegacyPendingPrompt(pending) {
         if (Object.keys(pending).length) localStorage.setItem(`mww_tags_${state.game.gameId}`, JSON.stringify(pending));
         else localStorage.removeItem(`mww_tags_${state.game.gameId}`);
       } catch (_) {}
-      $('#m-modal').innerHTML = '';
+      closeModalTop();
       if (Object.keys(pending).length) openLegacyPendingPrompt(pending);
     });
     ops.append(edit, drop);
@@ -1678,6 +2039,7 @@ function saveAnnotations(seat, entry) {
       state.anno.rev = r.revision;
       state.anno.seats = r.annotations.seats || {};
       if (state.view) updateSeats(state.view);
+      renderNotesListM(); // 笔记页若开着，同步最新标注（FIN-10：保存不清草稿不抢焦点）
       return true;
     })
     .catch((e) => {
@@ -1695,7 +2057,7 @@ function saveAnnotations(seat, entry) {
             const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
             state.anno.rev = r.revision;
             state.anno.seats = r.annotations.seats || {};
-            $('#m-modal').innerHTML = '';
+            closeModalTop();
             const okFlag = await saveAnnotations(seat, keep); // 以最新 revision 重放这一座位的修改
             if (okFlag) closeSheet();
           } catch (_) { alert('合并保存仍失败，请稍后重试'); merge.disabled = false; }
@@ -1708,13 +2070,14 @@ function saveAnnotations(seat, entry) {
             state.anno.rev = r.revision;
             state.anno.seats = r.annotations.seats || {};
           } catch (_) { /* 拉不下来就保持内存现状 */ }
-          $('#m-modal').innerHTML = '';
+          closeModalTop();
           closeSheet();
           if (state.view) updateSeats(state.view);
+          renderNotesListM();
         });
         br.append(merge, discard);
         box.appendChild(br);
-        $('#m-modal').innerHTML = ''; // 中部 modal 压在底部弹层（z-index 更高）之上
+        closeModalTop(); // 中部 modal 压在底部弹层（z-index 更高）之上
         openModal(box);
       } else {
         // 其它失败：底部弹层不关，草稿保留在输入框，把错误写在弹层里
@@ -1825,9 +2188,10 @@ function openTagModal(seat) {
   body.appendChild(err);
 
   const foot = el('div', 'btnrow');
-  const tryClose = () => { if (dirty() && !confirm('有未保存的修改，确定放弃？')) return; closeSheet(); };
+  // X / 遮罩 / 取消 / 系统返回键都先过同一道 veto：有未保存修改必须显式确认，不静默丢草稿
+  const vetoClose = () => dirty() && !confirm('有未保存的修改，确定放弃？');
   const cancel = el('button', 'btn ghost', '取消');
-  cancel.addEventListener('click', tryClose);
+  cancel.addEventListener('click', () => { if (!vetoClose()) closeSheet(); });
   foot.appendChild(cancel);
   const save = el('button', 'btn primary', '保存笔记');
   save.addEventListener('click', async () => {
@@ -1856,7 +2220,7 @@ function openTagModal(seat) {
     });
     foot.appendChild(clr);
   }
-  openSheet(`📝 ${seat} 号的私人笔记`, body, foot, { onClose: tryClose });
+  openSheet(`📝 ${seat} 号的私人笔记`, body, foot, { vetoClose });
 }
 
 /** 旧格式兜底（无归属档案的旧局 404 / 共享模型缺失）：本地身份标记 {seat: roleId}，只存 localStorage */
@@ -1865,7 +2229,7 @@ function openLegacyTagModal(seat) {
   const wrap = el('div');
   const head = el('div', 'mhead', `<h2>🏷 标记 ${seat} 号</h2>`);
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   head.appendChild(close);
   const body = el('div', 'mbody');
   body.appendChild(el('p', 'hint', '本局的私人标注服务不可用（旧局无归属档案或网络受限），只能保存本地身份标记（旧格式，AI 看不到）；新开一局即可使用完整私人标注。'));
@@ -1873,14 +2237,14 @@ function openLegacyTagModal(seat) {
   for (const rid of possibleRolesFor(v, seat)) {
     const r = roleInfo(rid);
     const c = el('button', 'chip' + (state.tags[seat] === rid ? ' sel' : ''), `${r.emoji} ${r.name}`);
-    c.addEventListener('click', () => { state.tags[seat] = rid; saveTags(); $('#m-modal').innerHTML = ''; updateSeats(state.view); });
+    c.addEventListener('click', () => { state.tags[seat] = rid; saveTags(); closeModalTop(); updateSeats(state.view); });
     chips.appendChild(c);
   }
   body.appendChild(chips);
   if (state.tags[seat]) {
     const clr = el('button', 'btn danger', '清除标记');
     clr.style.marginTop = '12px';
-    clr.addEventListener('click', () => { delete state.tags[seat]; saveTags(); $('#m-modal').innerHTML = ''; updateSeats(state.view); });
+    clr.addEventListener('click', () => { delete state.tags[seat]; saveTags(); closeModalTop(); updateSeats(state.view); });
     body.appendChild(clr);
   }
   wrap.append(head, body);
@@ -1890,6 +2254,7 @@ function openLegacyTagModal(seat) {
 function saveTags() { try { localStorage.setItem(`mww_tags_${state.game.gameId}`, JSON.stringify(state.tags)); } catch (_) {} }
 function openModal(inner) {
   const root = $('#m-modal');
+  const wasOpen = overlayAlive('modal'); // 弹窗换弹窗（齿轮→设置/确认）：同一层换内容，返回深度不变
   root.innerHTML = '';
   const mask = el('div', 'modal-mask m-modal');
   const modal = el('div', 'modal');
@@ -1903,8 +2268,9 @@ function openModal(inner) {
     modal.appendChild(inner);
   }
   mask.appendChild(modal);
-  mask.addEventListener('click', (e) => { if (e.target === mask) root.innerHTML = ''; });
+  mask.addEventListener('click', (e) => { if (e.target === mask) closeModalTop(); });
   root.appendChild(mask);
+  trackOverlay('modal', closeModalDom, { swapIfOpen: wasOpen });
 }
 
 // ---------------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ----------------
@@ -1961,6 +2327,12 @@ function updateActionbar(v) {
     const send = keyEl('插话', 'off', () => wolfTalkAction('say', ta.value.trim(), ta));
     send.dataset.confirm = '1';
     ta.addEventListener('input', () => setKeyEnabled(send, ta.value.trim().length > 0));
+    // FIN-03：composing 期间 Enter 不发送
+    ta.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (!send.disabled) send.click();
+    });
     dlg.appendChild(ta);
     keys.appendChild(send);
     keys.append(
@@ -2097,11 +2469,20 @@ function setKeyEnabled(btn, on) {
 }
 
 async function submitSimple(payload) {
+  if (state.submitting) return; // FIN-03：双击只产生一次业务提交
+  if (navigator.onLine === false) { hint('⚠ 当前离线：等网络恢复后再提交'); return; } // 断网不基于过期任务提交
+  state.submitting = true;
+  const keys = $('#m-keys');
+  const busy = keys ? keys.querySelector('[data-confirm]') : null;
+  if (busy) { busy.disabled = true; busy.classList.add('m-busy'); } // 处理中保持宽度、吞点击
   try {
     await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
     $('#m-keys').innerHTML = ''; $('#m-keys').dataset.task = '';
     $('#m-dialog').innerHTML = ''; $('#m-dialog').dataset.task = '';
-  } catch (e) { $('#m-pending-hint').textContent = `✗ ${e.message}`; }
+  } catch (e) {
+    hint(`✗ ${e.message}`); // 失败不清输入：动作区签名未变不重建，草稿保留
+    if (busy) { busy.disabled = false; busy.classList.remove('m-busy'); }
+  } finally { state.submitting = false; }
 }
 async function wolfTalkAction(kind, text, ta) {
   try {
@@ -2154,6 +2535,13 @@ function buildActionUI(v, p, keys, dlg) {
     send.dataset.confirm = '1';
     ta.addEventListener('input', () => setKeyEnabled(send, canSend()));
     setKeyEnabled(send, canSend());
+    // FIN-03：Enter 直接发送，但中文 composing 期间 Enter 只上屏候选，不发送
+    ta.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      e.preventDefault();
+      if (!send.disabled) send.click();
+    });
     // 发送键和其它技能键放在同一条动作行里（以前单独占一行、还把行拉满宽，
     // 结果输入框被上下夹击显得变形）
     keys.appendChild(send);
@@ -2182,7 +2570,7 @@ function buildActionUI(v, p, keys, dlg) {
   if (TARGET_TASKS[p.task]) {
     const [label, none] = TARGET_TASKS[p.task];
     actionState.needTarget = true;
-    markNeedTarget(v, p.candidates, '点击左右两侧的座位选择目标');
+    markNeedTarget(v, p.candidates, '到「玩家」页点选目标座位');
     const conf = keyEl(label, 'off', () => submitSimple({ target: actionState.target }), { confirm: true });
     keys.appendChild(conf);
     if (p.allowNone && none) keys.appendChild(keyEl(none, 'alt', () => submitSimple({ target: 0 })));
@@ -2202,7 +2590,7 @@ function buildActionUI(v, p, keys, dlg) {
     const poisonKey = keyEl('☠ 用毒', 'off', () => submitSimple({ antidote: false, poison: actionState.target }), { confirm: true });
     if (ex.canPoison) {
       actionState.needTarget = true;
-      markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '点座位选择要毒的人（可毒自己）');
+      markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '到「玩家」页点选要毒的人（可毒自己）');
       keys.appendChild(poisonKey);
     } else {
       keys.appendChild(keyEl('☠ 毒药不可用', 'off', null, { sub: ex.poisonUsed ? '已用过' : ' ' }));
@@ -2230,7 +2618,8 @@ function buildActionUI(v, p, keys, dlg) {
   keys.appendChild(el('span', 'hint', `未知任务：${p.task}`));
 }
 
-/** 标记"本次需要点座位选目标"：让左右两列座位进入可选状态，并在对话框里给出说明 */
+/** 标记"本次需要点座位选目标"：让玩家页座位卡进入可选状态，并在对话框里给出说明与显式入口
+ *  （FIN-06 §10.4：非法目标禁用并说明；§10.7：切页签不靠长按——去玩家页选人有可见入口） */
 function markNeedTarget(v, candidates, tip) {
   actionState.needTarget = true;
   actionState.candidates = (candidates || []).slice();
@@ -2242,6 +2631,10 @@ function markNeedTarget(v, candidates, tip) {
     const sel = el('div', 'pick-sel');
     sel.innerHTML = '已选 <b id="m-dialog-seat">未选择</b>';
     t.appendChild(sel);
+    const go = el('button', 'btn small m-goto-players', '👥 去玩家页选人');
+    go.type = 'button';
+    go.addEventListener('click', () => setGameTab('players'));
+    t.appendChild(go);
     dlg.insertBefore(t, dlg.firstChild);
   }
 }
@@ -2268,7 +2661,7 @@ function roleArtHtml(rid) {
     : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
   return `<div class="card-frame"${window.CardFrame.roleAttr(rid)}>${window.CardFrame.html()}${face}</div>`;
 }
-function openInspect(rid) {
+function openInspect(rid, replace) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
   const card = el('div', 'inspect-card card-frame');
@@ -2291,8 +2684,15 @@ function openInspect(rid) {
     const dy = (e.clientY - rect.top - rect.height / 2) / rect.height;
     card.style.transform = `rotateY(${(dx * 14).toFixed(2)}deg) rotateX(${(-dy * 12).toFixed(2)}deg)`;
   });
-  stage.addEventListener('click', () => stage.remove());
+  // 点击关闭也走返回栈：返回键与点击行为一致（关检视 ≠ 退局）
+  stage.addEventListener('click', () => {
+    const top = backStack[backStack.length - 1];
+    if (top && top.kind === 'inspect') dismissTop();
+    else stage.remove();
+  });
   document.body.appendChild(stage);
+  if (replace) overlayReplaceNext = true; // 从齿轮/设置里进来：替换那一层，返回深度不加深
+  trackOverlay('inspect', () => stage.remove());
 }
 function maybeShowRole(v) {
   if (state.roleShown || !v.me || !v.me.role || v.finished || (v.day === 0 && !v.events.length)) return; // 已结束不播翻牌
@@ -2304,8 +2704,10 @@ function maybeShowRole(v) {
   $('#m-flip-caption').innerHTML = `
     <div class="r-desc">${r.short}</div>
     ${v.me.teammates && v.me.teammates.length ? `<div class="r-desc tm">狼队：${v.me.teammates.join('、')} 号</div>` : ''}`;
+  const wasOpen = !$('#m-flip').classList.contains('hidden');
   $('#m-flip').classList.remove('hidden');
   $('#m-flip-card').classList.remove('flipped');
+  trackOverlay('flip', hideFlipDom, { swapIfOpen: wasOpen }); // 翻牌也在返回栈里：返回先收翻牌
 }
 /**
  * 规则书：内容与渲染器都在 web/rulebook.js（桌面端同一份）。
@@ -2315,7 +2717,7 @@ function openRulebook() {
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+  close.addEventListener('click', closeModalTop);
   head.appendChild(close);
   const body = el('div', 'mbody rulebook');
   const thisGame = el('div', 'rb-sec');
