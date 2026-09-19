@@ -56,8 +56,9 @@
           ]
         }
       ],
-      "icon": "../web/assets/icon-512.png",
-      "signAndEditExecutable": false
+      "icon": "build/icon.ico",
+      "signAndEditExecutable": true,
+      "signExecutable": false
     },
     "portable": {
       "artifactName": "werewolf-ai-${version}-win-x64-portable.${ext}"

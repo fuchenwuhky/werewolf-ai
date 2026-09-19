@@ -19,11 +19,13 @@
  */
 'use strict';
 const fs = require('fs');
+const path = require('path');
 const brand = require('./brand-v2-lib.js');
 
 function apply(entry) {
-  if (entry.kind === 'png-copy' || entry.kind === 'svg-copy') {
+  if (entry.kind === 'png-copy' || entry.kind === 'svg-copy' || entry.kind === 'ico-copy') {
     const src = fs.readFileSync(brand.v2Path(entry.v2));
+    fs.mkdirSync(path.dirname(brand.resolve(entry.prod)), { recursive: true });
     fs.writeFileSync(brand.resolve(entry.prod), src);
     return { bytes: src.length, detail: `← v2/${entry.v2}` };
   }
@@ -51,6 +53,7 @@ function main() {
   const groups = [
     ['BRAND-02 · web PWA', brand.MAPPING.filter((m) => m.prod.startsWith('web/'))],
     ['BRAND-03 · Android 图标/启动页', brand.MAPPING.filter((m) => m.prod.startsWith('app/'))],
+    ['FIN-09 · Windows EXE 图标源', brand.MAPPING.filter((m) => m.prod.startsWith('desktop/'))],
   ];
   let done = 0;
   for (const [label, entries] of groups) {

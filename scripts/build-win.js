@@ -20,11 +20,13 @@ const { execFileSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const RELEASE = path.join(ROOT, 'release');
 
-/** 版本号以安卓包为单一来源：两端发同一版，别各自维护一份 */
+/** 版本号单一来源：release-version.json（FIN-11）。
+ *  曾经从 build.gradle 抓 versionName —— 那是安卓包的声明点，不是权威；两端发同一版，
+ *  都应该以 release-version.json 为准（一致性由 scripts/version-sync.js 校验）。 */
 function appVersion() {
-  const g = fs.readFileSync(path.join(ROOT, 'app', 'android', 'app', 'build.gradle'), 'utf8');
-  const m = g.match(/versionName\s+"([^"]+)"/);
-  return m ? m[1] : '0.0';
+  const rel = JSON.parse(fs.readFileSync(path.join(ROOT, 'release-version.json'), 'utf8'));
+  if (!rel.productVersion) throw new Error('release-version.json 缺少 productVersion');
+  return rel.productVersion;
 }
 
 const VERSION = appVersion();
@@ -70,10 +72,17 @@ function main() {
 
   // 2) Node 运行时（含它自己的 LICENSE —— 分发 Node 二进制必须带）
   const nodeExe = process.execPath;
-  fs.copyFileSync(nodeExe, path.join(OUT, 'node.exe'));
+  const nodeInPkg = path.join(OUT, 'node.exe');
+  fs.copyFileSync(nodeExe, nodeInPkg);
   const nodeLicense = path.join(path.dirname(nodeExe), 'LICENSE');
   if (fs.existsSync(nodeLicense)) fs.copyFileSync(nodeLicense, path.join(OUT, 'LICENSE.node.txt'));
   console.log(`  已内置 ${path.basename(nodeExe)}（${process.version}）`);
+
+  // 2.5) FIN-09：把 v2 app.ico 写进 node.exe 的图标资源段 —— 这是包里唯一的 EXE，
+  // 控制台窗口/任务栏/资源管理器显示的图标都来自它的 .rsrc。写完自检（逐帧比对），
+  // 失败即构建失败；然后才打 zip（构建 → 改图标 → 再打包）。
+  console.log('  ── 写入 EXE 图标资源（FIN-09）──');
+  require('./set-exe-icon.js').applyTo(nodeInPkg);
 
   // 3) 启动器（必须纯 ASCII）+ 4) 说明
   writeBatch(path.join(OUT, '启动 AI 狼人杀.cmd'), LAUNCHER);

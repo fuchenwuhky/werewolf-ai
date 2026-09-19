@@ -100,9 +100,9 @@ function checkV2Sources() {
 
 // ---------- 2. 生产资产一致性 ----------
 function expectedBytes(entry) {
+  if (entry.kind === 'svg-master') return fs.readFileSync(brand.resolve(brand.V2_MASTER_EMBLEM)); // svg-master 无 v2/export 对应物，必须在读 v2Buf 之前短路
   const v2Buf = readRepo(`${brand.V2_EXPORT_DIR}/${entry.v2}`);
-  if (entry.kind === 'svg-master') return fs.readFileSync(brand.resolve(brand.V2_MASTER_EMBLEM));
-  if (entry.kind === 'png-copy' || entry.kind === 'svg-copy') return v2Buf;
+  if (entry.kind === 'png-copy' || entry.kind === 'svg-copy' || entry.kind === 'ico-copy') return v2Buf;
   if (entry.kind === 'round') return brand.deriveRoundIcon(v2Buf);
   if (entry.kind === 'splash') return brand.deriveSplash(v2Buf, entry.w, entry.h);
   return null;
@@ -157,7 +157,8 @@ function checkProductionAssets() {
     }
     const actualHash = brand.sha256(actual);
     if (actualHash !== brand.sha256(expected)) {
-      fail(entry.prod, `SHA-256 与 v2（${entry.kind === 'png-copy' || entry.kind === 'svg-copy' ? `直拷 ${entry.v2}` : `派生自 ${entry.v2}`}）不符：实际 ${actualHash}`);
+      const direct = entry.kind === 'png-copy' || entry.kind === 'svg-copy' || entry.kind === 'ico-copy';
+      fail(entry.prod, `SHA-256 与 v2（${direct ? `直拷 ${entry.v2}` : `派生自 ${entry.v2}`}）不符：实际 ${actualHash}`);
       continue;
     }
     if (entry.w && !entry.prod.endsWith('.svg')) {
@@ -167,9 +168,39 @@ function checkProductionAssets() {
         continue;
       }
     }
-    const how = entry.kind === 'png-copy' || entry.kind === 'svg-copy' ? `← v2/${entry.v2}` : `派生 ← v2/${entry.v2}`;
+    if (entry.kind === 'ico-copy') {
+      const bad = checkIcoFrames(entry.prod, actual);
+      if (bad) continue;
+    }
+    const how = entry.kind === 'png-copy' || entry.kind === 'svg-copy' || entry.kind === 'ico-copy'
+      ? `← v2/${entry.v2}`
+      : `派生 ← v2/${entry.v2}`;
     pass(`${entry.prod} · ${entry.w ? `${entry.w}x${entry.h} · ` : ''}${actual.length}B · ${how} · ${actualHash.slice(0, 16)}…`);
   }
+}
+
+/** ICO 帧校验（FIN-09）：尺寸档覆盖 16/32/48/256、全 32bpp。失败返回 true（已记入 failures）。 */
+function checkIcoFrames(prod, buf) {
+  let ico;
+  try {
+    ico = brand.parseIco(buf);
+  } catch (e) {
+    fail(prod, `ICO 解析失败：${e.message}`);
+    return true;
+  }
+  const sizes = ico.frames.map((f) => f.width);
+  const missing = [16, 32, 48, 256].filter((s) => !sizes.includes(s));
+  if (missing.length) {
+    fail(prod, `ICO 缺少必需帧尺寸：${missing.join('/')}（实际 ${sizes.join('/')}）`);
+    return true;
+  }
+  const badBpp = ico.frames.filter((f) => f.bpp !== 32);
+  if (badBpp.length) {
+    fail(prod, `ICO 存在非 32bpp 帧：${badBpp.map((f) => `${f.width}x${f.height}@${f.bpp}`).join(', ')}`);
+    return true;
+  }
+  pass(`${prod} · ${ico.count} 帧 ${sizes.join('/')} 全 32bpp`);
+  return false;
 }
 
 // ---------- 3. 引用面核对（web manifest / HTML / Electron） ----------
@@ -196,6 +227,15 @@ function collectWebReferences() {
       if (!/\b(icon|apple-touch-icon)\b/i.test(rel)) continue;
       const href = (tag.match(/href\s*=\s*"([^"]*)"/i) || [])[1];
       addRef(path.posix.dirname(html), href);
+    }
+    // FIN-08：页面可见品牌走 <img src>（首页大标识/局中顶栏小狼冠）——同样纳入引用面核对，
+    // 防止"换了文件名/删了页面"后生产品牌资产变孤儿（矢量 svg 归这里管；位图由打包哈希校验覆盖）
+    const imgs = text.match(/<img\b[^>]*>/gi) || [];
+    for (const tag of imgs) {
+      const src = (tag.match(/src\s*=\s*"([^"]*)"/i) || [])[1];
+      if (!src || /^(https?:)?\/\//i.test(src) || /^(data|blob):/i.test(src)) continue;
+      if (!/\.svg$/i.test(src)) continue;
+      addRef(path.posix.dirname(html), src);
     }
   }
   return [...new Set(refs)];
@@ -240,6 +280,10 @@ function checkElectron() {
       const v2Buf = readRepo(`${brand.V2_EXPORT_DIR}/${entry.v2}`);
       if (brand.sha256(buf) !== brand.sha256(v2Buf)) {
         fail(resolved, 'Electron builder 图标与 v2 不一致');
+      } else if (resolved.endsWith('.ico')) {
+        // FIN-09：EXE 图标源改为 v2 app.ico 的直拷（7 帧 16-256 全 32bpp），
+        // electron-builder 26+ 用纯 JS resedit 写资源段，不再需要 winCodeSign 下载
+        checkIcoFrames(resolved, buf);
       } else {
         const size = brand.pngSize(buf);
         pass(`desktop/package.json build.win.icon → ${resolved} · ${size.width}x${size.height} · 与 v2/${entry.v2} 一致`);
@@ -265,7 +309,10 @@ function checkElectron() {
     if (brand.sha256(buf) !== brand.sha256(v2Buf)) fail(prod, 'Electron 运行时窗口图标与 v2 不一致');
     else pass(`desktop/main.js → ${prod} · 与 v2/${entry.v2} 一致`);
   }
-  if (names.length) console.log(`  - 注意：build.win.signAndEditExecutable=${JSON.stringify(pkg.build.win.signAndEditExecutable ?? null)}，为 false 时 exe 资源段不会改写，窗口图标正常 ≠ exe 图标已写入（见 design/brand/v2/README.md 验收节）`);
+  if (names.length) {
+    const seFlags = `signAndEditExecutable=${JSON.stringify(pkg.build.win.signAndEditExecutable ?? null)}, signExecutable=${JSON.stringify(pkg.build.win.signExecutable ?? null)}`;
+    console.log(`  - EXE 资源段写入状态：${seFlags}（signExecutable=false 只跳过代码签名，图标/版本资源仍由 electron-builder 内置 resedit 写入；包内实证由 npm run app:verify 的 DESKTOP 目标校验）`);
+  }
 }
 
 // ---------- main ----------
@@ -288,4 +335,4 @@ function main() {
 
 if (require.main === module) process.exit(main());
 
-module.exports = { main };
+module.exports = { main, expectedBytes };

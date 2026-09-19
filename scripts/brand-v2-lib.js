@@ -292,6 +292,19 @@ function deriveSplash(decalPngBuf, outW, outH) {
   return encodePng(outW, outH, 3, canvas);
 }
 
+/** 展开 ICO：返回每帧 { w, h, bpp, data(Buffer), hash }（目录里 0 表示 256）。
+ *  FIN-09 包侧校验用：EXE 的 RT_ICON 帧字节与 ICO 帧字节逐一比对。
+ *  注意 ICO 帧可能是 PNG 压缩（本仓 app.ico 7 帧全是 PNG），data 是**原始帧字节**，不是解码像素。 */
+function icoFrames(buf) {
+  const { frames } = parseIco(buf);
+  return frames.map((f, i) => {
+    // 帧数据的绝对偏移记录在每个目录项的 +12 字节处（parseIco 只读尺寸/字节长，这里补读偏移）
+    const off = buf.readUInt32LE(6 + i * 16 + 12);
+    const data = buf.subarray(off, off + f.bytes);
+    return { w: f.width, h: f.height, bpp: f.bpp, data, hash: sha256(data) };
+  });
+}
+
 // ---------- 映射表（生产资产 ← v2 源；apply 与 check 的唯一事实来源） ----------
 const ANDROID_RES = 'app/android/app/src/main/res';
 // [密度, legacy 尺寸, adaptive 前景尺寸]（v2 README 接入映射表）
@@ -321,6 +334,8 @@ const ANDROID_SPLASHES = [
 const V2_MASTER_EMBLEM = "design/brand/v2/wolf-emblem.svg"; // 母版：自为基准，不经 export/manifest
 const MAPPING = [
   // —— BRAND-02：web 生产 PWA 图标（manifest / index.html / m/index.html 引用面）——
+  // FIN-08：页面可见狼冠（生产派生自母版，直拷同源；首页大标识/局中顶栏/手机品牌区引用它）
+  { prod: 'web/assets/brand/wolf-emblem.svg', kind: 'svg-master' },
   { prod: 'web/assets/icon.svg', v2: 'app-icon.svg', kind: 'svg-copy' },
   { prod: 'web/assets/icon-192.png', v2: 'icon-192.png', kind: 'png-copy', w: 192, h: 192 },
   { prod: 'web/assets/icon-512.png', v2: 'icon-512.png', kind: 'png-copy', w: 512, h: 512 },
@@ -338,6 +353,9 @@ const MAPPING = [
   { prod: `${ANDROID_RES}/values/ic_launcher_background.xml`, kind: 'color', value: '#080D17' },
   { prod: `${ANDROID_RES}/mipmap-anydpi-v26/ic_launcher.xml`, kind: 'adaptive-xml' },
   { prod: `${ANDROID_RES}/mipmap-anydpi-v26/ic_launcher_round.xml`, kind: 'adaptive-xml' },
+  // —— FIN-09：Windows EXE 图标源（desktop/package.json build.win.icon 指向它；
+  //    electron-builder resedit / NSIS Icon 把它的帧写进 EXE 资源段，包侧由 app:verify 逐一比对）——
+  { prod: 'desktop/build/icon.ico', v2: 'app.ico', kind: 'ico-copy' },
 ];
 
 // 门禁需要的 v2 侧资产（含 ICO；逐个与 export/manifest.json 的 SHA-256 交叉核对）
@@ -360,6 +378,8 @@ module.exports = {
   encodePng,
   pngSize,
   parseIco,
+  icoFrames,
+  toRgba,
   deriveRoundIcon,
   deriveSplash,
   resolve: (rel) => path.join(ROOT, rel),

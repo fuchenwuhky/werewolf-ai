@@ -33,6 +33,8 @@ const run = (label, cmd, args, opts = {}) => {
 };
 
 function main(argv) {
+  // FIN-11：版本单一来源是 release-version.json（verify-packages.readVersion 负责读取，
+  // 并交叉核对 build.gradle 的 versionName —— 不一致直接失败，指向 version-sync --fix）
   const version = require('./verify-packages').readVersion();
   console.log(`── 打包安卓版 ${version} ──`);
 
@@ -65,7 +67,7 @@ function main(argv) {
     for (const p of r.problems.slice(0, 12)) console.error(`    · ${p}`);
     return 1;
   }
-  console.log(`✓ 包内容校验通过：与当前源码一致（比对 ${r.checked} 个文本文件）`);
+  console.log(`✓ 包内容校验通过：与当前源码一致（${r.checked} 个文件全部内容比对，含二进制哈希；品牌资源字节一致 ${r.brandInfo.byte} / 像素一致 ${r.brandInfo.pixel}）`);
 
   if (argv.includes('--install')) {
     console.log('── 安装到设备 ──');

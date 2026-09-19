@@ -21,6 +21,15 @@ process.env.ELECTRON_MIRROR = process.env.ELECTRON_MIRROR || 'https://npmmirror.
 process.env.ELECTRON_BUILDER_BINARIES_MIRROR =
   process.env.ELECTRON_BUILDER_BINARIES_MIRROR || 'https://npmmirror.com/mirrors/electron-builder-binaries/';
 
+/** 版本号单一来源：release-version.json（FIN-11）。desktop/package.json 里的 version
+ *  只是声明点（由 scripts/version-sync.js 与权威对齐）；构建时在这里显式注入权威值，
+ *  electron-builder 的 ${version}（产物名、EXE 版本资源）都以注入值为准。 */
+function releaseVersion() {
+  const rel = JSON.parse(fs.readFileSync(path.join(ROOT, 'release-version.json'), 'utf8'));
+  if (!rel.productVersion) throw new Error('release-version.json 缺少 productVersion');
+  return rel.productVersion;
+}
+
 function run(cmd, args, cwd, shell) {
   console.log(`$ ${path.basename(cmd)} ${args.join(' ')}`);
   execFileSync(cmd, args, { cwd, stdio: 'inherit', env: process.env, shell: !!shell });
@@ -36,6 +45,7 @@ function binJs(pkg, name) {
 }
 
 function main() {
+  const version = releaseVersion();
   if (!fs.existsSync(path.join(DESKTOP, 'node_modules', 'electron'))) {
     console.log('── 首次运行：安装桌面版依赖（走镜像）──');
     const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
@@ -43,18 +53,46 @@ function main() {
   }
 
   console.log('── 打包免安装 exe（electron-builder portable）──');
-  run(process.execPath, [binJs('electron-builder', 'electron-builder'), '--win', 'portable', '--x64'], DESKTOP);
+  // FIN-09：desktop/package.json 已开启 win.signAndEditExecutable（electron-builder 26 用
+  // 纯 JS resedit 写 EXE 资源段，不再需要下载 winCodeSign），signExecutable:false 仅跳过签名。
+  // NSIS portable 的最终 EXE 图标经 NSIS Icon 指令内嵌；版本号从 release-version.json 注入。
+  // 踩过：dist 里残留旧版本的 portable exe，按后缀模糊找会捞到旧包 —— 构建前先清掉旧产物，
+  // 构建后按 artifactName 精确取本版文件（build.win.artifactName 与 portable.artifactName 一致）。
+  const dist = path.join(DESKTOP, 'dist');
+  for (const f of fs.readdirSync(dist)) {
+    if (f.endsWith('.exe') && f.includes('portable')) fs.rmSync(path.join(dist, f), { force: true });
+  }
+  run(process.execPath, [
+    binJs('electron-builder', 'electron-builder'), '--win', 'portable', '--x64',
+    `-c.extraMetadata.version=${version}`,
+  ], DESKTOP);
 
   // 产物统一收进 release/，与电脑版 zip、APK 放一起，方便分发
-  const dist = path.join(DESKTOP, 'dist');
-  const exe = fs.readdirSync(dist).find((f) => f.endsWith('.exe') && f.includes('portable'));
-  if (!exe) throw new Error(`没在 ${dist} 找到 portable exe`);
+  const exeName = `werewolf-ai-${version}-win-x64-portable.exe`;
+  if (!fs.existsSync(path.join(dist, exeName))) {
+    throw new Error(`没在 ${dist} 找到 ${exeName}（electron-builder 产物名与预期不符？）`);
+  }
   fs.mkdirSync(RELEASE, { recursive: true });
-  const out = path.join(RELEASE, exe);
-  fs.copyFileSync(path.join(dist, exe), out);
+  const out = path.join(RELEASE, exeName);
+  fs.copyFileSync(path.join(dist, exeName), out);
   const size = fs.statSync(out).size / 1048576;
   console.log(`✓ 免安装单文件：${path.relative(ROOT, out)}  ${size.toFixed(1)} MB`);
   console.log('  双击即用，自带窗口（不依赖浏览器、不弹控制台）；数据在 %APPDATA%\\werewolf-ai-desktop');
+
+  // FIN-09 收口：对刚产出的 EXE 实检图标资源段（逐帧比对 v2 app.ico）+ 版本资源可追溯。
+  // 这里失败要当成构建失败 —— "打包成功但 EXE 图标没写进去"正是本任务要消灭的假通过。
+  console.log('── 校验 EXE 图标资源段（FIN-09）──');
+  const vp = require('./verify-packages.js');
+  const problems = [];
+  const info = vp.checkExeBrandIcon('DESKTOP', out, problems);
+  if (info) vp.checkExeVersion('DESKTOP', out, version, problems);
+  if (problems.length) {
+    console.error('✖ EXE 图标资源校验未通过：');
+    for (const p of problems) console.error(`    · ${p}`);
+    return 1;
+  }
+  console.log(`✓ EXE 图标 ${info.frames} 帧与 v2 app.ico 逐帧一致（图标组 ${info.matchedGroups.join('/')}），版本资源含 ${version}`);
+  return 0;
 }
 
-main();
+process.exit(main());
