@@ -1,182 +1,69 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" role="img" aria-label="月夜狼首纹章">
-  <defs>
-    <radialGradient id="wmVignette" cx=".5" cy=".42" r=".75">
-      <stop offset="0" stop-color="#4a0e0e" stop-opacity="0"/>
-      <stop offset=".8" stop-color="#4a0e0e" stop-opacity="0"/>
-      <stop offset="1" stop-color="#5a1010" stop-opacity=".5"/>
-    </radialGradient>
-    <radialGradient id="wmDisc" cx=".5" cy=".34" r=".85">
-      <stop offset="0" stop-color="#12141f"/>
-      <stop offset=".55" stop-color="#0a0b13"/>
-      <stop offset="1" stop-color="#030308"/>
-    </radialGradient>
-    <linearGradient id="wmGold" x1=".15" y1="0" x2=".85" y2="1">
-      <stop offset="0" stop-color="#d9c084"/>
-      <stop offset=".28" stop-color="#a8863a"/>
-      <stop offset=".55" stop-color="#7c5e1a"/>
-      <stop offset=".8" stop-color="#55400f"/>
-      <stop offset="1" stop-color="#3a2a08"/>
-    </linearGradient>
-    <linearGradient id="wmGoldRing2" x1="1" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#c3a867"/>
-      <stop offset=".5" stop-color="#8a6b24"/>
-      <stop offset="1" stop-color="#4e3a0e"/>
-    </linearGradient>
-    <linearGradient id="wmFur" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a4152"/>
-      <stop offset=".38" stop-color="#202636"/>
-      <stop offset=".72" stop-color="#12151f"/>
-      <stop offset="1" stop-color="#080a12"/>
-    </linearGradient>
-    <linearGradient id="wmFurEdge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5a6478"/>
-      <stop offset="1" stop-color="#2a3040"/>
-    </linearGradient>
-    <radialGradient id="wmEyeG" cx=".5" cy=".42" r=".65">
-      <stop offset="0" stop-color="#ffd9c0"/>
-      <stop offset=".35" stop-color="#ff7a45"/>
-      <stop offset=".75" stop-color="#d02a1c"/>
-      <stop offset="1" stop-color="#6e0f0a"/>
-    </radialGradient>
-    <radialGradient id="wmHalo" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#c9b27a" stop-opacity=".18"/>
-      <stop offset=".6" stop-color="#c9b27a" stop-opacity=".05"/>
-      <stop offset="1" stop-color="#c9b27a" stop-opacity="0"/>
-    </radialGradient>
-    <radialGradient id="wmMoonG" cx=".5" cy=".5" r=".5">
-      <stop offset="0" stop-color="#c03026" stop-opacity=".8"/>
-      <stop offset="1" stop-color="#c03026" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="wmMuzzle" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#57679f"/>
-      <stop offset="1" stop-color="#1b2445"/>
-    </linearGradient>
-    <filter id="wmSoft" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur stdDeviation="3"/>
-    </filter>
-    <filter id="wmSoft2" x="-80%" y="-80%" width="260%" height="260%">
-      <feGaussianBlur stdDeviation="5"/>
-    </filter>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024"><rect width="1024" height="1024" fill="#080d17"/><g transform="translate(512 512) scale(1) translate(-512 -512)"><defs>
+    <radialGradient id="disc" cx="42%" cy="30%" r="75%"><stop stop-color="#202a3e"/><stop offset=".58" stop-color="#0c1220"/><stop offset="1" stop-color="#04070d"/></radialGradient>
+    <linearGradient id="gold" x1="12%" y1="0" x2="88%" y2="100%"><stop stop-color="#6e4d22"/><stop offset=".22" stop-color="#edcf91"/><stop offset=".4" stop-color="#b48a47"/><stop offset=".61" stop-color="#71522e"/><stop offset=".82" stop-color="#d7b470"/><stop offset="1" stop-color="#79572d"/></linearGradient>
+    <linearGradient id="steel" x1="15%" y1="0" x2="75%" y2="100%"><stop stop-color="#9baabc"/><stop offset=".27" stop-color="#667891"/><stop offset=".59" stop-color="#344359"/><stop offset="1" stop-color="#101824"/></linearGradient>
+    <linearGradient id="leftPlane" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#a6b5c6"/><stop offset=".53" stop-color="#51647e"/><stop offset="1" stop-color="#263449"/></linearGradient>
+    <linearGradient id="rightPlane" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#536783"/><stop offset="1" stop-color="#152032"/></linearGradient>
+    <linearGradient id="muzzle" x1="0" y1="0" x2="70%" y2="100%"><stop stop-color="#b9c4cd"/><stop offset=".5" stop-color="#75899f"/><stop offset="1" stop-color="#273951"/></linearGradient>
+    <linearGradient id="eye" x1="0" y1="0" x2="0" y2="100%"><stop stop-color="#ffad7b"/><stop offset=".32" stop-color="#ff614d"/><stop offset="1" stop-color="#a72132"/></linearGradient>
+    <linearGradient id="ear" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#070b15"/><stop offset="1" stop-color="#28334a"/></linearGradient>
+    <path id="wolf-outline" d="M286 184 L396 268 Q453 245 512 256 Q571 245 628 268 L738 184 L718 382 L760 440 L728 439 L785 518 L735 512 L755 570 L706 557 L705 616 L654 600 Q606 727 512 816 Q418 727 370 600 L319 616 L318 557 L269 570 L289 512 L239 518 L296 439 L264 440 L306 382 Z"/>
   </defs>
-
-  <!-- 圆盘底：午夜渐变 + 暗角 -->
-  <circle cx="120" cy="120" r="118" fill="#05070f"/>
-  <circle cx="120" cy="120" r="101" fill="url(#wmDisc)"/>
-
-  <!-- 星空：细星 + 两颗四芒星 -->
-  <g fill="#8a2420" opacity=".85">
-    <circle cx="52" cy="66" r="1.3" opacity=".7"/>
-    <circle cx="84" cy="42" r="1" opacity=".55"/>
-    <circle cx="196" cy="86" r="1.2" opacity=".6"/>
-    <circle cx="176" cy="180" r="1" opacity=".5"/>
-    <circle cx="46" cy="160" r="1.1" opacity=".5"/>
-    <circle cx="206" cy="140" r=".9" opacity=".45"/>
+  <!-- HALO: the ring is a frame, not a second focal point. -->
+  <g id="halo">
+    <circle cx="512" cy="512" r="401" fill="url(#disc)" stroke="#342c23" stroke-width="20"/>
+    <circle cx="512" cy="512" r="401" fill="none" stroke="url(#gold)" stroke-width="9"/>
+    <circle cx="512" cy="512" r="381" fill="none" stroke="#aa824a" stroke-width="2" opacity=".5"/>
+    <circle cx="512" cy="512" r="359" fill="none" stroke="#7183a0" stroke-width="1.5" opacity=".17"/>
+    <path d="M359 686 V435 Q359 291 512 171 Q665 291 665 435 V686 M396 683 V439 Q396 322 512 226 Q628 322 628 439 V683" fill="none" stroke="url(#gold)" stroke-width="3" opacity=".3"/>
+    <path d="M512 77 L524 104 L512 130 L500 104 Z M512 894 L524 920 L512 947 L500 920 Z M77 512 L104 500 L130 512 L104 524 Z M894 512 L920 500 L947 512 L920 524 Z" fill="url(#gold)"/>
+    <g fill="none" stroke="url(#gold)" stroke-width="3" opacity=".8">
+      <path d="M215 261 L228 253 L239 236 M785 236 L796 253 L809 261 M215 763 L228 771 L239 788 M785 788 L796 771 L809 763"/>
+      <path d="M437 894 Q469 865 482 887 L512 859 L542 887 Q555 865 587 894"/>
+      <path d="M184 579 Q175 631 218 672 M806 672 Q849 631 840 579"/>
+    </g>
+    <g fill="#c3a069"><circle cx="227" cy="227" r="4"/><circle cx="797" cy="227" r="4"/><circle cx="227" cy="797" r="4"/><circle cx="797" cy="797" r="4"/></g>
   </g>
-  <g fill="#b03a2e">
-    <path d="M62 92 l2.2 5 5 2.2 -5 2.2 -2.2 5 -2.2 -5 -5 -2.2 5 -2.2 Z" opacity=".85"/>
-    <path d="M186 158 l1.8 4 4 1.8 -4 1.8 -1.8 4 -1.8 -4 -4 -1.8 4 -1.8 Z" opacity=".7"/>
+  <!-- WOLF: strong silhouette and broad tonal facets stay legible at app-icon scale. -->
+  <g id="wolf">
+    <use xlink:href="#wolf-outline" fill="#02050a" stroke="#02050a" stroke-width="24" stroke-linejoin="round"/>
+    <use xlink:href="#wolf-outline" fill="url(#steel)" stroke="url(#gold)" stroke-width="4" stroke-linejoin="round"/>
+    <!-- Tall triangular ears with deep inner planes. -->
+    <path d="M308 223 L380 291 L335 373 Z" fill="url(#ear)"/>
+    <path d="M716 223 L644 291 L689 373 Z" fill="url(#ear)"/>
+    <path d="M316 244 L334 347 L349 306 Z M708 244 L690 347 L675 306 Z" fill="#67404a" opacity=".62"/>
+    <path d="M294 201 L396 286 M730 201 L628 286" fill="none" stroke="#d0bb91" stroke-width="3"/>
+    <!-- Forehead: a lancet shape, echoing the architecture behind it. -->
+    <path d="M398 289 Q452 264 512 274 L481 369 L435 431 L335 385 L352 328 Z" fill="url(#leftPlane)"/>
+    <path d="M626 289 Q572 264 512 274 L543 369 L589 431 L689 385 L672 328 Z" fill="url(#rightPlane)"/>
+    <path d="M512 275 L547 376 L528 434 L512 477 L496 434 L477 376 Z" fill="#8291a7" opacity=".63"/>
+    <path d="M512 291 L512 426" fill="none" stroke="#d6d9d5" stroke-width="3" opacity=".55"/>
+    <!-- Cheek ruffs: asymmetric light, symmetric anatomy. -->
+    <path d="M331 399 L298 449 L327 451 L284 503 L329 492 L307 545 L347 526 L343 579 L381 554 L426 640 L449 572 L430 478 Z" fill="#1b293d"/>
+    <path d="M693 399 L726 449 L697 451 L740 503 L695 492 L717 545 L677 526 L681 579 L643 554 L598 640 L575 572 L594 478 Z" fill="#101b2d"/>
+    <path d="M318 456 L349 416 L396 450 L367 482 L326 501 L351 466 Z M706 456 L675 416 L628 450 L657 482 L698 501 L673 466 Z" fill="#6e829b" opacity=".74"/>
+    <path d="M355 529 L384 493 L413 499 L391 553 L378 586 Z" fill="#91a1b2" opacity=".7"/>
+    <path d="M669 529 L640 493 L611 499 L633 553 L646 586 Z" fill="#51647e"/>
+    <!-- Recessed eyes: crimson accents, no blurred glow. -->
+    <path d="M343 435 Q391 411 453 445 L480 484 Q419 506 355 465 Z M681 435 Q633 411 571 445 L544 484 Q605 506 669 465 Z" fill="#040910"/>
+    <path d="M362 447 Q400 437 452 466 L464 480 Q414 483 379 464 Z M662 447 Q624 437 572 466 L560 480 Q610 483 645 464 Z" fill="url(#eye)"/>
+    <path d="M411 448 L422 451 L419 478 L410 475 Z M613 448 L602 451 L605 478 L614 475 Z" fill="#0a080d"/>
+    <path d="M373 448 L402 452 M651 448 L622 452" fill="none" stroke="#ffcf9a" stroke-width="3" stroke-linecap="round"/>
+    <path d="M342 425 Q398 403 461 448 M682 425 Q626 403 563 448" fill="none" stroke="#9eacb9" stroke-width="6"/>
+    <!-- Tapered bridge and broad nose give the head a distinctly lupine profile. -->
+    <path d="M496 438 L512 477 L528 438 L565 557 L581 642 L551 699 L512 739 L473 699 L443 642 L459 557 Z" fill="url(#muzzle)"/>
+    <path d="M512 478 L512 649 L551 699 L581 642 L565 557 L528 438 Z" fill="#30455f" opacity=".6"/>
+    <path d="M458 543 L434 587 L409 565 L428 641 L475 689 L454 629 Z M566 543 L590 587 L615 565 L596 641 L549 689 L570 629 Z" fill="#c0c7c9" opacity=".8"/>
+    <path d="M512 503 L489 580 L482 620" fill="none" stroke="#d0d5d3" stroke-width="4" opacity=".7"/>
+    <path d="M469 634 Q512 614 555 634 L546 666 L512 686 L478 666 Z" fill="#060c15" stroke="#91a1b2" stroke-width="2"/>
+    <path d="M484 638 Q509 627 536 637" fill="none" stroke="#667c96" stroke-width="5" stroke-linecap="round"/>
+    <path d="M512 685 V714 M468 697 Q493 725 512 714 Q531 725 556 697" fill="none" stroke="#101b2b" stroke-width="7" stroke-linecap="round"/>
+    <path d="M443 694 L474 749 L492 735 L512 782 L532 735 L550 749 L581 694 L559 759 L512 816 L465 759 Z" fill="#1b293c"/>
+    <path d="M476 754 L512 798 L548 754" fill="none" stroke="#a0804b" stroke-width="3"/>
+    <!-- Engraved, restrained fur accents; no external images, fonts or filters. -->
+    <g fill="none" stroke="#bac3c9" stroke-width="2" opacity=".35" stroke-linecap="round">
+      <path d="M402 305 L433 292 M381 323 L423 305 M628 305 L599 292 M646 323 L604 305"/>
+      <path d="M366 504 L352 543 M383 542 L385 568 M658 504 L672 543 M641 542 L639 568"/>
+    </g>
   </g>
-
-  <!-- 新月：右上，柔光晕 -->
-  <g opacity=".9">
-    <circle cx="176" cy="58" r="26" fill="url(#wmMoonG)"/>
-    <circle cx="176" cy="58" r="14" fill="#a82820"/>
-    <circle cx="181.5" cy="54.5" r="12.4" fill="url(#wmDisc)"/>
-  </g>
-
-  <!-- 头后金色光晕：把头从圆盘上托出来 -->
-  <ellipse cx="120" cy="128" rx="64" ry="62" fill="url(#wmHalo)"/>
-  <!-- 哥特尖拱剪影（极淡的教堂窗轮廓） -->
-  <path d="M120 40 C142 58 156 84 156 118 L156 176 L84 176 L84 118 C84 84 98 58 120 40 Z" fill="#05060c" opacity=".55"/>
-
-  <!-- 耳（左耳 + 镜像右耳）：外缘弧线、内耳窝、金色描边光 -->
-  <g transform="translate(120 126) scale(1.16) translate(-120 -126)">
-  <g id="wmEarL">
-    <path d="M84 88 C74 70 70 54 74 32 C92 48 104 62 110 76 C101 82 92 86 84 88 Z" fill="url(#wmFur)" stroke="#0a1122" stroke-width="1.4"/>
-    <path d="M86 78 C79 64 76 52 76.5 40 C88 52 97 64 102 73 C96.5 76 91 78 86 78 Z" fill="#101830" opacity=".85"/>
-    <path d="M76 38 C85 51 93 61 100 68" fill="none" stroke="#b39a5e" stroke-width="1.6" opacity=".7" stroke-linecap="round"/>
-  </g>
-  <use href="#wmEarL" transform="translate(240 0) scale(-1 1)"/>
-
-  <!-- 头部主体：带颊毛锯齿的对称剪影 -->
-  <path d="M120 62
-    C142 60 158 68 166 84
-    C171 96 172 110 168 124
-    L178 136 L166 140 L174 152 L158 152
-    C154 166 144 180 132 188
-    C128 191 124 194 120 194
-    C116 194 112 191 108 188
-    C96 180 86 166 82 152
-    L66 152 L74 140 L62 136
-    L72 124
-    C68 110 69 96 74 84
-    C82 68 98 60 120 62 Z"
-    fill="url(#wmFur)" stroke="#0a1122" stroke-width="1.6"/>
-  <!-- 颊毛：左右两撮细毛尖 -->
-  <g fill="none" stroke="url(#wmFurEdge)" stroke-width="1.4" opacity=".5" stroke-linecap="round">
-    <path d="M78 138 C74 146 72 152 71 158"/>
-    <path d="M84 146 C81 152 79 158 78 163"/>
-    <path d="M162 138 C166 146 168 152 169 158"/>
-    <path d="M156 146 C159 152 161 158 162 163"/>
-  </g>
-
-  <!-- 额顶反光弧 + 额发 -->
-  <path d="M96 74 C103 68 111 66 120 66 C129 66 137 68 144 74" fill="none" stroke="#6a7488" stroke-width="1.8" opacity=".6" stroke-linecap="round"/>
-  <g fill="none" stroke="#20294d" stroke-width="1.6" opacity=".8" stroke-linecap="round">
-    <path d="M108 78 C110 88 110 96 108 104"/>
-    <path d="M120 80 C120 90 120 98 120 106"/>
-    <path d="M132 78 C130 88 130 96 132 104"/>
-  </g>
-
-  <!-- 眉骨：内压的锐角，出凶相 -->
-  <g fill="#101830">
-    <path d="M80 112 C88 104 102 102 112 108 C104 108 90 110 82 116 Z"/>
-    <path d="M160 112 C152 104 138 102 128 108 C136 108 150 110 158 116 Z"/>
-  </g>
-
-  <!-- 眼窝光晕 + 琥珀狼眼（左眼 + 镜像右眼） -->
-  <g id="wmEyeL">
-    <ellipse cx="98" cy="122" rx="12" ry="9" fill="#d23a20" opacity=".42" filter="url(#wmSoft2)"/>
-    <path d="M83 122 C90 111.5 106 109.5 113 117 C107 127 90 128.5 83 122 Z" fill="url(#wmEyeG)"/>
-    <path d="M83 122 C90 111.5 106 109.5 113 117 C107 114.8 93 116.8 83 122 Z" fill="#3a2a10" opacity=".38"/>
-    <ellipse cx="99.5" cy="120.5" rx="2.6" ry="3.9" transform="rotate(-10 99.5 120.5)" fill="#0d0a06"/>
-    <circle cx="98" cy="118.2" r="1.2" fill="#fffdf2"/>
-  </g>
-  <use href="#wmEyeL" transform="translate(240 0) scale(-1 1)"/>
-
-  <!-- 吻部：桥面渐变 + 鼻 + 嘴线 -->
-  <path d="M120 126 C128 134 131 148 129 160 C127 171 124 177 120 181 C116 177 113 171 111 160 C109 148 112 134 120 126 Z" fill="url(#wmMuzzle)" opacity=".92"/>
-  <path d="M108 178 C112 184 116 187 120 187 C124 187 128 184 132 178 L128 174 C125 178 115 178 112 174 Z" fill="#141c38"/>
-  <path d="M106 167 C109 176 114 181 120 181 C126 181 131 176 134 167 C131 163 109 163 106 167 Z" fill="#0d1326"/>
-  <path d="M106 167 C109 175 114 180 120 180 C126 180 131 175 134 167" fill="none" stroke="#3d4a7c" stroke-width="1.1" opacity=".8"/>
-  <ellipse cx="113" cy="170" rx="2.4" ry="1.3" transform="rotate(-16 113 170)" fill="#4a5468" opacity=".8"/>
-  <path d="M120 181 C120 184 118.4 185.6 116 186.2" fill="none" stroke="#0d1326" stroke-width="1.3" stroke-linecap="round"/>
-  <path d="M120 181 C120 184 121.6 185.6 124 186.2" fill="none" stroke="#0d1326" stroke-width="1.3" stroke-linecap="round"/>
-  </g>
-
-  <!-- 下颌须毛 -->
-  <g fill="none" stroke="#1d2333" stroke-width="1.3" opacity=".8" stroke-linecap="round">
-    <path d="M112 190 C110 193 108 195 105 196.5"/>
-    <path d="M128 190 C130 193 132 195 135 196.5"/>
-  </g>
-
-  <circle cx="120" cy="120" r="101" fill="url(#wmVignette)"/>
-  <!-- 外环：金属主环 + 内刻线 + 铆钉 + 细刻圈（最后画，压住头部边缘） -->
-  <circle cx="120" cy="120" r="107" fill="none" stroke="#0a1122" stroke-width="7" opacity=".9"/>
-  <circle cx="120" cy="120" r="110" fill="none" stroke="url(#wmGold)" stroke-width="6"/>
-  <circle cx="120" cy="120" r="104.5" fill="none" stroke="url(#wmGoldRing2)" stroke-width="1.8" opacity=".95"/>
-  <circle cx="120" cy="120" r="100" fill="none" stroke="#e8cf8e" stroke-width=".8" opacity=".35"/>
-  <circle cx="120" cy="120" r="113.5" fill="none" stroke="url(#wmGold)" stroke-width="1.4" opacity=".8"/>
-  <g fill="url(#wmGold)">
-    <rect x="117.4" y="1.6" width="5.2" height="7" rx="2.4"/>
-    <rect x="117.4" y="231.4" width="5.2" height="7" rx="2.4"/>
-    <rect x="1.6" y="117.4" width="7" height="5.2" rx="2.4"/>
-    <rect x="231.4" y="117.4" width="7" height="5.2" rx="2.4"/>
-  </g>
-  <g fill="#8a7440" opacity=".8">
-    <circle cx="120" cy="14.5" r="1.6"/>
-    <circle cx="120" cy="225.5" r="1.6"/>
-    <circle cx="14.5" cy="120" r="1.6"/>
-    <circle cx="225.5" cy="120" r="1.6"/>
-  </g>
-</svg>
+</g></svg>
