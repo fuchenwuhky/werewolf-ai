@@ -117,7 +117,7 @@ test('R06b 目标已不存在：视为已清理，记录被消化（幂等）', 
     await api._retryImportRecoveries();
     // 重复重试一次（R05 幂等）：无副作用、无异常
     await api._retryImportRecoveries();
-    assert.strictEqual(fs.existsSync(path.join(savesDir, '.import-recovery-gone.json')), true ? false : true, '占位');
+    assert.strictEqual(fs.existsSync(path.join(savesDir, '.import-recovery-gone.json')), false, '已消化的记录必须从磁盘删除');
     assert.strictEqual(fs.readdirSync(savesDir).filter((f) => f.startsWith('.import-recovery-')).length, 0, '目标全不存在 → 记录应被消化');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
