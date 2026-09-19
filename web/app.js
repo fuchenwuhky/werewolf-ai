@@ -814,7 +814,7 @@ function openProfileManager() {
     const ops = el('div', 'pm-ops');
     const op = (label, fn, cls = 'btn ghost small') => {
       const b = el('button', cls, label);
-      b.addEventListener('click', () => fn(p));
+      b.addEventListener('click', () => fn(p, b));
       ops.appendChild(b);
       return b;
     };
@@ -822,6 +822,17 @@ function openProfileManager() {
       op('选用', async (pp) => { onSelectProfile(pp.id); $('#modal-root').innerHTML = ''; renderProfileStrip(); }, 'btn small');
     }
     op('编辑', (pp) => openProfileEdit(pp));
+    // 战绩（PROF-03，§3.7）：懒加载，按桶分列（真实胜率分母只含真实+自然结束+可判定）
+    if (!p.archivedAt) {
+      op('战绩', async (pp, btn) => {
+        try {
+          const s = await api('GET', `/api/profiles/${pp.id}/stats`);
+          btn.textContent = `战绩 ${s.wins}胜${s.losses}负${s.draws ? s.draws + '平' : ''}`;
+          btn.title = `正式 ${s.real} 局（胜率分母）· 试玩 ${s.byBucket.mock} · 观战 ${s.byBucket.spectate} · 终止 ${s.byBucket.terminated} · 存档合计 ${s.total}`;
+          btn.disabled = true;
+        } catch (e) { btn.textContent = '战绩获取失败'; btn.title = e.message; }
+      });
+    }
     if (!p.archivedAt) {
       op('归档', async (pp) => {
         if (usableCount <= 1) { alert('最后一个可用档案不能归档（可先新建一个）'); return; }
