@@ -80,30 +80,35 @@ class AnnotationStore {
    * 保存（整体替换 seats 内的指定座位，其余保留）。
    * @param opts {profileId, gameId, expectedRevision, seats: {seat: rawAnnotation}, actor: 'profile'|'god' 等}
    * expectedRevision 不匹配 → AnnotationConflict(409)
+   * 读、版本校验、合并、写盘**全部在每文件串行队列内**完成（审核 P2-6）：
+   * 旧实现读-校验在队列外，两次 expectedRevision:0 的并发写都能通过校验、后写整份覆盖先写。
    */
   async put({ profileId, gameId, expectedRevision, seats }) {
-    const doc = this._read(profileId, gameId);
-    if (Number.isInteger(expectedRevision) && expectedRevision !== doc.revision) {
-      throw new AnnotationConflict('另一窗口更新了笔记，请刷新后合并');
-    }
-    for (const seat of Object.keys(seats || {})) {
-      if (!/^[0-9]{1,3}$/.test(seat)) continue;
-      const norm = normalizeSeatAnnotation(seats[seat]);
-      if (norm) doc.seats[seat] = norm;
-    }
-    doc.revision += 1;
-    const file = this.file(profileId, gameId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const file = this.file(profileId, gameId); // 白名单/路径穿越校验先行，非法输入不进队列
     const prev = this._queues.get(file) || Promise.resolve();
     const job = prev.catch(() => {}).then(async () => {
+      const doc = this._read(profileId, gameId);
+      if (Number.isInteger(expectedRevision) && expectedRevision !== doc.revision) {
+        throw new AnnotationConflict('另一窗口更新了笔记，请刷新后合并');
+      }
+      for (const seat of Object.keys(seats || {})) {
+        if (!/^[0-9]{1,3}$/.test(seat)) continue;
+        const norm = normalizeSeatAnnotation(seats[seat]);
+        if (norm) doc.seats[seat] = norm;
+      }
+      doc.revision += 1;
+      fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
       await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
       await fs.promises.rename(tmp, file);
+      return doc;
     });
     this._queues.set(file, job);
-    await job;
-    if (this._queues.get(file) === job) this._queues.delete(file);
-    return doc;
+    try {
+      return await job;
+    } finally {
+      if (this._queues.get(file) === job) this._queues.delete(file);
+    }
   }
 
   /** 同步保存（API 处理器用）：整体带 revision 校验；覆盖式更新指定座位 */

@@ -226,8 +226,11 @@ class Api {
     return e;
   }
 
-  /** 存档元数据：**不含 events**——事件流只在 anchor 里存一份（旧实现两边都存，46.5% 的体积是纯重复） */
+  /** 存档元数据：**不含 events**——事件流只在 anchor 里存一份（旧实现两边都存，46.5% 的体积是纯重复）。
+   *  例外：**终局存档保留完整 events**（审核 P1-3）——终局只写一次盘，去重无意义；锚点只拍在昼/夜边界，
+   *  最后一夜/天的结算事件只存在于 game.events，剥掉会导致导出/复盘永久丢尾。 */
   _saveMeta(game) {
+    if (game.finished) return game.toJSON();
     const { events, ...meta } = game.toJSON();
     return meta;
   }
@@ -718,7 +721,8 @@ class Api {
       if (pathname === '/api/profiles/import/preview' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         try {
-          const pkg = transfer.validateImportPackage((await this.readBody(req)).package);
+          const body = await this.readBody(req, transfer.MAX_BYTES); // 预览与导入同上限：先预览后导入不该在体积上双重标准
+          const pkg = transfer.validateImportPackage(body.package);
           return this.json(res, 200, { ok: true, preview: transfer.previewImport(pkg) });
         } catch (e) {
           return this.json(res, e.code || 400, { error: e.message });
@@ -726,35 +730,13 @@ class Api {
       }
       if (pathname === '/api/profiles/import' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
-        const body = await this.readBody(req);
-        try {
-          const pkg = transfer.validateImportPackage(body.package);
-          const mapped = transfer.buildGameIdMap(pkg);
-          // 新档案承接导入（继承昵称/头像/偏好），gameId 全部重映射避免冲突
-          const prof = await this.profiles.create({
-            nickname: pkg.profile.nickname + '（导入）',
-            avatarId: pkg.profile.avatarId || 'scholar',
-            bio: pkg.profile.bio || '',
-          });
-          for (const g of pkg.games) {
-            const newId = mapped[g.id];
-            const doc = {
-              schemaVersion: 2, tokens: {}, mock: !!g.mock,
-              ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
-              ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null,
-              profileSchemaVersion: 1,
-              game: { ...g, id: newId, finished: true },
-              anchor: null, review: null, savedAt: Date.now(),
-            };
-            const tmpFile = path.join(this.saveDir, `.tmp-${newId}-${Date.now()}`);
-            await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
-            await fs.promises.rename(tmpFile, path.join(this.saveDir, `${newId}.json`));
-            void newId;
-          }
-          return this.json(res, 200, { ok: true, imported: pkg.games.length, profileId: prof.id, gameMap: mapped });
-        } catch (e) {
-          return this.json(res, e.code || 400, { error: e.message });
+        const body = await this.readBody(req, transfer.MAX_BYTES); // 20MiB：与导出包上限一致（§3.5）
+        // 唯一实现：与内部 importApplyRes 共用，避免双份逻辑漂移（笔记/偏好只随这里落地）
+        const out = await this.importApplyRes(body.package);
+        if (out.status === 200) {
+          return this.json(res, 200, { ok: true, imported: (out.body.gameMap && Object.keys(out.body.gameMap).length) || 0, profileId: out.body.profileId, gameMap: out.body.gameMap, importedNotes: out.body.importedNotes || 0 });
         }
+        return this.json(res, out.status, out.body);
       }
       const profileMatch = pathname.match(/^\/api\/profiles\/([0-9a-fA-F-]{36})(\/([a-z]+))?$/);
       if (profileMatch) {
@@ -1599,7 +1581,12 @@ class Api {
   importApplyRes(pkg) {
     return Promise.resolve().then(async () => {
       const checked = transfer.validateImportPackage(pkg);
-      const prof = await this.profiles.create({ nickname: checked.profile.nickname + '（导入）', avatarId: checked.profile.avatarId || 'scholar', bio: checked.profile.bio || '' });
+      const prof = await this.profiles.create({
+        nickname: checked.profile.nickname + '（导入）',
+        avatarId: checked.profile.avatarId || 'scholar',
+        bio: checked.profile.bio || '',
+        preferences: checked.profile.preferences, // 偏好随包继承（PROF-04）
+      });
       const gameMap = transfer.buildGameIdMap(checked);
       const notes = checked.notes || {};
       let importedNotes = 0;
@@ -1659,12 +1646,17 @@ class Api {
         rows.push({ id: gm.id, day: gm.day || 0, bucket, faction, winner: gm.winner || null, finished: !!gm.finished });
       }
       const real = rows.filter((r) => r.bucket === 'real' && r.finished);
-      const wins = real.filter((r) => (r.faction === 'wolf') === (r.winner === 'wolf')).length;
+      // 胜/负/平互斥判定（审核 P2-4，§3.7）：只有"阵营可判定 且 winner 非平局"的局才进胜负；
+      // 平局（draw/none）与阵营不可判定的局单列为平，绝不允许把平局算成胜（旧公式把
+      // winner!=='wolf' 的平局判给好人阵营 → 出现"胜1 负-1"）。胜率分母 = wins+losses。
+      const judged = real.filter((r) => r.faction && (r.winner === 'wolf' || r.winner === 'good'));
+      const wins = judged.filter((r) => (r.faction === 'wolf') === (r.winner === 'wolf')).length;
+      const losses = judged.length - wins;
+      const draws = real.length - judged.length;
       return this.json(res, 200, {
         profileId: pid, nickname: prof.nickname,
         total: rows.length, real: real.length,
-        wins, losses: real.length - wins - real.filter((r) => r.winner === 'draw' || r.winner === 'none').length,
-        draws: real.filter((r) => r.winner === 'draw' || r.winner === 'none').length,
+        wins, losses, draws,
         byBucket: {
           real: real.length,
           mock: rows.filter((r) => r.bucket === 'mock').length,

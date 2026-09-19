@@ -140,11 +140,11 @@ class ProfileStore {
   }
 
   /** 创建档案。返回完整 profile */
-  async create({ nickname, avatarId, bio = '' } = {}) {
-    return this._serialize(() => this._createInner({ nickname, avatarId, bio }));
+  async create({ nickname, avatarId, bio = '', preferences } = {}) {
+    return this._serialize(() => this._createInner({ nickname, avatarId, bio, preferences }));
   }
 
-  async _createInner({ nickname, avatarId, bio = '' } = {}) {
+  async _createInner({ nickname, avatarId, bio = '', preferences } = {}) {
     const prof = {
       schemaVersion: SCHEMA_VERSION,
       id: newId(),
@@ -157,6 +157,15 @@ class ProfileStore {
       archivedAt: null,
       revision: 1,
     };
+    // 偏好继承（PROF-04 导入用）：与 _updateInner 同一套白名单，非法字段一律回落默认
+    if (preferences && typeof preferences === 'object' && !Array.isArray(preferences)) {
+      const p = preferences;
+      prof.preferences = {
+        fontScale: Number(p.fontScale) > 0 ? Math.min(Number(p.fontScale), 3) : prof.preferences.fontScale,
+        layout: ['reading', 'compact'].includes(p.layout) ? p.layout : prof.preferences.layout,
+        reducedMotion: typeof p.reducedMotion === 'boolean' ? p.reducedMotion : prof.preferences.reducedMotion,
+      };
+    }
     const idx = this._readIndex();
     idx.profiles.push({ id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, archivedAt: null, updatedAt: prof.updatedAt });
     fs.mkdirSync(this.profileDir(prof.id), { recursive: true });

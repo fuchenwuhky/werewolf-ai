@@ -18,7 +18,9 @@ const EXPORT_VERSION = 1;
 
 function newId() { return crypto.randomUUID(); }
 
-/** 从存档目录收集可导出的已结束对局（不含密钥/令牌/锚点/journal） */
+/** 从存档目录收集可导出的已结束对局（不含密钥/令牌/锚点/journal）。
+ *  事件流来源（审核 P1-3）：终局存档 game.events 全量保留；旧存档（game 元数据被剥过 events）
+ *  回落到 anchor.events（锚点只拍在昼/夜边界，可能缺最后一段——已是存档里能拿到的最全一份）。 */
 function collectExportableGames(savesDir, ownerProfileId) {
   const out = [];
   if (!fs.existsSync(savesDir)) return out;
@@ -27,6 +29,9 @@ function collectExportableGames(savesDir, ownerProfileId) {
     let doc;
     try { doc = JSON.parse(fs.readFileSync(path.join(savesDir, f), 'utf8')); } catch (_) { continue; }
     if (!doc || doc.ownerProfileId !== ownerProfileId || !doc.game || !doc.game.finished) continue;
+    const events = (Array.isArray(doc.game.events) && doc.game.events.length)
+      ? doc.game.events
+      : ((doc.anchor && Array.isArray(doc.anchor.events)) ? doc.anchor.events : []);
     out.push({
       id: doc.game.id,
       finished: !!doc.game.finished,
@@ -36,7 +41,7 @@ function collectExportableGames(savesDir, ownerProfileId) {
       mock: !!doc.mock,
       savedAt: doc.savedAt || null,
       players: doc.game.players || [],
-      events: (doc.game.events || []).slice(0, 5000),
+      events,
       board: doc.game.board || null,
       rules: doc.game.rules || null,
     });

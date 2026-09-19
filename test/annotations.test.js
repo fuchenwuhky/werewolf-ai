@@ -95,3 +95,23 @@ test('AI 不可见（静态审计）：标注实现不得被引擎/AI 模块引�
     assert.ok(!src.includes('AnnotationStore'), `${f} 不得引用标注存储`);
   }
 });
+
+test('并发：异步 put 的读-校验-写在锁内完成，两次 expectedRevision:0 并发只成功一次（审核 P2-6）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'anno-race-'));
+  try {
+    const store = makeStore(dir);
+    const p1 = store.put({ profileId: PID, gameId: GID, expectedRevision: 0, seats: { 1: { leaning: 'lean_wolf', note: '第一份' } } });
+    const p2 = store.put({ profileId: PID, gameId: GID, expectedRevision: 0, seats: { 2: { leaning: 'lean_good', note: '第二份' } } });
+    const results = await Promise.allSettled([p1, p2]);
+    const ok = results.filter((r) => r.status === 'fulfilled');
+    const conflict = results.filter((r) => r.status === 'rejected' && /另一窗口/.test(String(r.reason && r.reason.message)));
+    assert.strictEqual(ok.length, 1, `并发同版本写入必须恰好成功一次（实际 ${ok.length}）`);
+    assert.strictEqual(conflict.length, 1, `落选者必须收到 409 语义冲突（实际 ${results.map((r) => r.status + ':' + (r.reason && r.reason.message)).join(' | ')}）`);
+    const doc = store.get(PID, GID);
+    assert.strictEqual(doc.revision, 1, 'revision 只应前进 1');
+    // 赢家写入的座位在，输家的座位绝不能出现（旧实现后者整份覆盖前者 → 第一份丢失）
+    const winner = ok[0].value.seats;
+    assert.ok(Object.keys(doc.seats).length >= 1, '至少保留赢家写入的座位');
+    assert.deepStrictEqual(Object.keys(doc.seats), Object.keys(winner), '最终座位集必须与赢家写入一致');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

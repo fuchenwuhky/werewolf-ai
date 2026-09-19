@@ -1035,31 +1035,39 @@ const A = () => window.WWAnnotationsModel;
 async function initAnnotations() {
   const gid = state.game.gameId;
   const token = state.game.playerToken || state.game.godToken;
-  // --- 迁移（NOTE-05）：旧格式只在这里读一次；服务端已有任何标注就不迁移，避免覆盖 ---
+  // --- 迁移（NOTE-05，审核 P1-2）：**逐座位合并**，冲突保留服务端原数据；确认落盘后才清理本地 key ---
+  // 旧实现"服务端有任何标注就整体跳过迁移但仍删本地 key" → 本地多出来的座位会直接丢数据。
   let legacy = null;
   try { legacy = JSON.parse(localStorage.getItem(`ww_tags_${gid}`)) || null; } catch (_) {}
   if (legacy && Object.keys(legacy).length) {
+    let migrated = false;
     try {
       const cur = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
-      const hasAny = cur.annotations && Object.keys(cur.annotations.seats || {}).length > 0;
-      if (!hasAny) {
-        const seats = {};
-        for (const [seat, rid] of Object.entries(legacy)) {
-          const r = state.meta.roles && state.meta.roles[rid];
-          seats[seat] = A().normalizeSeatAnnotation({
-            candidateRoleIds: [rid],
-            leaning: r && r.team === 'wolf' ? 'lean_wolf' : (r && r.team ? 'lean_good' : 'neutral'),
-            confidence: 'low',
-            note: '（旧版身份标记自动迁移）',
-          });
-        }
-        const put = await api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: cur.revision, seats });
-        state.anno.rev = put.revision;
-        state.anno.seats = put.annotations.seats;
+      const serverSeats = (cur.annotations && cur.annotations.seats) || {};
+      const fill = {}; // 只补服务端没有的座位；服务端已有的座位一律不动（保留原数据）
+      for (const [seat, rid] of Object.entries(legacy)) {
+        if (serverSeats[seat]) continue;
+        const r = state.meta.roles && state.meta.roles[rid];
+        fill[seat] = A().normalizeSeatAnnotation({
+          candidateRoleIds: [rid],
+          leaning: r && r.team === 'wolf' ? 'lean_wolf' : (r && r.team ? 'lean_good' : 'neutral'),
+          confidence: 'low',
+          note: '（旧版身份标记自动迁移）',
+        });
       }
-      localStorage.removeItem(`ww_tags_${gid}`); // 迁移完成即清：新存储是唯一真源
+      if (Object.keys(fill).length) {
+        const put = await api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: cur.revision, seats: fill });
+        state.anno.rev = put.revision;
+        state.anno.seats = put.annotations.seats || {};
+      } else {
+        state.anno.rev = cur.revision; // 所有旧座位服务端都有（或旧数据为空壳）：无需写入
+        state.anno.seats = serverSeats;
+      }
+      localStorage.removeItem(`ww_tags_${gid}`); // 服务端已确认接受（或无需写）才清理
       state.tags = {};
-    } catch (_) { /* 旧局没有归属档案（404）或离线：保留本地旧格式继续用 */ }
+      migrated = true;
+    } catch (_) { /* 迁移失败（无归属档案/离线/409）：保留本地旧格式，下局再试 */ }
+    if (!migrated) { try { state.tags = legacy; } catch (_) {} }
   }
   // --- 常规拉取 ---
   try {

@@ -327,3 +327,132 @@ test('档案管理链：归档→列表可见→恢复→再归档→删除→st
     assert.ok(gone2.status === 404 || gone2.status === 500, `已删除档案的 stats 不应 200（实际 ${gone2.status}）`);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('真实 HTTP 导入→重新导出往返：笔记与偏好必须随包落地（审核 P1-1）', async () => {
+  const { api, dataDir } = makeIsolatedApi('roundtrip');
+  try {
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-1', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 1 } },
+      profile: { nickname: '远客', avatarId: 'hunter', bio: '带包来投', preferences: { fontScale: 1.25, layout: 'compact', reducedMotion: true } },
+      games: [{
+        id: 'g-old-1', finished: true, day: 2, winner: 'good', winReason: '狼人全部出局', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: '远客', isHuman: true, role: 'witch' }],
+        events: [{ seq: 1, type: 'night' }, { seq: 2, type: 'day' }],
+        board: { wolf: 1, witch: 1, villager: 2 }, rules: {},
+      }],
+      notes: { 'g-old-1': { schemaVersion: 2, profileId: 'orig', gameId: 'g-old-1', revision: 3, seats: { 2: { leaning: 'lean_wolf', candidateRoleIds: ['wolf'], claimedRoleId: null, confidence: 'high', note: '发言像倒钩', evidenceSeq: null, day: 1, phase: 'speech', updatedAt: null } } } },
+    };
+    const imp = await call(api, 'POST', '/api/profiles/import', { package: pkg });
+    assert.strictEqual(imp.status, 200, `导入应成功：${JSON.stringify(imp.body)}`);
+    assert.ok(imp.body.importedNotes === 1, `导入应落地 1 份笔记（实际 ${JSON.stringify(imp.body)}）`);
+    const newGid = imp.body.gameMap['g-old-1'];
+    assert.ok(newGid, '旧 gameId 应有重映射');
+
+    // 重新导出：必须经过真实 HTTP 路由
+    const exp = await call(api, 'GET', `/api/profiles/${imp.body.profileId}/export`);
+    assert.strictEqual(exp.status, 200, `导出应成功：${JSON.stringify(exp.body)}`);
+    const out = exp.body;
+    // ① 笔记随局落地且以新 gameId 记账
+    assert.ok(out.notes && out.notes[newGid], `重新导出必须含导入的笔记（notes keys: ${Object.keys(out.notes || {})}）`);
+    assert.strictEqual(out.notes[newGid].seats[2].note, '发言像倒钩');
+    // ② 偏好随包继承，不得回落默认
+    assert.deepStrictEqual(out.profile.preferences, { fontScale: 1.25, layout: 'compact', reducedMotion: true },
+      `偏好必须继承（实际 ${JSON.stringify(out.profile.preferences)}）`);
+    // ③ 事件流不丢（本次包内 game.events 全量在）
+    assert.strictEqual(out.games[0].events.length, 2, '导出对局必须带事件流');
+    assert.ok(!exp.raw.includes('SECRET'), '脱敏复核：原文不含令牌类字段');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('导出事件流：旧式存档（events 在 anchor）不再导出 0 条；game.events 优先（审核 P1-3）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('anchor-ev');
+  try {
+    const prof = await call(api, 'POST', '/api/profiles', { nickname: '锚点客' });
+    const pid = prof.body.profile.id;
+    // 旧式存档：game 元数据被 _saveMeta 剥掉 events，事件流只在 anchor 里
+    const old = mkSaveDoc('g-anchor-ev', pid, true);
+    old.game.events = []; // 旧式剥除后的形态
+    old.anchor = { nextPhase: 'speech', events: Array.from({ length: 12 }, (_, i) => ({ seq: i + 1, type: 'speech' })) };
+    fs.writeFileSync(path.join(savesDir, 'g-anchor-ev.json'), JSON.stringify(old));
+    // 新式终局存档：events 直接在 game（终局保留完整流）
+    const neo = mkSaveDoc('g-neo-ev', pid, true);
+    neo.game.events = Array.from({ length: 30 }, (_, i) => ({ seq: i + 1, type: 'mixed' }));
+    neo.anchor = { events: [{ seq: 1, type: 'stale' }] }; // 锚点较旧，不应被采用
+    fs.writeFileSync(path.join(savesDir, 'g-neo-ev.json'), JSON.stringify(neo));
+
+    const exp = await call(api, 'GET', `/api/profiles/${pid}/export`);
+    assert.strictEqual(exp.status, 200);
+    const byId = Object.fromEntries(exp.body.games.map((g) => [g.id, g]));
+    assert.strictEqual(byId['g-anchor-ev'].events.length, 12, '旧式存档必须从 anchor.events 取到全部事件');
+    assert.strictEqual(byId['g-neo-ev'].events.length, 30, '新式终局存档用 game.events（不是过期锚点）');
+    assert.strictEqual(byId['g-neo-ev'].events[29].seq, 30, '不得静默截断');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('平局战绩：胜/负/平互斥，平局不算胜也不产生负数（审核 P2-4）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('draw');
+  try {
+    const prof = await call(api, 'POST', '/api/profiles', { nickname: '和平客' });
+    const pid = prof.body.profile.id;
+    const mk = (id, winner) => {
+      const doc = mkSaveDoc(id, pid, true);
+      doc.mock = false;
+      doc.game.winner = winner;
+      doc.game.winReason = winner === 'draw' ? '平安夜耗尽' : '狼人全部出局';
+      doc.players = null;
+      fs.writeFileSync(path.join(savesDir, `${id}.json`), JSON.stringify(doc));
+    };
+    mk('g-draw', 'draw');   // 平局：旧公式会把它判给好人 → "胜1 负-1"
+    mk('g-win', 'good');    // 好人胜（人类 seer → good 阵营）
+    mk('g-loss', 'wolf');   // 狼胜
+    const st = await call(api, 'GET', `/api/profiles/${pid}/stats`);
+    assert.strictEqual(st.status, 200, JSON.stringify(st.body));
+    assert.strictEqual(st.body.wins, 1, '恰 1 胜');
+    assert.strictEqual(st.body.losses, 1, '恰 1 负');
+    assert.strictEqual(st.body.draws, 1, '恰 1 平（含不可判定不误入胜负）');
+    assert.ok(st.body.wins + st.body.losses <= st.body.real, '胜负之和不超过正式局数');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('_saveMeta：终局保留完整事件流，进行中剥离（审核 P1-3 存档侧）', () => {
+  const { api } = makeApi('savemeta');
+  const fake = (finished) => ({
+    finished,
+    toJSON: () => ({ id: 'g1', day: 3, events: [{ seq: 1, type: 'x' }], players: [] }),
+  });
+  const done = api._saveMeta(fake(true));
+  assert.ok(Array.isArray(done.events) && done.events.length === 1, '终局存档必须保留 events');
+  const live = api._saveMeta(fake(false));
+  assert.strictEqual(live.events, undefined, '进行中存档 events 只进 anchor，不重复存储');
+});
+
+test('导入包缺 notes 字段：importedNotes 为 0，不报错（notes 分支补全）', async () => {
+  const { api, dataDir } = makeIsolatedApi('nonotes');
+  try {
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-2', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 0 } },
+      profile: { nickname: '裸包客', avatarId: 'scholar', bio: '' },
+      games: [{
+        id: 'g-old-2', finished: true, day: 1, winner: 'wolf', winReason: '狼人屠边', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: '裸包客', isHuman: true, role: 'villager' }],
+        events: [], board: { wolf: 1, villager: 2 }, rules: {},
+      }],
+    };
+    const imp = await call(api, 'POST', '/api/profiles/import', { package: pkg });
+    assert.strictEqual(imp.status, 200, JSON.stringify(imp.body));
+    assert.strictEqual(imp.body.importedNotes, 0, '无笔记包 importedNotes 必须为 0');
+    assert.strictEqual(Object.keys(imp.body.gameMap).length, 1);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('真实 HTTP 导入坏包：走统一实现后仍返回 400 语义（importApplyRes 错误路径）', async () => {
+  const { api, dataDir } = makeIsolatedApi('badimp');
+  try {
+    const imp = await call(api, 'POST', '/api/profiles/import', { package: { profile: { nickname: '坏包' }, games: 'not-array' } });
+    assert.strictEqual(imp.status, 400, `缺 manifest/非法 games 必须 400（实际 ${imp.status}：${JSON.stringify(imp.body)}）`);
+    // 确认没有半截落地：不应产生任何档案
+    const list = await call(api, 'GET', '/api/profiles');
+    const stray = list.body.profiles.filter((p) => p.nickname.includes('坏包'));
+    assert.strictEqual(stray.length, 0, '校验失败不得创建档案');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
