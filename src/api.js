@@ -1578,19 +1578,34 @@ class Api {
     } catch (e) { return Promise.resolve({ status: e.code || 400, body: { error: e.message } }); }
   }
 
-  /** 重试清理历史导入残留（复审 P2-3）：读取 saveDir 下的 .import-recovery-*.json，
-   *  再次删除清单文件并回收档案；全部成功才删除记录。逐条尽力而为，失败保留记录下次再试。 */
+  /** 重试清理历史导入残留（复审 P2-3；FIN-02 加固）：读取 saveDir 下的 .import-recovery-*.json，
+   *  再次删除清单文件并回收档案；全部成功才删除记录。逐条尽力而为，失败保留记录下次再试。
+   *  FIN-02（计划书 §6.2-6/7）：恢复幂等（ENOENT=已清理，读权限错误≠不存在）；
+   *  清理目标限定在 saveDir 内；损坏记录保留并上报，不得假装已处理。
+   *  @returns {{ cleaned: number, kept: Array<{file:string,reason:string}> }} */
   async _retryImportRecoveries() {
     let files = [];
-    try { files = fs.readdirSync(this.saveDir).filter((f) => f.startsWith('.import-recovery-') && f.endsWith('.json')); } catch (_) { return; }
+    try { files = fs.readdirSync(this.saveDir).filter((f) => f.startsWith('.import-recovery-') && f.endsWith('.json')); } catch (_) { return { cleaned: 0, kept: [] }; }
+    const kept = [];
+    let cleaned = 0;
+    const saveRoot = path.join(this.saveDir) + path.sep;
     for (const name of files) {
       const full = path.join(this.saveDir, name);
       let rec = null;
-      try { rec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { continue; }
+      try { rec = JSON.parse(fs.readFileSync(full, 'utf8')); } catch (_) { kept.push({ file: name, reason: 'corrupt' }); continue; }
       let dirty = false;
-      for (const f of rec.files || []) {
-        try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { dirty = true; }
-        if (fs.existsSync(f)) dirty = true;
+      for (const rel of rec.files || []) {
+        let target = null;
+        try {
+          target = path.isAbsolute(rel) ? path.normalize(rel) : path.join(this.saveDir, rel);
+        } catch (_) { dirty = true; continue; }
+        // 越界路径（历史绝对路径不在数据根内 / 相对名逃逸）：拒绝删除，视为脏
+        if (target !== this.saveDir && !target.startsWith(saveRoot)) { dirty = true; continue; }
+        try {
+          fs.unlinkSync(target);
+        } catch (e) {
+          if (e?.code !== 'ENOENT') dirty = true; // ENOENT = 早已清理，不是失败
+        }
       }
       if (rec.profileId) {
         try {
@@ -1602,15 +1617,20 @@ class Api {
           }
         } catch (_) { dirty = true; }
       }
-      if (!dirty) { try { fs.unlinkSync(full); } catch (_) {} }
+      if (!dirty) {
+        try { fs.unlinkSync(full); cleaned++; } catch (_) { kept.push({ file: name, reason: 'record-unlink' }); }
+      } else {
+        kept.push({ file: name, reason: 'residue' });
+      }
     }
+    return { cleaned, kept };
   }
 
   importApplyRes(pkg) {
     return Promise.resolve().then(async () => {
       // 校验前移（审核 P2-4）：validateImportPackage 现在逐记录检查 players/events/board/rules/notes，
       // 任何一条不合法都在**写盘之前**整体拒绝。写入循环里的错误只剩真实 I/O 故障。
-      await this._retryImportRecoveries(); // 先清理上一次失败的残留（若失败未清理完会保留记录）
+      const retry = await this._retryImportRecoveries(); // 先清理上一次失败的残留（若失败未清理完会保留记录）
       const checked = transfer.validateImportPackage(pkg);
       const prof = await this.profiles.create({
         nickname: checked.profile.nickname + '（导入）',
@@ -1644,38 +1664,69 @@ class Api {
             importedNotes++;
           }
         }
-        return { status: 200, body: { ok: true, profileId: prof.id, gameMap, importedNotes } };
+        const body = { ok: true, profileId: prof.id, gameMap, importedNotes };
+        // FIN-02：损坏/未清完的历史恢复记录必须如实上报，不得假装已处理
+        if (retry.kept.length) body.pendingRecoveries = retry.kept;
+        return { status: 200, body };
       } catch (writeErr) {
-        // 事务回滚（复审 P2-3）：尽力删除已写存档与残留临时文件，然后**核实**清理结果——
-        // 只有核实干净才允许声称 rolledBack:true；仍有残留则落一条可重试的恢复记录。
+        // 事务回滚（复审 P2-3）：尽力删除已写存档与残留临时文件，然后**核实**清理结果。
+        // FIN-02 状态模型（计划书 §6.2）：rolledBack 只取决于"清理是否核实完成"，
+        // 与恢复记录是否写成功**解耦**——记录写不下时同样必须报 cleanupPending，
+        // 绝不允许"有残留却声称已回滚"。
         const targets = [...written, ...tmps];
         const residue = [];
         for (const f of targets) {
-          try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch (_) { /* 下方 existsSync 复核 */ }
-          if (fs.existsSync(f)) residue.push(path.basename(f));
+          try {
+            fs.unlinkSync(f);
+          } catch (e) {
+            if (e?.code !== 'ENOENT') residue.push(path.basename(f)); // ENOENT = 本就不存在，视为已清
+          }
         }
         let profileCleaned = true;
         try {
           await this.profiles.update(prof.id, { archive: true });
           await this.profiles.trash(prof.id);
         } catch (_) { profileCleaned = false; }
+        const cleanupComplete = residue.length === 0 && profileCleaned;
         let recoveryFile = null;
-        if (residue.length || !profileCleaned) {
+        let recoveryPersisted = false;
+        if (!cleanupComplete) {
           recoveryFile = `.import-recovery-${prof.id}-${Date.now()}.json`;
+          const recPath = path.join(this.saveDir, recoveryFile);
+          const recTmp = path.join(this.saveDir, `.tmp-${recoveryFile}`); // 不得匹配 .import-recovery-* 前缀，防止重试读到半截文件
           try {
-            await fs.promises.writeFile(path.join(this.saveDir, recoveryFile), JSON.stringify({
-              profileId: prof.id, files: targets, createdAt: Date.now(),
-              residue, profileCleaned, error: String(writeErr.message),
+            // 完整写入 + 原子落地（计划书 §6.2-5）
+            await fs.promises.writeFile(recTmp, JSON.stringify({
+              version: 2, profileId: prof.id,
+              files: targets.map((f) => path.basename(f)), // 只存相对名：恢复记录不得携带可删任意位置的无约束路径
+              residue, profileCleaned, error: String(writeErr.message), createdAt: Date.now(),
             }, null, 2));
-          } catch (_) { recoveryFile = null; /* 连恢复记录都写不下时只能如实报 rolledBack:false */ }
+            await fs.promises.rename(recTmp, recPath);
+            recoveryPersisted = true;
+          } catch (_) {
+            recoveryPersisted = false; // 记录未落盘：响应必须如实说明，不得承诺重启后自动找回
+            recoveryFile = null;
+          }
         }
         // 只有数字语义码（4xx/5xx）才作为 HTTP 状态；真实 fs 错误的 code 是 EPERM 等字符串 → 500
         const n = Number(writeErr.code);
         const status = Number.isInteger(n) && n >= 400 && n < 600 ? n : 500;
-        if (recoveryFile) {
-          return { status, body: { error: `导入失败，回滚未完成（已保留恢复记录 ${recoveryFile}，可在排除故障后重试导入自动清理）：${writeErr.message}`, rolledBack: false, cleanupPending: true, recoveryFile } };
+        if (cleanupComplete) {
+          return { status, body: { error: `导入失败，已回滚本次写入：${writeErr.message}`, rolledBack: true, cleanupComplete: true } };
         }
-        return { status, body: { error: `导入失败，已回滚本次写入：${writeErr.message}`, rolledBack: true } };
+        const body = {
+          error: recoveryPersisted
+            ? `导入失败，回滚未完成（已保留恢复记录 ${recoveryFile}，可在排除故障后重试导入自动清理）：${writeErr.message}`
+            : `导入失败，回滚未完成，且恢复记录写入失败（${writeErr.message}）；残留清单在 residue 字段，请人工核查保存目录后处置`,
+          rolledBack: false,
+          cleanupPending: true,
+          cleanupComplete: false,
+          recoveryPersisted,
+          profileId: prof.id,
+          residue,
+        };
+        if (recoveryPersisted) body.recoveryFile = recoveryFile;
+        return { status, body };
       }
     }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
   }
