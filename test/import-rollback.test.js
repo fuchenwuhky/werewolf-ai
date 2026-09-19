@@ -1,13 +1,16 @@
 // FIN-02：回滚状态与恢复记录写失败语义（计划书 §6.3 R03/R06 + 幂等复验）
 // 复用 profiles-api.test.js 的隔离基建模式；直调 importApplyRes 注入真实 fs 故障。
+// FIN-12 补全（2026-09-19）：R07 剩余变体——未来主版本 / notes 类型错误 / 超限包（20MiB 契约）。
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const events = require('node:events');
 
 const Api = require('../src/api').Api || require('../src/api');
+const transfer = require('../src/profiles/transfer');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
 function tmpDir(tag) { return fs.mkdtempSync(path.join(os.tmpdir(), `ww-fin02-${tag}-`)); }
@@ -26,6 +29,28 @@ function notePkg(id, nickname) {
       players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} }],
     notes: { [`g-${id}`]: { schemaVersion: 2, profileId: 'o', gameId: `g-${id}`, revision: 1, seats: { 1: { leaning: 'lean_wolf' } } } },
   };
+}
+
+/** 走真实 api.handle 分发（照 profiles-api.test.js 模式）；raw 用于超限包这类非 JSON 载荷 */
+async function callApi(api, method, pathname, body, raw) {
+  const u = new URL(pathname, 'http://localhost');
+  const req = new events.EventEmitter();
+  req.method = method;
+  req.headers = { host: 'localhost:3210' };
+  req.socket = { remoteAddress: '127.0.0.1' };
+  const box = { headers: {} };
+  box.res = {
+    writeHead(code, headers) { box.code = code; Object.assign(box.headers, headers || {}); },
+    end(b) { box.raw = b; },
+    setHeader(k, v) { box.headers[k.toLowerCase()] = v; },
+  };
+  process.nextTick(() => {
+    if (raw !== undefined && raw !== null) req.emit('data', raw);
+    else if (body !== undefined && body !== null) req.emit('data', Buffer.from(JSON.stringify(body)));
+    req.emit('end');
+  });
+  await api.handle(req, box.res, u.pathname, u.searchParams);
+  return { status: box.code, raw: box.raw != null ? String(box.raw) : null, body: box.raw ? JSON.parse(box.raw) : null };
 }
 
 test('R03 回滚未完成 + 恢复记录也写失败：rolledBack:false、recoveryPersisted:false、响应含残留清单与 profileId', async () => {
@@ -140,4 +165,50 @@ test('R05 幂等复验：正常重试清理后记录消化，再次重试零副�
     fs.unlinkSync = realUnlink;
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+// ---------- FIN-12 补全：R07 其余变体（写盘前拒绝，零残留） ----------
+test('R07a 未来主版本 / notes 类型错误 / 笔记 seats 非法 / 笔记条目非对象 → 写盘前整体 400（零档案零存档）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('r07a');
+  try {
+    const base = {
+      profile: { nickname: '版本客', avatarId: 'scholar', bio: '' },
+      games: [{ id: 'g-r07', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} }],
+    };
+    const cases = [
+      ['未来主版本', { ...base, manifest: { exportVersion: 99, packageId: 'p', createdAt: 'x', source: '', counts: { games: 1, notes: 0 } } }],
+      ['缺 manifest', { ...base, manifest: undefined }],
+      ['notes 不是对象', { manifest: { exportVersion: 1, packageId: 'p', createdAt: 'x', source: '', counts: { games: 0, notes: 0 } }, ...base, notes: 'not-an-object' }],
+      ['notes 条目非对象', { manifest: { exportVersion: 1, packageId: 'p', createdAt: 'x', source: '', counts: { games: 1, notes: 1 } }, ...base, notes: { 'g-r07': 42 } }],
+      ['notes.seats 是数组', { manifest: { exportVersion: 1, packageId: 'p', createdAt: 'x', source: '', counts: { games: 1, notes: 1 } }, ...base, notes: { 'g-r07': { schemaVersion: 2, seats: [] } } }],
+      ['对局未结束', { manifest: { exportVersion: 1, packageId: 'p', createdAt: 'x', source: '', counts: { games: 1, notes: 0 } }, ...base, games: [{ ...base.games[0], finished: false }] }],
+    ];
+    for (const [name, pkg] of cases) {
+      const out = await api.importApplyRes(pkg);
+      assert.strictEqual(out.status, 400, `${name} 必须在写盘前 400（实际 ${out.status}：${JSON.stringify(out.body)}）`);
+      assert.ok(out.body.error, `${name} 必须带错误说明`);
+    }
+    // 零残留：拒绝路径不得建档、不得落存档
+    const list = await callApi(api, 'GET', '/api/profiles');
+    assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('版本客')).length, 0, '校验失败不得创建档案');
+    const leftovers = fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') || f.startsWith('.tmp-'));
+    assert.strictEqual(leftovers.length, 0, `不得留下任何存档（实际 ${leftovers}）`);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('R07b 超限包（>20MiB）：读取阶段 413 拒绝，导入与预览同一上限，零落盘（两侧同一 MAX_BYTES 契约）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('r07b');
+  try {
+    assert.strictEqual(transfer.MAX_BYTES, 20 * 1024 * 1024, '导入导出契约上限必须同为 20MiB（计划书 §3.5/§11）');
+    // 读阶段就会因超限被拒，无需构造合法 JSON；'{' 填充避免碰上别的解析分支
+    const raw = Buffer.alloc(transfer.MAX_BYTES + 1024, 0x7b);
+    const imp = await callApi(api, 'POST', '/api/profiles/import', null, raw);
+    assert.strictEqual(imp.status, 413, `超限导入必须 413（实际 ${imp.status}：${String(imp.raw).slice(0, 80)}）`);
+    assert.match(imp.body.error, /过大/, '错误必须说明请求体过大');
+    const pv = await callApi(api, 'POST', '/api/profiles/import/preview', null, raw);
+    assert.strictEqual(pv.status, 413, '预览与导入必须同一上限（不得双重标准）');
+    const leftovers = fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') || f.startsWith('.tmp-') || f.startsWith('.import-recovery-'));
+    assert.strictEqual(leftovers.length, 0, '超限拒绝不得留下任何文件');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });

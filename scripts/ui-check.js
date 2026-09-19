@@ -14,7 +14,14 @@
  * 用法：
  *   npm run ui:check            # 快速：慢启动守卫、中英文、离线横幅、手机版、控制台无异常
  *   npm run ui:check -- --full  # 追加：观战 Mock 局跑到终局 + 教练点评 + 存档 mock 标志
- *   WW_CHROME=<浏览器路径> 可指定内核；找不到浏览器时本脚本**跳过并以 0 退出**（不影响 CI）。
+ *   npm run ui:check -- --strict # 严格模式（FIN-12 发布验收，见下）
+ *   WW_CHROME=<浏览器路径> 可指定内核；WW_CHROME=none 可强制"无浏览器"（用于自测两种模式）。
+ *
+ * ── 两种退出语义（FIN-12，计划书 §15.1："缺浏览器就失败／未执行，不得绿灯放行"）──
+ * · 默认宽松模式：找不到浏览器 → 打印说明并以 0 退出（不阻塞日常 CI）；运行中检查失败 → 1。
+ * · --strict 严格模式：浏览器缺失 / 启动失败 / 任何规划段落未执行（中途异常中断了后续检查）
+ *   → 以非零码退出：2 = 存在"未执行"项（哪怕没有任何检查失败）；1 = 检查实际执行且有失败。
+ *   退出前列出全部未执行的规划段落，未执行项不得按通过计数。
  *
  * 截图输出到 logs/ui-shots/（已 gitignore 的运行时目录）。
  */
@@ -26,23 +33,64 @@ const os = require('node:os');
 
 const ROOT = path.join(__dirname, '..');
 const FULL = process.argv.includes('--full');
+const STRICT = process.argv.includes('--strict');
 const SHOTS = path.join(ROOT, 'logs', 'ui-shots');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const CHROME = process.env.WW_CHROME || [
+const CHROME = process.env.WW_CHROME === 'none' ? null : (process.env.WW_CHROME || [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-].find((p) => { try { return fs.existsSync(p); } catch (_) { return false; } });
+].find((p) => { try { return fs.existsSync(p); } catch (_) { return false; } }));
 
 // ---------- 结果收集 ----------
 let fails = 0;
 const lines = [];
-const log = (...a) => { const l = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' '); lines.push(l); console.log(l); };
+const sectionsDone = []; // 实际执行到的段落（由 log 拦截 "=== X ===" 标题记录）
+const log = (...a) => {
+  const l = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x))).join(' ');
+  lines.push(l); console.log(l);
+  const m = l.match(/===\s*(.+?)\s*===/);
+  if (m) sectionsDone.push(m[1]);
+};
 const check = (label, cond, extra = '') => { if (!cond) fails++; log(`${cond ? '✓' : '✗'} ${label}${extra ? ' — ' + extra : ''}`); };
+
+/**
+ * 规划段落清单（严格模式的"未执行"判定依据）。
+ * 维护约定：在本脚本里新增/改名 `=== 段落 ===` 标题时必须同步这里——
+ * 清单里的段落没有对应标题会导致严格模式永远报"未执行"（fail-closed，需有意识地更新）。
+ */
+const PLANNED_SECTIONS = [
+  '慢启动守卫（接口人为延迟 1.5s）',
+  '设置页',
+  '角色图鉴',
+  '中英文切换',
+  '离线',
+  '离线能力',
+  '手机版',
+  ...(FULL ? ['观战 Mock 局跑到终局（--full）'] : []),
+  'P4-1 恢复卡片详情',
+  'P4-4 终止后刷新',
+  'P4-6 推送降级状态条（单例）',
+  'P4-3 空刀拦截（真实点击）',
+  'P5 手机端进入对局',
+  '浏览器控制台',
+];
+
+function unexecutedSections() {
+  return PLANNED_SECTIONS.filter((s) => !sectionsDone.includes(s));
+}
+/** 打印未执行项并返回清单（严格模式退出码判定用） */
+function reportUnexecuted(prefix) {
+  const missing = unexecutedSections();
+  if (!missing.length) return [];
+  log(`${prefix}以下规划检查未执行（未执行不得按通过计数）：`);
+  for (const s of missing) log(`  · 未执行: ${s}`);
+  return missing;
+}
 
 // ---------- 极简 CDP 客户端 ----------
 class Browser {
@@ -57,11 +105,16 @@ class Browser {
       `--remote-debugging-port=${port}`, `--user-data-dir=${b.userDataDir}`,
       '--window-size=1440,900', 'about:blank',
     ], { stdio: ['ignore', 'ignore', 'pipe'] });
+    // 启动失败（路径不存在/权限不足）必须走正常异常路径，不能让无人监听的 'error' 事件
+    // 直接炸掉进程——严格模式要在退出前列出未执行项，宽松模式也要给出可读错误。
+    let spawnError = null;
+    b.proc.on('error', (e) => { spawnError = e; });
     let version = null;
     for (let i = 0; i < 60; i++) {
+      if (spawnError) break;
       try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); break; } catch (_) { await sleep(200); }
     }
-    if (!version) throw new Error('DevTools 端口未就绪');
+    if (!version) throw new Error(spawnError ? `浏览器启动失败：${spawnError.message}` : 'DevTools 端口未就绪');
     b.browserWs = version.webSocketDebuggerUrl;
     await new Promise((resolve, reject) => {
       b.ws = new WebSocket(b.browserWs);
@@ -176,6 +229,12 @@ class Browser {
 // ---------- 主流程 ----------
 (async () => {
   if (!CHROME) {
+    if (STRICT) {
+      // 严格模式：缺浏览器不是"跳过"，是"全部未执行" → 非零退出并列出未执行项（FIN-12）
+      console.log('未找到 Chrome/Edge（严格模式：不跳过。可用 WW_CHROME=<路径> 指定内核）。');
+      reportUnexecuted('✗ 严格模式：浏览器缺失，');
+      process.exit(2);
+    }
     console.log('未找到 Chrome/Edge，跳过界面验收（可用 WW_CHROME=<路径> 指定）。');
     process.exit(0);
   }
@@ -871,6 +930,19 @@ class Browser {
     if (b) await b.close();
     server.kill();
     try { fs.rmSync(DIR, { recursive: true, force: true }); } catch (_) { /* ignore */ }
-    setTimeout(() => process.exit(fails ? 1 : 0), 60);
+    // 退出码语义（见文件头）：
+    //   0 = 全部通过；1 = 实际执行的检查有失败（浏览器已启动成功才算"实际执行"）；
+    //   2 = 严格模式下存在未执行项（浏览器缺失/启动失败/中途异常打断），即使没有检查失败。
+    let exitCode = fails ? 1 : 0;
+    if (STRICT) {
+      if (fails) {
+        // 失败退出也要如实列出被打断后没有执行的段落（启动失败时几乎所有段落都没跑）
+        reportUnexecuted('严格模式附加：');
+      } else {
+        const missing = reportUnexecuted('✗ 严格模式：');
+        if (missing.length) exitCode = 2;
+      }
+    }
+    setTimeout(() => process.exit(exitCode), 60);
   }
 })();
