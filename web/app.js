@@ -1035,8 +1035,8 @@ const A = () => window.WWAnnotationsModel;
 async function initAnnotations() {
   const gid = state.game.gameId;
   const token = state.game.playerToken || state.game.godToken;
-  // --- 迁移（NOTE-05，审核 P1-2）：**逐座位合并**，冲突保留服务端原数据；确认落盘后才清理本地 key ---
-  // 旧实现"服务端有任何标注就整体跳过迁移但仍删本地 key" → 本地多出来的座位会直接丢数据。
+  // --- 迁移（NOTE-05，复验 P1-1）：**逐座位合并**（共享 mergeLegacyTags）；确认落盘后才清理本地 key ---
+  // 同座位冲突不再跳过：旧身份并入候选（满则写备注），双方信息都保留；PUT 失败保留本地旧格式。
   let legacy = null;
   try { legacy = JSON.parse(localStorage.getItem(`ww_tags_${gid}`)) || null; } catch (_) {}
   if (legacy && Object.keys(legacy).length) {
@@ -1044,23 +1044,13 @@ async function initAnnotations() {
     try {
       const cur = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
       const serverSeats = (cur.annotations && cur.annotations.seats) || {};
-      const fill = {}; // 只补服务端没有的座位；服务端已有的座位一律不动（保留原数据）
-      for (const [seat, rid] of Object.entries(legacy)) {
-        if (serverSeats[seat]) continue;
-        const r = state.meta.roles && state.meta.roles[rid];
-        fill[seat] = A().normalizeSeatAnnotation({
-          candidateRoleIds: [rid],
-          leaning: r && r.team === 'wolf' ? 'lean_wolf' : (r && r.team ? 'lean_good' : 'neutral'),
-          confidence: 'low',
-          note: '（旧版身份标记自动迁移）',
-        });
-      }
+      const fill = A().mergeLegacyTags(serverSeats, legacy, (rid) => (state.meta.roles && state.meta.roles[rid]) || null);
       if (Object.keys(fill).length) {
         const put = await api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: cur.revision, seats: fill });
         state.anno.rev = put.revision;
         state.anno.seats = put.annotations.seats || {};
       } else {
-        state.anno.rev = cur.revision; // 所有旧座位服务端都有（或旧数据为空壳）：无需写入
+        state.anno.rev = cur.revision; // 旧数据全部已在服务端：无需写入
         state.anno.seats = serverSeats;
       }
       localStorage.removeItem(`ww_tags_${gid}`); // 服务端已确认接受（或无需写）才清理

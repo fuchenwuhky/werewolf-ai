@@ -146,3 +146,27 @@ test('导出包：manifest.counts（games/notes）与 notes 随包计数正确',
   assert.strictEqual(pv.notes, 1, '预览的 notes 计数一致');
   assert.strictEqual(pv.finishedOnly, true, '预览标记只允许已结束局');
 });
+
+test('导入校验：players/events/board/rules/notes 类型反例全部 400（审核 P2-4 校验前移）', () => {
+  const base = (over) => ({
+    manifest: { exportVersion: 1 }, profile: { nickname: '校验' },
+    games: [{ id: 'g-1', finished: true, players: [{ seat: 1 }], events: [], board: {}, rules: {}, winner: 'good', winReason: '', mock: false, savedAt: 1, ...over }],
+  });
+  const cases = [
+    ['players 非数组', base({ players: 'x' })],
+    ['players 条目非对象', base({ players: ['x'] })],
+    ['events 非数组', base({ events: {} })],
+    ['board 非对象', base({ board: ['x'] })],
+    ['rules 非对象', base({ rules: 'x' })],
+    ['winner 非字符串', base({ winner: 3 })],
+    ['notes 非对象', { manifest: { exportVersion: 1 }, profile: { nickname: 'x' }, games: [], notes: [] }],
+    ['notes.seats 非对象', { manifest: { exportVersion: 1 }, profile: { nickname: 'x' }, games: [], notes: { g: { seats: [] } } }],
+  ];
+  for (const [name, pkg] of cases) {
+    let err = null;
+    try { transfer.validateImportPackage(pkg); } catch (e) { err = e; }
+    assert.ok(err && err.code === 400, `${name} 必须 code 400（实际 ${err && err.code}）`);
+  }
+  // 合法包不被误伤
+  assert.ok(transfer.validateImportPackage(base({})));
+});

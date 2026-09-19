@@ -1580,6 +1580,8 @@ class Api {
 
   importApplyRes(pkg) {
     return Promise.resolve().then(async () => {
+      // 校验前移（审核 P2-4）：validateImportPackage 现在逐记录检查 players/events/board/rules/notes，
+      // 任何一条不合法都在**写盘之前**整体拒绝。写入循环里的错误只剩真实 I/O 故障。
       const checked = transfer.validateImportPackage(pkg);
       const prof = await this.profiles.create({
         nickname: checked.profile.nickname + '（导入）',
@@ -1588,27 +1590,42 @@ class Api {
         preferences: checked.profile.preferences, // 偏好随包继承（PROF-04）
       });
       const gameMap = transfer.buildGameIdMap(checked);
-      const notes = checked.notes || {};
-      let importedNotes = 0;
-      for (const g of checked.games) {
-        const newId = gameMap[g.id];
-        const doc = { schemaVersion: 2, tokens: {}, mock: !!g.mock,
-          ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
-          ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null, profileSchemaVersion: 1,
-          game: { ...g, id: newId, finished: true }, anchor: null, review: null, savedAt: Date.now() };
-        const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
-        await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
-        await fs.promises.rename(tmpFile, path.join(this.saveDir, newId + '.json'));
-        // 笔记随局落地（PROF-04）：旧 gameId → 新 gameId 重映射，座位经白名单规范化；单局失败不阻断导入
-        const noteDoc = notes[g.id];
-        if (noteDoc && noteDoc.seats && Object.keys(noteDoc.seats).length) {
-          try {
+      const written = []; // 已落地的存档文件：失败回滚清单
+      try {
+        const notes = checked.notes || {};
+        let importedNotes = 0;
+        for (const g of checked.games) {
+          const newId = gameMap[g.id];
+          const doc = { schemaVersion: 2, tokens: {}, mock: !!g.mock,
+            ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
+            ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null, profileSchemaVersion: 1,
+            game: { ...g, id: newId, finished: true }, anchor: null, review: null, savedAt: Date.now() };
+          const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
+          await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
+          const finalFile = path.join(this.saveDir, newId + '.json');
+          await fs.promises.rename(tmpFile, finalFile);
+          written.push(finalFile);
+          // 笔记随局落地（PROF-04）：旧 gameId → 新 gameId 重映射，座位经白名单规范化。
+          // 审核 P1-2 复验：**不再吞掉写盘故障**——磁盘失败视为整次导入失败，走下方回滚。
+          const noteDoc = notes[g.id];
+          if (noteDoc && noteDoc.seats && Object.keys(noteDoc.seats).length) {
             this.annotations.putSync({ profileId: prof.id, gameId: newId, expectedRevision: 0, seats: noteDoc.seats });
             importedNotes++;
-          } catch (_) { /* 笔记不合法则跳过，不阻断对局导入 */ }
+          }
         }
+        return { status: 200, body: { ok: true, profileId: prof.id, gameMap, importedNotes } };
+      } catch (writeErr) {
+        // 事务回滚：删掉已写存档 + 回收刚建的档案（全新档案无历史，回收区保留可追责）
+        for (const f of written) { try { fs.unlinkSync(f); } catch (_) { /* 回滚尽力而为 */ } }
+        try {
+          await this.profiles.update(prof.id, { archive: true });
+          await this.profiles.trash(prof.id);
+        } catch (_) { /* 档案回收失败不掩盖原始错误 */ }
+        // 只有数字语义码（4xx/5xx）才作为 HTTP 状态；真实 fs 错误的 code 是 EPERM 等字符串 → 500
+        const n = Number(writeErr.code);
+        const status = Number.isInteger(n) && n >= 400 && n < 600 ? n : 500;
+        return { status, body: { error: `导入失败，已回滚本次写入：${writeErr.message}`, rolledBack: true } };
       }
-      return { status: 200, body: { ok: true, profileId: prof.id, gameMap, importedNotes } };
     }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
   }
 

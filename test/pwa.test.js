@@ -262,3 +262,14 @@ test('静态服务：ETag 由大小与修改时间决定（可复现且随改动
   assert.strictEqual(a, b);
   assert.notStrictEqual(a, c);
 });
+
+test('service worker：静态资源必须网络优先（缓存优先会让老用户无限期运行旧脚本，审核 P1-3）', () => {
+  const src = read('sw.js');
+  assert.match(src, /async function networkFirstAsset/, '必须存在网络优先的资源策略');
+  assert.match(src, /event\.respondWith\(networkFirstAsset\(req\)\)/, 'fetch 处理器必须对静态资源走 networkFirstAsset');
+  assert.doesNotMatch(src, /cacheFirst/, '缓存优先实现必须删除（防回归）');
+  // 网络失败必须回退缓存（离线还能看牌局），缓存也没有才抛错
+  const fn = src.slice(src.indexOf('async function networkFirstAsset'));
+  assert.match(fn, /catch \(_\)/, '网络失败必须被捕获');
+  assert.match(fn, /cache\.match\(req\)/, '失败时回退缓存');
+});

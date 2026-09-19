@@ -72,7 +72,9 @@ function buildExportPackage({ profile, games, notes = {}, hostLabel = '' }) {
   };
 }
 
-/** 校验并规范化导入包。失败抛 ValidationError 语义（code 400）；返回规范化后的包 */
+/** 校验并规范化导入包。失败抛 ValidationError 语义（code 400）；返回规范化后的包。
+ *  审核 P2-4：**写入前完整校验所有记录**——任何一局/一份笔记不合法都整体拒绝，
+ *  绝不允许"第一局合法第二局坏"留下半份数据。 */
 function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
   if (!pkg || typeof pkg !== 'object') throw Object.assign(new Error('导入包不是合法 JSON 对象'), { code: 400 });
   if (!pkg.manifest || Number(pkg.manifest.exportVersion) !== EXPORT_VERSION) {
@@ -81,12 +83,52 @@ function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
   if (!pkg.profile || typeof pkg.profile.nickname !== 'string' || !pkg.profile.nickname.trim()) {
     throw Object.assign(new Error('导入包缺少档案昵称'), { code: 400 });
   }
+  if (pkg.profile.preferences !== undefined && (typeof pkg.profile.preferences !== 'object' || pkg.profile.preferences === null || Array.isArray(pkg.profile.preferences))) {
+    throw Object.assign(new Error('导入包 preferences 必须是对象'), { code: 400 });
+  }
   if (!Array.isArray(pkg.games)) throw Object.assign(new Error('导入包缺少对局列表'), { code: 400 });
   for (const g of pkg.games) {
-    if (!g || typeof g.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(g.id)) {
-      throw Object.assign(new Error('导入包含非法对局 id'), { code: 400 });
+    if (!g || typeof g !== 'object') throw Object.assign(new Error('导入包含非法对局记录'), { code: 400 });
+    if (typeof g.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(g.id)) {
+      throw Object.assign(new Error(`导入包含非法对局 id：${String(g.id).slice(0, 20)}`), { code: 400 });
     }
     if (!g.finished) throw Object.assign(new Error('导入包包含未结束对局（不允许）'), { code: 400 });
+    // 记录级类型校验：players/events 必须是数组（players 里的条目必须是对象），
+    // board/rules/winner/winReason 类型受限 —— 坏类型会在写入循环里半路抛错，留下半份导入。
+    if (g.players !== undefined && !Array.isArray(g.players)) {
+      throw Object.assign(new Error(`对局 ${g.id} 的 players 必须是数组`), { code: 400 });
+    }
+    for (const p of g.players || []) {
+      if (!p || typeof p !== 'object' || Array.isArray(p)) {
+        throw Object.assign(new Error(`对局 ${g.id} 的 players 含非对象条目`), { code: 400 });
+      }
+    }
+    if (g.events !== undefined && !Array.isArray(g.events)) {
+      throw Object.assign(new Error(`对局 ${g.id} 的 events 必须是数组`), { code: 400 });
+    }
+    for (const field of ['board', 'rules']) {
+      if (g[field] !== undefined && g[field] !== null && (typeof g[field] !== 'object' || Array.isArray(g[field]))) {
+        throw Object.assign(new Error(`对局 ${g.id} 的 ${field} 必须是对象`), { code: 400 });
+      }
+    }
+    for (const field of ['winner', 'winReason']) {
+      if (g[field] !== undefined && g[field] !== null && typeof g[field] !== 'string') {
+        throw Object.assign(new Error(`对局 ${g.id} 的 ${field} 必须是字符串`), { code: 400 });
+      }
+    }
+  }
+  if (pkg.notes !== undefined) {
+    if (typeof pkg.notes !== 'object' || pkg.notes === null || Array.isArray(pkg.notes)) {
+      throw Object.assign(new Error('导入包 notes 必须是对象'), { code: 400 });
+    }
+    for (const [gid, doc] of Object.entries(pkg.notes)) {
+      if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+        throw Object.assign(new Error(`笔记 ${gid} 必须是对象`), { code: 400 });
+      }
+      if (doc.seats !== undefined && (typeof doc.seats !== 'object' || doc.seats === null || Array.isArray(doc.seats))) {
+        throw Object.assign(new Error(`笔记 ${gid} 的 seats 必须是对象`), { code: 400 });
+      }
+    }
   }
   return pkg;
 }

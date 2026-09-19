@@ -456,3 +456,51 @@ test('真实 HTTP 导入坏包：走统一实现后仍返回 400 语义（import
     assert.strictEqual(stray.length, 0, '校验失败不得创建档案');
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
+
+test('真实 HTTP 导入半坏包：第二局 players 类型非法 → 整体 400，零残留（审核 P2-4）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('halfbad');
+  try {
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-3', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 2, notes: 0 } },
+      profile: { nickname: '半坏包', avatarId: 'scholar', bio: '' },
+      games: [
+        { id: 'g-ok-1', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+          players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} },
+        { id: 'g-bad-1', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+          players: 'not-an-array', events: [], board: { wolf: 1, villager: 2 }, rules: {} },
+      ],
+    };
+    const imp = await call(api, 'POST', '/api/profiles/import', { package: pkg });
+    assert.strictEqual(imp.status, 400, `非法 players 必须在写盘前整体拒绝（实际 ${imp.status}）`);
+    // 零残留断言：不建档案、不落存档
+    const list = await call(api, 'GET', '/api/profiles');
+    assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('半坏包')).length, 0, '不得创建档案');
+    const leftovers = fs.existsSync(savesDir) ? fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') && f !== 'experiences.json') : [];
+    assert.strictEqual(leftovers.length, 0, `不得留下任何存档（实际 ${leftovers}）`);
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('导入时笔记写盘故障：不报成功、回滚已写存档与档案（审核 P1-2 复验）', async () => {
+  const { api, dataDir, savesDir } = makeIsolatedApi('diskfail');
+  try {
+    // 故障注入：putSync 模拟磁盘写失败（旧实现对这类错误静默跳过 → 导出丢笔记却报成功）
+    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM: 磁盘写入失败（注入）'), { code: 'EPERM' }); };
+    const pkg = {
+      manifest: { exportVersion: 1, packageId: 'pkg-4', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 1 } },
+      profile: { nickname: '磁盘故障', avatarId: 'scholar', bio: '' },
+      games: [{ id: 'g-df-1', finished: true, day: 1, winner: 'good', winReason: 'x', mock: true, savedAt: 1,
+        players: [{ seat: 1, name: 'a', isHuman: false, role: 'villager' }], events: [], board: { wolf: 1, villager: 2 }, rules: {} }],
+      notes: { 'g-df-1': { schemaVersion: 2, profileId: 'o', gameId: 'g-df-1', revision: 1, seats: { 1: { leaning: 'lean_wolf' } } } },
+    };
+    const out = await api.importApplyRes(pkg); // 直调内部实现以注入故障；断言走的是同一事务路径
+    assert.strictEqual(out.status, 500, `写盘故障必须失败（实际 ${out.status}：${JSON.stringify(out.body)}）`);
+    assert.strictEqual(out.body.ok, undefined, '绝不能返回 ok:true');
+    assert.strictEqual(out.body.rolledBack, true, '必须声明已回滚');
+    assert.match(out.body.error, /回滚/);
+    // 回滚断言：存档已删、档案已回收
+    const leftovers = fs.existsSync(savesDir) ? fs.readdirSync(savesDir).filter((f) => f.includes('g-df') || (f.startsWith('.tmp-'))) : [];
+    assert.strictEqual(leftovers.length, 0, `已写存档必须回滚（实际 ${leftovers}）`);
+    const list = await call(api, 'GET', '/api/profiles');
+    assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('磁盘故障')).length, 0, '导入档案必须已回收');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});

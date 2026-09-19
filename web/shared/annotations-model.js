@@ -40,7 +40,58 @@
     return parts.join(' · ');
   }
 
-  const api = { LEANINGS, LEANING_CN, CONFIDENCE_CN, MAX_CANDIDATES, MAX_NOTE, normalizeSeatAnnotation, summarize };
+  /**
+   * 旧版 {seat: roleId} 标注 → 新版存储的**逐座位合并**（NOTE-05，审核 P1-1 复验）。
+   * 返回需要 PUT 的 fill = {seat: 规范化后的标注}；调用方 PUT 成功后才允许清理本地 key。
+   * 规则：
+   *   · 服务端没有的座位 → 由旧标记整条转换（候选 [roleId]，倾向按阵营，把握 low）。
+   *   · 同座位冲突（服务端已有）→ 绝不覆盖：旧身份若未出现在服务端的候选/自称里，
+   *     候选还有空位就并入候选；没空位就写进备注（「旧标记：X」）。双方信息都保留。
+   *   · 旧身份已在服务端候选/自称里 → 该座位无需变更，不进 fill。
+   *
+   * @param serverSeats 服务端现有 {seat: 标注}（只读，不修改）
+   * @param legacy      旧格式 {seat: roleId}
+   * @param roleOf      (roleId) => {team, name} | null  角色信息查询
+   */
+  function mergeLegacyTags(serverSeats, legacy, roleOf) {
+    const fill = {};
+    for (const [seat, rid] of Object.entries(legacy || {})) {
+      if (typeof rid !== 'string' || !rid) continue;
+      const info = roleOf ? roleOf(rid) : null;
+      const sv = serverSeats && serverSeats[seat];
+      if (!sv) {
+        // 新座位：整条转换
+        fill[seat] = normalizeSeatAnnotation({
+          candidateRoleIds: [rid],
+          leaning: info && info.team === 'wolf' ? 'lean_wolf' : (info && info.team ? 'lean_good' : 'neutral'),
+          confidence: 'low',
+          note: '（旧版身份标记自动迁移）',
+        });
+        continue;
+      }
+      // 同座位冲突：旧身份是否已被服务端记录？
+      const svCands = Array.isArray(sv.candidateRoleIds) ? sv.candidateRoleIds : [];
+      const alreadyKnown = svCands.includes(rid) || sv.claimedRoleId === rid;
+      if (alreadyKnown) continue; // 无新增信息，保留服务端原数据
+      const merged = JSON.parse(JSON.stringify(sv));
+      const tag = `旧标记：${(info && info.name) || rid}`;
+      if (merged.note && merged.note.includes(tag)) continue; // 已并过（幂等：迁移重试不重复追加）
+      if (svCands.length < MAX_CANDIDATES) {
+        merged.candidateRoleIds = [...svCands, rid];
+      } else {
+        // 候选满：降级写进备注，信息不丢
+        merged.note = merged.note ? `${merged.note}；${tag}` : tag;
+      }
+      if (!merged.note || !merged.note.includes('旧版身份标记')) {
+        merged.note = merged.note ? `${merged.note}；（含旧版合并标注）` : '（含旧版合并标注）';
+      }
+      const norm = normalizeSeatAnnotation(merged);
+      if (norm) fill[seat] = norm;
+    }
+    return fill;
+  }
+
+  const api = { LEANINGS, LEANING_CN, CONFIDENCE_CN, MAX_CANDIDATES, MAX_NOTE, normalizeSeatAnnotation, summarize, mergeLegacyTags };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.WWAnnotationsModel = api;
 })(typeof window !== 'undefined' ? window : globalThis);
