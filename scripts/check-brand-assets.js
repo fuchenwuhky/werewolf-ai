@@ -101,6 +101,7 @@ function checkV2Sources() {
 // ---------- 2. 生产资产一致性 ----------
 function expectedBytes(entry) {
   const v2Buf = readRepo(`${brand.V2_EXPORT_DIR}/${entry.v2}`);
+  if (entry.kind === 'svg-master') return fs.readFileSync(brand.resolve(brand.V2_MASTER_EMBLEM));
   if (entry.kind === 'png-copy' || entry.kind === 'svg-copy') return v2Buf;
   if (entry.kind === 'round') return brand.deriveRoundIcon(v2Buf);
   if (entry.kind === 'splash') return brand.deriveSplash(v2Buf, entry.w, entry.h);

@@ -318,6 +318,7 @@ const ANDROID_SPLASHES = [
 ];
 
 // kind: png-copy | svg-copy | round（派生） | splash（派生） | color | adaptive-xml
+const V2_MASTER_EMBLEM = "design/brand/v2/wolf-emblem.svg"; // 母版：自为基准，不经 export/manifest
 const MAPPING = [
   // —— BRAND-02：web 生产 PWA 图标（manifest / index.html / m/index.html 引用面）——
   { prod: 'web/assets/icon.svg', v2: 'app-icon.svg', kind: 'svg-copy' },
@@ -347,6 +348,7 @@ const V2_ASSETS_USED = [
 
 module.exports = {
   ROOT,
+  V2_MASTER_EMBLEM,
   V2_EXPORT_DIR,
   V2_ASSETS_USED,
   MAPPING,
