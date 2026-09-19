@@ -1551,9 +1551,9 @@ class Api {
   }
 
   /** 档案更新（方案 §3.6 PATCH）：expectedRevision 乐观并发，失败 409 */
-  updateProfile(res, pid, body) {
+  async updateProfile(res, pid, body) {
     try {
-      const prof = this.profiles.update(pid, body);
+      const prof = await this.profiles.update(pid, body);
       return this.json(res, 200, { profile: prof });
     } catch (e) {
       const code = e.code || 400;
@@ -1562,7 +1562,7 @@ class Api {
   }
 
   /** 删除（仅归档态）：统计该档案进行中对局数后移入回收区 */
-  trashProfile(res, pid) {
+  async trashProfile(res, pid) {
     try {
       let active = 0;
       for (const entry of this.games.values()) {
@@ -1573,7 +1573,7 @@ class Api {
       }
       const prof = this.profiles.get(pid);
       if (!prof.archivedAt) return this.json(res, 409, { error: '请先归档再删除' });
-      const info = this.profiles.trash(pid, { activeGames: active });
+      const info = await this.profiles.trash(pid, { activeGames: active });
       return this.json(res, 200, { ok: true, archiveId: info.archiveId });
     } catch (e) {
       return this.json(res, e.code || 400, { error: e.message });

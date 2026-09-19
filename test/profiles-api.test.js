@@ -11,6 +11,7 @@ const path = require('path');
 const events = require('events');
 
 const { Api } = require('../src/api');
+const { Game } = require('../src/engine/game');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `papi-${tag}-`));
@@ -53,7 +54,7 @@ async function call(api, method, pathname, body) {
 }
 
 test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全链', async () => {
-  const { api, dir } = makeApi('crud');
+  const { api } = makeApi('crud');
 
   const c1 = await call(api, 'POST', '/api/profiles', { nickname: '砚舟', avatarId: 'scholar', bio: '测试' });
   assert.strictEqual(c1.status, 200);
@@ -95,7 +96,7 @@ test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全�
 });
 
 test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply 落地档案与对局', async () => {
-  const { api, dir } = makeApi('imp');
+  const { api } = makeApi('imp');
   const bad = await call(api, 'POST', '/api/profiles/import/preview', { package: { profile: {}, games: 'not-array' } });
   assert.strictEqual(bad.status, 400);
 
