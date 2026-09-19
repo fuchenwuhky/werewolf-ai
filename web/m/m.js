@@ -77,6 +77,9 @@ function dropTopOverlay() {
 
 /** 关闭最上层并执行 DOM 清理（页面返回按钮的统一入口） */
 function dismissTop() {
+  // 栈顶已死的层（被自己的 ✕ 直接清了 DOM、没走弹栈）不消耗本次返回：先逐个弹出，
+  // 否则一次返回"空按"——图鉴细节层关闭后再按返回，会被死条目吃掉一按（ui:check 实测）
+  while (backStack.length && !overlayAlive(backStack[backStack.length - 1].kind)) backStack.pop();
   const top = dropTopOverlay();
   if (top) { try { top.closeDom(); } catch (_) {} }
   return top;
@@ -85,6 +88,8 @@ function dismissTop() {
 // 原生返回：与页面返回一致 —— 按深度逐层关；game 哨兵 = 先回发言页签，再离局确认
 window.addEventListener('popstate', (e) => {
   const target = (e.state && e.state.mww) || 0;
+  // 先丢弃 DOM 已死的残留条目（刷新后的历史残留），避免"空按"返回
+  while (backStack.length && !overlayAlive(backStack[backStack.length - 1].kind) && backStack.length > target) backStack.pop();
   while (backStack.length > target) {
     const top = backStack[backStack.length - 1];
     if (top.kind === 'game') {
@@ -356,7 +361,7 @@ function openSettingsModal() {
   wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
   const body = el('div', 'mbody');
   // FIN-03/§8.3：API 配置是安装级的——说明归属，避免"切档案怎么 Key 也变了"的误解
-  body.appendChild(el('p', 'hint', '🔑 接口 / 模型 / Key 属于安装级配置：此设备共享，不随玩家档案切换。'));
+  body.appendChild(el('p', 'hint', '🔑 接口 / 模型 / Key 属于安装级配置：此设备共享，不随玩家档案切换；开局时即已固化，对局中不可修改，请回首页调整。'));
 
   if (inGame && v) {
     const alive = (v.players || []).filter((p) => p.alive).length;

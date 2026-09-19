@@ -573,7 +573,8 @@ class Browser {
     })()`);
     check('手机版图鉴：点牌弹出细节层（含徽记与 AI 打法）', ms.sheet && ms.h > 200 && ms.name.length > 0 && ms.chips >= 3 && ms.strat >= 2, JSON.stringify(ms));
     await b.shot(path.join(SHOTS, '06c-mobile-codex-detail.png'));
-    await b.eval(`document.querySelector('#m-modal .modal .btn.ghost')?.click()`);
+    // 细节层现在有多个 ghost 按钮（检视/规则书/关闭）：按文本找"关闭"，不能盲点第一个
+    await b.eval(`[...document.querySelectorAll('#m-modal .modal .btn')].find((b) => b.textContent.includes('关闭'))?.click()`);
     await sleep(300);
     await b.click('#m-codex-back');
     await sleep(400);
