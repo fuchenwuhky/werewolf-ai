@@ -48,6 +48,10 @@ const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require(
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
 const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
+const { ProfileStore } = require('./profiles/store');
+const { AnnotationStore } = require('./annotations/store');
+const { ProfileMigration } = require('./profiles/migration');
+const transfer = require('./profiles/transfer');
 
 /** 调度器的 Key 池快照（"实际可用并发数"的唯一可信来源，见 /api/config 的 pool 字段） */
 function poolSnapshot() {
@@ -108,7 +112,23 @@ class Api {
     const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
-    this._cleanupStaleTmp();
+    // 本机玩家档案与私人标注（整改方案 DATA-01）：独立 Store，不在 api.js 堆持久化实现
+    this.profiles = new ProfileStore({ dataDir: path.dirname(this.saveDir), logger });
+    this.annotations = new AnnotationStore({ profilesRoot: this.profiles.root, logger });
+    this.defaultProfileId = null;
+    try {
+      // DATA-02：幂等迁移（备份→默认档案→旧存档打标→经验池归属），游标见 migrations/
+      this.profileMigration = new ProfileMigration({ dataDir: path.dirname(this.saveDir), profilesStore: this.profiles, logger });
+      const mig = this.profileMigration.run();
+      this.defaultProfileId = mig.defaultId;
+      if (mig.executed.length) {
+        this.logger.info('api', `档案迁移完成：${mig.executed.join('/')}，默认档案 ${mig.defaultId}，存档打标 ${mig.tagged} 局`);
+      }
+    } catch (e) {
+      // 迁移失败进入可读兼容模式：不删源文件，继续服务（真实局建局会被绑定校验外的路径放行，档案接口报未迁移）
+      this.logger.error('api', `档案迁移失败（进入兼容模式）: ${e.message}`);
+      this.defaultProfileId = null;
+    }
     // 轻量限流（整改 §1.4）：远端地址+桶 → 时间戳滑窗。只保护花钱/可暴力的入口。
     this._rateBuckets = new Map();
     // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
@@ -142,6 +162,16 @@ class Api {
       for (const f of stale) fs.rmSync(path.join(this.saveDir, f), { force: true });
       if (stale.length) this.logger.info('api', `清理残留临时存档 ${stale.length} 个（${stale.map((f) => f.replace('.json.tmp', '')).join('、')}）`);
     } catch (_) { /* 目录不可读等：不影响启动 */ }
+  }
+
+  /** 按对局归属解析经验池（方案 PROF-03）：默认档案 → 旧池；其他档案 → 各自档案池 */
+  experienceFor(ownerProfileId) {
+    if (!ownerProfileId || ownerProfileId === this.defaultProfileId) return this.experience;
+    if (!this._experienceByOwner) this._experienceByOwner = new Map();
+    if (!this._experienceByOwner.has(ownerProfileId)) {
+      this._experienceByOwner.set(ownerProfileId, new ExperienceStore(path.join(this.profiles.root, ownerProfileId), this.logger));
+    }
+    return this._experienceByOwner.get(ownerProfileId);
   }
 
   /** 密钥-地址绑定是否有效（审核 P0-1）：baseUrl 与 Key 任一变动未重输凭证即失配 */
@@ -228,6 +258,11 @@ class Api {
       // 令牌一并存档：本地单机应用，浏览器丢失会话时可从存档恢复对局
       doc = JSON.stringify({
         schemaVersion: 2, // 整改阶段 3.2：v1 = 无版本号（兼容读取）；新增字段一律向后兼容
+        // 归属元数据（方案 §3.3）：从创建时的 entry 固化，不从"当前档案"推导
+        ownerProfileId: entry.ownerProfileId || null,
+        ownerNicknameSnapshot: entry.ownerNicknameSnapshot || null,
+        ownerHumanSeat: entry.ownerHumanSeat ?? null,
+        profileSchemaVersion: 1,
         tokens: entry.tokens,
         mock: !!entry.mock,
         game: this._saveMeta(game),
@@ -383,8 +418,12 @@ class Api {
       tokens: { player: tokenId(), god: tokenId() },
       agentFactory: useMock
         ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-        : makeAgentFactory({ ...this.config.get() }, logger, this.experience, this.journal),
+        : makeAgentFactory({ ...this.config.get() }, logger, this.experienceFor(doc.ownerProfileId), this.journal),
     });
+    // 归属随存档恢复（方案 §3.4）：异步回调/定时存盘引用所属 entry 的 owner
+    newEntry.ownerProfileId = doc.ownerProfileId || null;
+    newEntry.ownerNicknameSnapshot = doc.ownerNicknameSnapshot || null;
+    newEntry.ownerHumanSeat = doc.ownerHumanSeat ?? null;
     this.games.set(id, newEntry);
     this._drive(newEntry, doc.anchor.nextPhase);
     return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
@@ -412,8 +451,12 @@ class Api {
       id, anchor, mock: !!entry.mock, logger, tokens: entry.tokens,
       agentFactory: entry.mock
         ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-        : makeAgentFactory({ ...this.config.get() }, logger, this.experience, this.journal),
+        : makeAgentFactory({ ...this.config.get() }, logger, this.experienceFor(entry.ownerProfileId), this.journal),
     });
+    // 归属随存档恢复（方案 §3.4）：异步回调/定时存盘引用所属 entry 的 owner
+    newEntry.ownerProfileId = entry.ownerProfileId || null;
+    newEntry.ownerNicknameSnapshot = entry.ownerNicknameSnapshot || null;
+    newEntry.ownerHumanSeat = entry.ownerHumanSeat ?? null;
     this.games.set(id, newEntry);
     this._drive(newEntry, anchor.nextPhase);
     return this.json(res, 200, { gameId: id, playerToken: newEntry.tokens.player, godToken: newEntry.tokens.god, resumed: true });
@@ -578,7 +621,9 @@ class Api {
           && !body.apiKey.includes('****') && after.apiKey === body.apiKey;
         const credsChanged = after.apiKey !== apiKeyBefore
           || JSON.stringify(after.apiKeys || []) !== apiKeysBefore;
-        if (urlChanged && !mainKeyResupplied) {
+        // 无 Key 配置（纯 Mock 试玩）没有可外带的凭证，地址变更不触发 fail-closed
+        const hasKey = !!this.config.get().apiKey;
+        if (urlChanged && !mainKeyResupplied && hasKey) {
           // 改地址未重输 Key：fail-closed（须重输主 Key 才能恢复）
           this.baseUrlNeedsRekey = true;
         } else if (mainKeyResupplied) {
@@ -658,6 +703,79 @@ class Api {
         if (!mgmt) return this._denyManagement(res);
         return this.stats(res);
       }
+      // ---------- 本机玩家档案（方案 §3.6）----------
+      if (pathname === '/api/profiles' && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
+        return this.json(res, 200, { profiles: this.profiles.list({ includeArchived: true }), defaultProfileId: this.defaultProfileId });
+      }
+      if (pathname === '/api/profiles' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        if (!this._rateAllow(req, 'profcreate', 10)) return this.json(res, 429, { error: '创建过于频繁，请稍后再试' });
+        const prof = await this.profiles.create(await this.readBody(req));
+        return this.json(res, 200, { profile: prof });
+      }
+      if (pathname === '/api/profiles/import/preview' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        try {
+          const pkg = transfer.validateImportPackage((await this.readBody(req)).package);
+          return this.json(res, 200, { ok: true, preview: transfer.previewImport(pkg) });
+        } catch (e) {
+          return this.json(res, e.code || 400, { error: e.message });
+        }
+      }
+      if (pathname === '/api/profiles/import' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        const body = await this.readBody(req);
+        try {
+          const pkg = transfer.validateImportPackage(body.package);
+          const mapped = transfer.buildGameIdMap(pkg);
+          // 新档案承接导入（继承昵称/头像/偏好），gameId 全部重映射避免冲突
+          const prof = await this.profiles.create({
+            nickname: pkg.profile.nickname + '（导入）',
+            avatarId: pkg.profile.avatarId || 'scholar',
+            bio: pkg.profile.bio || '',
+          });
+          for (const g of pkg.games) {
+            const newId = mapped[g.id];
+            const doc = {
+              schemaVersion: 2, tokens: {}, mock: !!g.mock,
+              ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
+              ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null,
+              profileSchemaVersion: 1,
+              game: { ...g, id: newId, finished: true },
+              anchor: null, review: null, savedAt: Date.now(),
+            };
+            const tmpFile = path.join(this.saveDir, `.tmp-${newId}-${Date.now()}`);
+            await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
+            await fs.promises.rename(tmpFile, path.join(this.saveDir, `${newId}.json`));
+            void newId;
+          }
+          return this.json(res, 200, { ok: true, imported: pkg.games.length, profileId: prof.id, gameMap: mapped });
+        } catch (e) {
+          return this.json(res, e.code || 400, { error: e.message });
+        }
+      }
+      const profileMatch = pathname.match(/^\/api\/profiles\/([0-9a-fA-F-]{36})(\/([a-z]+))?$/);
+      if (profileMatch) {
+        const pid = profileMatch[1];
+        const psub = profileMatch[3] || '';
+        if (method === 'PATCH') {
+          if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+          return this.updateProfile(res, pid, await this.readBody(req));
+        }
+        if (method === 'DELETE') {
+          if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+          return this.trashProfile(res, pid);
+        }
+        if (psub === 'stats' && method === 'GET') {
+          if (!mgmt) return this._denyManagement(res);
+          return this.profileStats(res, pid);
+        }
+        if (psub === 'games' && method === 'GET') {
+          if (!mgmt) return this._denyManagement(res);
+          return this.profileGames(res, pid);
+        }
+      }
       if (gameMatch) {
         const id = gameMatch[1];
         const sub = gameMatch[2] || '';
@@ -692,6 +810,13 @@ class Api {
         if (sub === '/duel' && method === 'POST') return this.duelAction(res, entry, await this.readBody(req));
         if (sub === '/wolftalk' && method === 'POST') return this.wolfTalk(res, entry, await this.readBody(req));
         if (sub === '/logs' && method === 'GET') return this.logs(res, entry, query);
+        // 私人标注（方案 NOTE-02）：归属 = 对局 owner 档案；凭对局令牌或管理会话访问
+        if (sub === '/annotations' && method === 'GET') {
+          return this.gameAnnotationsGet(res, entry, query, req);
+        }
+        if (sub === '/annotations' && method === 'PUT') {
+          return this.gameAnnotationsPut(res, entry, req, await this.readBody(req));
+        }
         if (sub === '/agent' && method === 'GET') return this.agentDebug(res, entry, query);
         if (sub === '/replay' && method === 'GET') return this.replay(res, entry, query);
       }
@@ -719,6 +844,25 @@ class Api {
     const rules = mergeRules({ ...(boardDef && boardDef.rules || {}), ...(body.rules || {}) });
     const useMock = !!body.mock;
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key（或在设置中勾选 Mock 试玩）' });
+    // 对局归属固化（方案 PROF-02）：以创建时的不可变归属为准，不从"当前档案"推导存盘归属。
+    // 兼容期：缺 profileId 的请求归入默认档案并记录弃用日志（本机旧客户端）。
+    let ownerProfileId = this.defaultProfileId;
+    let ownerNicknameSnapshot = null;
+    let ownerHumanSeat = null;
+    if (body.profileId !== undefined) {
+      if (typeof body.profileId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.profileId)) {
+        return this.json(res, 400, { error: 'profileId 非法' });
+      }
+      let prof = null;
+      try { prof = this.profiles.get(body.profileId); } catch (_) {}
+      if (!prof || prof.archivedAt) return this.json(res, 400, { error: '档案不存在或已归档' });
+      ownerProfileId = prof.id;
+      ownerNicknameSnapshot = prof.nickname;
+    } else {
+      this.logger.warn('api', `请求未携带 profileId，归入默认档案（兼容期，新客户端应显式携带）`);
+    }
+    const humanSeat = (players || []).find((p) => p.isHuman);
+    ownerHumanSeat = humanSeat ? humanSeat.seat : null;
     // 整改（审核 P0-1）：真实对局的 LLM 出口也必须校验密钥-地址绑定（内存标记重启即失，
     // 不能作为唯一防线）
     if (!useMock && !this.keyBindingValid()) {
@@ -732,7 +876,7 @@ class Api {
     const logger = makeGameLogger(this.logger, gameId);
     const agentFactory = useMock
       ? makeMockAgentFactory(Math.random, { explodeRate: 0.02 })
-      : makeAgentFactory(llmCfg, logger, this.experience, this.journal);
+      : makeAgentFactory(llmCfg, logger, this.experienceFor(ownerProfileId), this.journal);
 
     // 性格：玩家自定义优先，未填写的 AI 随机分配（每局不重样）。
     // 显式 seed 时改用同一随机源，保证"同种子 + 同配置 = 同一局"（配合决策 journal 可完整复现）。
@@ -770,6 +914,10 @@ class Api {
       // （用户以为在免费试玩，实际在花钱）。这条与"不静默降级"是同一类问题：状态丢失后行为悄悄变了。
       mock: useMock,
       tokens: { player: humans ? tokenId() : null, god: tokenId() },
+      // 对局归属固化（方案 PROF-02）：创建时锁定，存盘/恢复/异步回调全程引用
+      ownerProfileId,
+      ownerNicknameSnapshot,
+      ownerHumanSeat,
       createdAt: Date.now(), lastAccess: Date.now(), // 内存治理（TTL/LRU）用
     };
     this.games.set(gameId, entry);
@@ -804,7 +952,8 @@ class Api {
    * `experience.add` 仍然**按座位顺序、串行**提交：它要落盘，并发写同一个文件是自找麻烦。
    */
   async generateLessons(entry) {
-    if (!this.experience || !entry.game.finished || !entry.game.started) return;
+    const ownerExperience = this.experienceFor(entry.ownerProfileId);
+    if (!ownerExperience || !entry.game.finished || !entry.game.started) return;
     if (!entry.mock && !this.keyBindingValid()) {
       this.logger.warn('api', `跳过局后经验提炼：${entry.game.id} 密钥绑定失配（改地址未重输 Key）`);
       return;
@@ -829,7 +978,7 @@ class Api {
         })();
     for (const r of results) {
       if (!r || !r.lessons) continue;
-      const added = this.experience.add(r.lessons);
+      const added = ownerExperience.add(r.lessons);
       if (added) this.logger.info('api', `${r.agent.player.seat}号（${r.agent.player.role}）沉淀 ${added} 条跨局经验`, { gameId: game.id });
     }
   }
@@ -1399,6 +1548,151 @@ class Api {
       agg.avgDays = agg.finished ? Math.round((daysSum / agg.finished) * 10) / 10 : 0;
       return this.json(res, 200, agg);
     } catch (e) { return this.json(res, 200, { games: 0, experiences: {} }); }
+  }
+
+  /** 档案更新（方案 §3.6 PATCH）：expectedRevision 乐观并发，失败 409 */
+  updateProfile(res, pid, body) {
+    try {
+      const prof = this.profiles.update(pid, body);
+      return this.json(res, 200, { profile: prof });
+    } catch (e) {
+      const code = e.code || 400;
+      return this.json(res, code, { error: e.message, code: e.code });
+    }
+  }
+
+  /** 删除（仅归档态）：统计该档案进行中对局数后移入回收区 */
+  trashProfile(res, pid) {
+    try {
+      let active = 0;
+      for (const entry of this.games.values()) {
+        if (entry.ownerProfileId === pid && entry.game.started && !entry.game.finished) active++;
+      }
+      if (!this.profiles.list({ includeArchived: true }).some((p) => p.id === pid)) {
+        return this.json(res, 404, { error: '档案不存在' });
+      }
+      const prof = this.profiles.get(pid);
+      if (!prof.archivedAt) return this.json(res, 409, { error: '请先归档再删除' });
+      const info = this.profiles.trash(pid, { activeGames: active });
+      return this.json(res, 200, { ok: true, archiveId: info.archiveId });
+    } catch (e) {
+      return this.json(res, e.code || 400, { error: e.message });
+    }
+  }
+
+  importPreviewRes(pkg) {
+    try {
+      const checked = transfer.validateImportPackage(pkg);
+      return Promise.resolve({ status: 200, body: { ok: true, preview: transfer.previewImport(checked) } });
+    } catch (e) { return Promise.resolve({ status: e.code || 400, body: { error: e.message } }); }
+  }
+
+  importApplyRes(pkg) {
+    return Promise.resolve().then(async () => {
+      const checked = transfer.validateImportPackage(pkg);
+      const prof = await this.profiles.create({ nickname: checked.profile.nickname + '（导入）', avatarId: checked.profile.avatarId || 'scholar', bio: checked.profile.bio || '' });
+      const gameMap = transfer.buildGameIdMap(checked);
+      const notes = {};
+      for (const g of checked.games) {
+        const newId = gameMap[g.id];
+        const doc = { schemaVersion: 2, tokens: {}, mock: !!g.mock,
+          ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
+          ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null, profileSchemaVersion: 1,
+          game: { ...g, id: newId, finished: true }, anchor: null, review: null, savedAt: Date.now() };
+        const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
+        await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
+        await fs.promises.rename(tmpFile, path.join(this.saveDir, newId + '.json'));
+      }
+      return { status: 200, body: { ok: true, profileId: prof.id, gameMap } };
+    }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
+  }
+
+  /** 档案战绩（方案 §3.7）：Mock/观战/终止/平局分桶，正式胜率只算真实自然局（动态阵营按 crush 还原） */
+  profileStats(res, pid) {
+    try {
+      const prof = this.profiles.get(pid);
+      const rows = [];
+      for (const f of fs.readdirSync(this.saveDir)) {
+        if (!f.endsWith('.json') || f === 'experiences.json') continue;
+        const doc = this._readJson(path.join(this.saveDir, f), null);
+        if (!doc || doc.ownerProfileId !== pid || !doc.game) continue;
+        const gm = doc.game;
+        const human = (gm.players || []).find((p) => p.isHuman) || null;
+        const spectate = !(gm.players || []).some((p) => p.isHuman);
+        const isTerminated = /终止/.test(gm.winReason || '');
+        const bucket = doc.mock ? 'mock' : spectate ? 'spectate' : isTerminated ? 'terminated' : 'real';
+        // 最终阵营：暗恋者按 crush 还原（A12 动态阵营）
+        let faction = null;
+        if (human && human.role) {
+          if (human.role === 'admirer' && gm.crush && gm.crush[human.seat]) {
+            const t = (gm.players || []).find((p) => p.seat === gm.crush[human.seat]);
+            if (t && t.role && ROLES[t.role]) faction = ROLES[t.role].category === 'wolf' ? 'wolf' : 'good';
+          } else if (ROLES[human.role]) {
+            faction = ROLES[human.role].category === 'wolf' ? 'wolf' : 'good';
+          }
+        }
+        rows.push({ id: gm.id, day: gm.day || 0, bucket, faction, winner: gm.winner || null, finished: !!gm.finished });
+      }
+      const real = rows.filter((r) => r.bucket === 'real' && r.finished);
+      const wins = real.filter((r) => (r.faction === 'wolf') === (r.winner === 'wolf')).length;
+      return this.json(res, 200, {
+        profileId: pid, nickname: prof.nickname,
+        total: rows.length, real: real.length,
+        wins, losses: real.length - wins - real.filter((r) => r.winner === 'draw' || r.winner === 'none').length,
+        draws: real.filter((r) => r.winner === 'draw' || r.winner === 'none').length,
+        byBucket: {
+          real: real.length,
+          mock: rows.filter((r) => r.bucket === 'mock').length,
+          spectate: rows.filter((r) => r.bucket === 'spectate').length,
+          terminated: rows.filter((r) => r.bucket === 'terminated').length,
+        },
+      });
+    } catch (e) { return this.json(res, 500, { error: e.message }); }
+  }
+
+  /** 档案对局列表（仅本档案，字段白名单） */
+  profileGames(res, pid) {
+    try {
+      this.profiles.get(pid);
+      const rows = [];
+      for (const f of fs.readdirSync(this.saveDir)) {
+        if (!f.endsWith('.json') || f === 'experiences.json') continue;
+        const doc = this._readJson(path.join(this.saveDir, f), null);
+        if (!doc || doc.ownerProfileId !== pid) continue;
+        const gm = doc.game || {};
+        rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock, savedAt: doc.savedAt || null });
+      }
+      return this.json(res, 200, { rows });
+    } catch (e) { return this.json(res, 500, { error: e.message }); }
+  }
+
+  // ---------- 私人标注（NOTE-02）----------
+  /** 访问权：管理会话 或 持有本局玩家/上帝令牌；且标注归属 = 对局 owner 档案 */
+  _annotationAccess(req, entry, query, body) {
+    if (this.auth.isManagement(req)) return true;
+    const token = (query && query.get('token')) || (body && body.token);
+    if (!token) return false;
+    return token === entry.tokens.player || token === entry.tokens.god;
+  }
+
+  gameAnnotationsGet(res, entry, query, req) {
+    const pid = entry.ownerProfileId;
+    if (!pid) return this.json(res, 404, { error: '该对局没有归属档案（旧局/观战局）' });
+    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
+    return this.json(res, 200, { annotations: this.annotations.get(pid, entry.game.id), revision: this.annotations.get(pid, entry.game.id).revision });
+  }
+
+  gameAnnotationsPut(res, entry, req, body) {
+    const pid = entry.ownerProfileId;
+    if (!pid) return this.json(res, 404, { error: '该对局没有归属档案' });
+    if (!this._annotationAccess(req, entry, { get: () => body.token })) return this.json(res, 403, { error: 'token 无效' });
+    try {
+      const doc = this.annotations.putSync({ profileId: pid, gameId: entry.game.id, expectedRevision: body.expectedRevision, seats: body.seats || {} });
+      return this.json(res, 200, { annotations: doc, revision: doc.revision });
+    } catch (e) {
+      if (e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
+      return this.json(res, 400, { error: e.message });
+    }
   }
 
   listSaves(res) {

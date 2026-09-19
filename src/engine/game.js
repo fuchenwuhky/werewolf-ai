@@ -414,6 +414,8 @@ class Game {
       // 随机种子与提示词校验码必须随存档/锚点往返：
       // journal 的命中判据包含 promptHash，若恢复后二者变了，提示词就变了 → 恢复会重新问一遍（幂等性被破坏）
       seed: this.seed, promptNonce: this.promptNonce || null,
+      // 暗恋者动态阵营结算需要（整改方案 A12）：统计/复盘按 crush 还原最终阵营
+      crush: this.crush,
     };
   }
 
