@@ -47,9 +47,13 @@ function stubRes() {
 const HOST = { host: 'localhost:3210' };
 
 async function call(api, method, pathname, body) {
+  // 分离 query：与真实 server.js 的 URL 解析行为一致
+  const u = new URL(pathname, 'http://localhost');
+  const q = u.searchParams;
+  const cleanPath = u.pathname;
   const box = stubRes();
   const req = stubReq({ method, headers: { ...HOST }, body });
-  await api.handle(req, box.res, pathname, new URLSearchParams());
+  await api.handle(req, box.res, cleanPath, q);
   return { status: box.code, body: box.raw ? JSON.parse(box.raw) : null };
 }
 

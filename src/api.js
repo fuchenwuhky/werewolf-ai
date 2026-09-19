@@ -771,6 +771,7 @@ class Api {
           if (!mgmt) return this._denyManagement(res);
           return this.profileStats(res, pid);
         }
+        void pid;
         if (psub === 'games' && method === 'GET') {
           if (!mgmt) return this._denyManagement(res);
           return this.profileGames(res, pid);
