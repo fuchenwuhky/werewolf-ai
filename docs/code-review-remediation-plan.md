@@ -669,3 +669,15 @@ npm audit --omit=dev
 回归测试（新增/修正 9 个断言组）：空数组绕过、掩码主 Key、掩码 extras、清空 extras+改地址、两步组合、失配期间 extras 变更不解锁、真重输 Key 解除、keyBinding 持久化跨重启、saveActive 等待补写。
 
 终值：lint ✅ · 测试 **516/516 三轮全绿** · 覆盖率门禁五项 ✅（全局 94.01/85.87/87.50 + api.js 90.72/76.37）· 双端审计 0（Android 3 moderate 维持登记）· **APK+WIN 已按最终源码重建，app:verify 双通过（含图标哈希比对）**
+
+### 四轮审核整改（2026-09-19 深夜·续）
+
+| 项 | 修复 |
+|---|---|
+| P0 替换主 Key 将旧附加 Key 一并授权给新地址 | PUT 重绑规则再加一条：地址变更且重输主 Key 时，**附加 Key 一律清空不随迁**（旧 extras 从未获准用于新地址，随迁 = 旧 Key 外带）；用户可在新地址确认后重新添加。测试断言 apiKeys 深等于 [] |
+| P1 客户端清空绑定+重启解锁 | PUT 入口 `delete body.keyBinding`——绑定指纹永不接受客户端输入（服务端内部专属写入）；改地址未重输 Key → fail-closed 失配，重启后 keyBindingValid 由 stored-vs-current 决定 → 依旧失配、真实建局 400。回归测试覆盖 攻击PUT→重启→建局 400 全链 |
+| P1 同值重输无法解锁 | mainKeyResupplied 判定改为「非掩码、清洗后仍在（after === body）」——同值重输也算显式重输，可解除限制（这是计划 §1.4 要求的"重新输入 API Key"确认手势） |
+| P1 固定两轮等待漏补写 | saveActive 改为**循环收割**（seen 去重 + 硬上限 50 轮）：等待期间再安排的补写也会被后续轮次收齐；回归测试用三条链式补写验证 |
+| 测试稳定性 | save.test force 断言加有界重试（Windows rename 瞬态 EPERM/EBUSY 吸收），四轮连跑全绿 |
+
+终值：lint+ESLint ✅ · 测试 **522/522 四轮连跑全绿** · 覆盖率门禁五项 ✅（全局 93.83/85.71/87.50 + api.js 90.82/76.37）· 双端审计 0（Android 3 moderate 维持登记）· **APK+WIN 已按最终源码重建，app:verify 双通过（含图标哈希比对）**

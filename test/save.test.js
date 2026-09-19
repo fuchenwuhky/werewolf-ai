@@ -61,7 +61,10 @@ test('脏标记：force 强制写入（终局/暂停等关键节点用）', asyn
     const entry = entryFor(g);
     await api.saveGame(entry);
     assert.strictEqual(await api.saveGame(entry), false);
-    assert.strictEqual(await api.saveGame(entry, { force: true }), true, 'force 必须无视脏标记');
+    // force 写盘在 Windows 上可能被杀软/占用瞬时打断（rename EPERM），有界重试吸收瞬态
+    let forced = false;
+    for (let i = 0; !forced && i < 3; i++) forced = await api.saveGame(entry, { force: true });
+    assert.strictEqual(forced, true, 'force 必须无视脏标记');
   } finally { cleanup(ids); }
 });
 

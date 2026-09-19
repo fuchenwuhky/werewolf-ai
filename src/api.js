@@ -438,17 +438,18 @@ class Api {
       if (entry.savePromise) jobs.push(entry.savePromise.then(() => true).catch(() => false));
     }
     let results = await Promise.all(jobs);
-    // 审核 P1-4 二轮反例：第一批等待期间，saveGame 的 finally 还可能**再安排**补写
-    // （entry.savePromise 会被替换成补写 Promise）—— 那份补写必须在退出前也等完。
-    // 补写链是有界的（补写本身不再触发新补写），所以最多再收两轮。
-    for (let round = 0; round < 2; round++) {
+    // 审核 P1-4 三轮反例：补写可能在等待期间**再安排**下一份补写，固定轮数会漏。
+    // 改为循环收割直到无新 savePromise（补写链有限必然终止），硬上限 50 轮防失控。
+    const seen = new Set();
+    for (let round = 0; round < 50; round++) {
       const late = [];
       for (const entry of this.games.values()) {
-        if (entry.savePromise) late.push(entry.savePromise.then(() => true).catch(() => false));
+        const p = entry.savePromise;
+        if (p && !seen.has(p)) { seen.add(p); late.push(p.then(() => true).catch(() => false)); }
       }
       if (!late.length) break;
       const r = await Promise.allSettled(late);
-      results = results.concat(r.filter((x) => x.status === 'fulfilled').map((x) => x.value));
+      results = results.concat(r.filter((x) => x.status === 'fulfilled').map((x) => x.value).filter(Boolean));
     }
     return results.filter(Boolean).length;
   }
@@ -560,25 +561,39 @@ class Api {
       if (pathname === '/api/config' && method === 'PUT') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const body = await this.readBody(req);
-        // 审核 P0-1（含三轮反例）最终规则 = 两条安全通道的合取：
-        //   (a) 保存前绑定有效 且 地址未变 → 同一已确认主机上的凭证增删，自由重绑；
-        //   (b) 本次显式重输主 apiKey（非掩码且清洗后仍在）→ 为新地址重新背书。
-        // 反例全覆盖：改 baseUrl+清空 extras（a 败于地址变；b 败于未重输）→ 一律失配；
-        // 先改地址再动 extras 的两步组合也始终失配（wasValid 在地址变更后即为 false）。
+        delete body.keyBinding; // 审核 P1-2：绑定指纹只由服务端内部写入，永不接受客户端输入
+        // 审核 P0-1/P1（三轮反例）最终规则：
+        //   · 地址未变 → 同一已确认主机，凭证增删自由重绑（无外带风险）；
+        //   · 地址变更 → 必须重输主 apiKey（非掩码且清洗后仍在）；此时附加 Key 不随迁
+        //     （它们从未被授权用于新地址，随迁 = 旧 Key 外带），清空后按主 Key 单独重绑；
+        //   · 其余一切（掩码占位、清空 extras、两步组合）一律 fail-closed 保持失配。
         const wasValid = this.keyBindingValid();
-        const before = { baseUrl: this.config.get().baseUrl, apiKey: this.config.get().apiKey, apiKeys: this.config.get().apiKeys || [] };
+        const baseUrlBefore = this.config.get().baseUrl;
+        const apiKeyBefore = this.config.get().apiKey;
+        const apiKeysBefore = JSON.stringify(this.config.get().apiKeys || []);
         const saved = this.config.save(body);
         const after = this.config.get();
-        const urlChanged = after.baseUrl !== before.baseUrl;
+        const urlChanged = after.baseUrl !== baseUrlBefore;
         const mainKeyResupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== ''
           && !body.apiKey.includes('****') && after.apiKey === body.apiKey;
-        const credsChanged = after.apiKey !== before.apiKey
-          || JSON.stringify(after.apiKeys || []) !== JSON.stringify(before.apiKeys || []);
-        const rebind = credsChanged && ((wasValid && !urlChanged) || mainKeyResupplied);
-        if (rebind) {
-          this.config.save({ keyBinding: keyBindingOf(after) });
+        const credsChanged = after.apiKey !== apiKeyBefore
+          || JSON.stringify(after.apiKeys || []) !== apiKeysBefore;
+        if (urlChanged && !mainKeyResupplied) {
+          // 改地址未重输 Key：fail-closed（须重输主 Key 才能恢复）
+          this.baseUrlNeedsRekey = true;
+        } else if (mainKeyResupplied) {
+          // 显式重输主 Key：为（可能变化了的）地址重新背书。
+          // 换地址时附加 Key 不随迁（旧 extras 从未获准用于新地址，随迁 = 旧 Key 外带）；
+          // 同地址则保留本请求里显式重输的 extras。
+          if (urlChanged && body.apiKeys === undefined) this.config.save({ apiKeys: [] });
+          this.config.save({ keyBinding: keyBindingOf(this.config.get()) });
+          this.baseUrlNeedsRekey = false;
+        } else if (wasValid && credsChanged) {
+          // 同一已确认主机上的凭证增删：自由重绑
+          this.config.save({ keyBinding: keyBindingOf(this.config.get()) });
           this.baseUrlNeedsRekey = false;
         } else {
+          // 失配期间的同地址变更：保持失配，须重输主 Key 解锁
           this.baseUrlNeedsRekey = !this.keyBindingValid();
         }
         // 通道数变了要对所有在跑的调度器生效：llm.js 每次调用都会校对，这里只记一条日志便于自查

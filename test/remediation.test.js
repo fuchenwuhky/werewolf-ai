@@ -1216,3 +1216,77 @@ test('三轮 P1-4：saveActive 必须等到第一批期间安排的补写真正�
   assert.ok(fs.existsSync(file), '补写的存档必须真实存在');
   api.games.clear();
 });
+
+// ---------- 四轮审核：反例回归（附加 Key 不随迁 / 清绑定重启 / 同 Key 解锁 / 补写链） ----------
+
+test('四轮 P0：换地址重输主 Key 后，旧附加 Key 必须清空（不随迁授权）', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('migrate');
+  let saved = { apiKey: 'sk-real', baseUrl: 'https://api.example/v1', apiKeys: ['sk-extra1'], journal: false };
+  const api = new Api({ config: { get: () => saved, save(b) { const clean = { ...b }; if (typeof clean.apiKey === 'string' && clean.apiKey.includes('****')) delete clean.apiKey; saved = { ...saved, ...clean }; return saved; } }, logger: silentLogger, saveDir: dir });
+  assert.ok(api.keyBindingValid(), '初始有效');
+
+  // 换地址 + 只重输主 Key → 附加 Key 必须清空（旧 extras 从未获准用于新地址）
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://evil.example/v1', apiKey: 'sk-new' } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.deepStrictEqual(saved.apiKeys, [], '审核 P0：旧附加 Key 随迁 = 旧 Key 外带，必须清空');
+  assert.ok(api.keyBindingValid(), '主 Key 单独重绑后有效');
+});
+
+test('四轮 P1：改地址未重输 Key 后，重启也不得解除限制', async () => {
+  const dir = tmpDir('clear-bind');
+  let saved = { apiKey: 'sk-real', baseUrl: 'https://api.example/v1', journal: false };
+  const cfgObj = { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } };
+  const { Api } = require('../src/api');
+  const api = new Api({ config: cfgObj, logger: silentLogger, saveDir: dir });
+  api.auth.setEnabled(false);
+  assert.ok(api.keyBindingValid(), '启动自动绑定后初始有效');
+
+  // 攻击步骤：改 baseUrl 但不重输 Key → fail-closed 失配
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://evil.example/v1' } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.strictEqual(api.keyBindingValid(), false, '改地址未重输 Key 必须失配');
+
+  // 模拟重启：同一份配置重新构造 Api（真实攻击链的"重启"步骤）
+  const api2 = new Api({ config: cfgObj, logger: silentLogger, saveDir: dir });
+  assert.strictEqual(api2.keyBindingValid(), false, '重启不得解除 fail-closed 失配');
+  // 管理出口仍然拒绝真实建局
+  const mk = stubRes();
+  await api2.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: false } }), mk.res, '/api/games', new URLSearchParams());
+  assert.strictEqual(mk.code, 400, '绑定失配期间真实建局必须拒绝');
+});
+
+test('四轮 P1：重新输入同一把合法 Key 也能解除限制（同值重输）', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('same-key');
+  let saved = { apiKey: 'sk-keep', baseUrl: 'https://evil.example/v1', journal: false };
+  const api = new Api({ config: { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } }, logger: silentLogger, saveDir: dir });
+  // 改地址（绑定失配）后，重输同一把 Key + 新地址
+  await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://good.example/v1', apiKey: 'sk-keep' } }), stubRes().res, '/api/config', new URLSearchParams());
+  assert.ok(api.keyBindingValid(), '同值重输主 Key 必须解除限制');
+});
+
+test('四轮 P1：saveActive 循环收割三条链式补写（固定轮数会漏）', async () => {
+  const dir = tmpDir('chain');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'chain-flush', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal(); g.started = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+
+  // 模拟应用层补写模式：链条式安排三份补写（每份完成后又换掉 savePromise）
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  (async () => {
+    for (let i = 0; i < 3; i++) {
+      await sleep(80);
+      entry.savePromise = api.saveGame(entry, { force: true }).catch(() => {});
+    }
+  })();
+
+  await api.saveActive(); // 审核反例：固定两轮等待会漏掉第三份
+  const deadline = Date.now() + 2000;
+  while (!fs.existsSync(path.join(dir, 'chain-flush.json')) && Date.now() < deadline) await sleep(30);
+  assert.ok(fs.existsSync(path.join(dir, 'chain-flush.json')), '补写链必须全部落地');
+  api.games.clear();
+});
