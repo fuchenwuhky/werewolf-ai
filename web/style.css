@@ -94,7 +94,7 @@
      输入/下拉/普通按钮 ≥40；紧凑工具 ≥32；主操作 ≥44（.btn.primary）；大号 48。
      --h-icon：返回/关闭/设置/笔记等图标按钮 40×40。 ---- */
   --h-ctl: 40px;
-  --h-ctl-sm: 32px;
+  --h-ctl-sm: 40px; /* FIN-03：.btn.small 用于文本次级按钮（管理档案/图鉴入口等），按普通按钮 ≥40；纯图标紧凑工具用 .icon-btn 32-40 */
   --h-ctl-lg: 48px;
   --h-icon: 40px;
 
@@ -133,6 +133,17 @@
   --font-cn-title: 'Noto Serif SC', 'ZCOOL XiaoWei', 'Songti SC', 'SimSun', serif;
   --font-mono: 'JetBrains Mono', Consolas, 'Cascadia Mono', monospace;
   --font-body: 'PingFang SC', 'HarmonyOS Sans SC', 'Microsoft YaHei', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* ---------- 档案偏好应用（FIN-07 行4 / §8.3 外观与操作）：html[data-pref-*] 双端共享 ----------
+   特异性 html[attr] (0,1,1) > :root (0,1,0)；m.css 的 :root 局部覆盖（手机 16px 基准）也被它压过 */
+html[data-pref-font="sm"] { --fs-xs: 10px; --fs-sm: 11px; --fs-md: 12px; --fs-base: 13px; --fs-lg: 14.5px; --fs-xl: 18px; --fs-2xl: 23px; --fs-3xl: 34px; }
+html[data-pref-font="lg"] { --fs-xs: 12px; --fs-sm: 13px; --fs-md: 14.5px; --fs-base: 16px; --fs-lg: 18px; --fs-xl: 22px; --fs-2xl: 29px; --fs-3xl: 42px; }
+html[data-pref-layout="compact"] { --sp-2: 6px; --sp-3: 10px; }
+html[data-pref-layout="compact"] .stream { line-height: 1.5; }
+html[data-pref-motion="0"] *, html[data-pref-motion="0"] *::before, html[data-pref-motion="0"] *::after {
+  animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+  transition-duration: .01ms !important; scroll-behavior: auto !important;
 }
 
 /* 原生控件（下拉列表、复选框、滚动条）跟随暗色渲染。

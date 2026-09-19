@@ -377,6 +377,40 @@ function openSettingsModal() {
     body.appendChild(el('p', 'hint', '当前不在对局中。'));
   }
 
+  // 外观与操作（档案级偏好，计划 §8.3）：字号/布局/减少动态——真实开关，保存到当前档案
+  body.appendChild(el('p', 'hint', '🎨 外观与操作（档案级，保存后立即生效）'));
+  const prefBox = el('div');
+  prefBox.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin:0 0 12px;';
+  const mkSel = (id, options, value) => {
+    const sel = el('select');
+    sel.id = id;
+    for (const [val, label] of options) sel.appendChild(el('option', null, label)).value = val;
+    sel.value = value;
+    sel.addEventListener('change', onPrefControlChangeM);
+    return sel;
+  };
+  const cur = currentProfilePrefs();
+  const curFont = Number(cur.fontScale) > 1 ? 'lg' : (Number(cur.fontScale) > 0 && Number(cur.fontScale) < 1 ? 'sm' : 'std');
+  const rowF = el('label');
+  rowF.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;';
+  rowF.appendChild(el('span', null, '界面字号'));
+  rowF.appendChild(mkSel('m-pref-font', [['sm', '小'], ['std', '标准'], ['lg', '大']], curFont));
+  const rowL = el('label');
+  rowL.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;';
+  rowL.appendChild(el('span', null, '阅读布局'));
+  rowL.appendChild(mkSel('m-pref-layout', [['reading', '阅读'], ['compact', '紧凑']], cur.layout === 'compact' ? 'compact' : 'reading'));
+  const rowM = el('label');
+  rowM.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;';
+  rowM.appendChild(el('span', null, '减少动态效果'));
+  const mchk = el('input');
+  mchk.type = 'checkbox';
+  mchk.id = 'm-pref-motion';
+  mchk.checked = !!cur.reducedMotion;
+  mchk.addEventListener('change', onPrefControlChangeM);
+  rowM.appendChild(mchk);
+  prefBox.append(rowF, rowL, rowM);
+  body.appendChild(prefBox);
+
   const list = el('div', 'gear-list');
   const add = (label, fn, danger) => {
     const b = el('button', 'gear-item' + (danger ? ' danger' : ''), label);
@@ -938,10 +972,59 @@ async function loadProfiles() {
     const cur = state.profiles.find((p) => p.id === saved && !p.archivedAt);
     state.profileId = cur ? cur.id : (state.profiles.find((p) => !p.archivedAt) || {}).id || r.defaultProfileId || null;
     renderProfileStrip();
+    applyProfilePrefs(currentProfilePrefs()); // 档案级偏好跟随当前档案（FIN-07 行4）
   } catch (e) {
     state.profileId = null;
     renderProfileStrip(`档案加载失败：${e.message}`);
   }
+}
+
+/** 当前档案的偏好（无档案时回落默认值） */
+function currentProfilePrefs() {
+  const p = state.profiles.find((x) => x.id === state.profileId);
+  return (p && p.preferences) || { fontScale: 1, layout: 'reading', reducedMotion: false };
+}
+
+/** 偏好应用：html[data-pref-*] → style.css 共享变量（与桌面端同一套语义/CSS） */
+function applyProfilePrefs(prefs) {
+  const p = prefs || {};
+  const root = document.documentElement;
+  root.dataset.prefFont = Number(p.fontScale) > 1 ? 'lg' : (Number(p.fontScale) > 0 && Number(p.fontScale) < 1 ? 'sm' : 'std');
+  root.dataset.prefLayout = p.layout === 'compact' ? 'compact' : 'reading';
+  root.dataset.prefMotion = p.reducedMotion ? '0' : '1';
+  const f = document.querySelector('#m-pref-font'), l = document.querySelector('#m-pref-layout'), m = document.querySelector('#m-pref-motion');
+  if (f) f.value = root.dataset.prefFont;
+  if (l) l.value = root.dataset.prefLayout;
+  if (m) m.checked = !!p.reducedMotion;
+}
+
+/** 偏好保存：PATCH 当前档案；失败回滚应用（计划 §11 行4） */
+async function saveProfilePrefs(prefs) {
+  const prof = state.profiles.find((x) => x.id === state.profileId);
+  if (!prof) { applyProfilePrefs(currentProfilePrefs()); return; }
+  try {
+    const r = await api('PATCH', `/api/profiles/${prof.id}`, {
+      expectedRevision: prof.revision,
+      preferences: { fontScale: Number(prefs.fontScale) || 1, layout: prefs.layout || 'reading', reducedMotion: !!prefs.reducedMotion },
+    });
+    prof.preferences = r.profile.preferences;
+    prof.revision = r.profile.revision;
+    applyProfilePrefs(prof.preferences);
+  } catch (e) {
+    applyProfilePrefs(prof.preferences); // 回退
+    flash(`偏好保存失败已回退：${e.message}`);
+  }
+}
+
+function onPrefControlChangeM() {
+  const f = document.querySelector('#m-pref-font'), l = document.querySelector('#m-pref-layout'), m = document.querySelector('#m-pref-motion');
+  const prefs = {
+    fontScale: f && f.value === 'lg' ? 1.2 : (f && f.value === 'sm' ? 0.9 : 1),
+    layout: l && l.value === 'compact' ? 'compact' : 'reading',
+    reducedMotion: !!(m && m.checked),
+  };
+  applyProfilePrefs(prefs);
+  saveProfilePrefs(prefs);
 }
 
 function profileLabel(p) {
@@ -979,6 +1062,7 @@ function onSelectProfile(pid) {
   const p = state.profiles.find((x) => x.id === pid);
   // 档案昵称作为"我的昵称"默认值；用户手改过（dataset.touched）就不再覆盖
   if (p && $('#m-my-name') && !$('#m-my-name').dataset.touched) $('#m-my-name').value = p.nickname;
+  applyProfilePrefs(currentProfilePrefs()); // 切档 → 外观偏好跟着档案走
 }
 
 /** 档案管理弹层（底部）：新建/编辑/选用/归档/恢复/删除/导出/导入。每次操作后重开本层刷新列表。 */
@@ -1244,6 +1328,7 @@ function enterGame() {
   // 私人标注 V2（NOTE-04/05）：先读旧 key（迁移的输入，读不到新存储时兜底显示），
   // 再异步拉服务端标注（含旧数据一次性迁移）。拉到后 updateSeats 刷新角标。
   state.anno = { rev: 0, seats: {}, loaded: false, available: false, gameId: state.game.gameId };
+  state.annoUndo = null; // 换局不残留撤销快照
   try { state.tags = JSON.parse(localStorage.getItem(`mww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#m-flow').innerHTML = '';
   const mycard = $('#m-mycard');
@@ -1715,6 +1800,41 @@ function renderNotesListM() {
   const v = state.view;
   if (!state.anno || !state.anno.loaded) { box.appendChild(el('p', 'hint', '标注加载中…')); return; }
   if (!v || !(v.players || []).length) { box.appendChild(el('p', 'hint', '对局尚未开始，还没有可标注的座位。')); return; }
+  // 最近一次笔记撤销（§11 行11）：独立于游戏行动撤销；仅记录最近一次
+  if (state.annoUndo && state.annoUndo.seat != null) {
+    const u = el('div', 'm-note-undo');
+    u.appendChild(el('span', 'hint', `${state.annoUndo.seat} 号刚被修改`));
+    const ub = el('button', 'btn ghost small', '↩ 撤销');
+    ub.addEventListener('click', async () => {
+      const { seat, prev } = state.annoUndo;
+      state.annoUndo = null;
+      const token = state.game.playerToken || state.game.godToken;
+      try {
+        if (prev) {
+          const r = await api('PUT', `/api/games/${state.game.gameId}/annotations`, { token, expectedRevision: state.anno.rev, seats: { [seat]: prev } });
+          state.anno.rev = r.revision;
+          state.anno.seats = r.annotations.seats || {};
+        } else {
+          const r = await api('DELETE', `/api/games/${state.game.gameId}/annotations?token=${encodeURIComponent(token)}&seat=${seat}&expectedRevision=${state.anno.rev}`);
+          state.anno.rev = r.revision;
+          state.anno.seats = r.annotations.seats || {};
+        }
+      } catch (e) {
+        if (e.status === 409) {
+          try {
+            const r = await api('GET', `/api/games/${state.game.gameId}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+          } catch (_) {}
+        }
+        flash(`撤销失败：${e.message}`);
+      }
+      if (state.view) updateSeats(state.view);
+      renderNotesListM();
+    });
+    u.appendChild(ub);
+    box.appendChild(u);
+  }
   let hasAny = false;
   for (const p of [...v.players].sort((a, b) => a.seat - b.seat)) {
     const a = (state.anno.seats || {})[p.seat];
@@ -2039,10 +2159,12 @@ function seatTagSummary(seat) {
 function saveAnnotations(seat, entry) {
   const gid = state.game.gameId;
   const token = state.game.playerToken || state.game.godToken;
+  const prev = state.anno.seats[seat] ? JSON.parse(JSON.stringify(state.anno.seats[seat])) : null; // 撤销快照（§11 行11）
   return api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: state.anno.rev, seats: { [seat]: entry } })
     .then((r) => {
       state.anno.rev = r.revision;
       state.anno.seats = r.annotations.seats || {};
+      state.annoUndo = { seat, prev }; // 仅记录最近一次；撤销不复用游戏行动撤销
       if (state.view) updateSeats(state.view);
       renderNotesListM(); // 笔记页若开着，同步最新标注（FIN-10：保存不清草稿不抢焦点）
       return true;

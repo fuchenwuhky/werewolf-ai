@@ -152,8 +152,31 @@
       <!-- ======== 开局设置区：分组折叠，默认在首屏之下（FIN-04 §8.2/8.3） ======== -->
       <div class="setup-section" id="setup-section">
         <div class="setup-grid">
-          <!-- 左列：① 板子 + ② 玩家 + ③ 规则 -->
+          <!-- 左列：⓪ 外观与操作 + ① 板子 + ② 玩家 + ③ 规则 -->
           <div class="setup-col">
+            <h2 class="group-head">外观与操作 <span class="hint">档案级偏好 · 保存后立即生效并跟随档案</span></h2>
+
+            <!-- 外观与操作（FIN-07 行4）：字号/布局/减少动态，保存到当前档案 -->
+            <div class="card" id="card-appearance">
+              <div class="row2">
+                <label><span>界面字号</span>
+                  <select id="pref-font">
+                    <option value="sm">小</option>
+                    <option value="std" selected>标准</option>
+                    <option value="lg">大</option>
+                  </select>
+                </label>
+                <label><span>阅读布局</span>
+                  <select id="pref-layout">
+                    <option value="reading" selected>阅读</option>
+                    <option value="compact">紧凑</option>
+                  </select>
+                </label>
+              </div>
+              <label class="checkline"><input id="pref-motion" type="checkbox"> <span>减少动态效果（关闭过渡与动画）</span></label>
+              <div class="hint" id="pref-status">保存到当前档案；切换档案后各自生效。</div>
+            </div>
+
             <h2 class="group-head">游戏默认偏好 <span class="hint">开局后板子与规则固定，中途不可修改</span></h2>
 
             <!-- 板子 -->

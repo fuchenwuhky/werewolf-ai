@@ -234,6 +234,11 @@ async function initSetup() {
   // 玩家档案（PROF-01）：加载列表 + 绑定选择/管理入口；失败不阻塞开局（服务端会归默认档案）
   $('#profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#btn-profile-manage').addEventListener('click', openProfileManager);
+  // 外观与操作（档案级偏好）：即时生效 + 落档案（失败回退）
+  ['#pref-font', '#pref-layout', '#pref-motion'].forEach((sel) => {
+    const c = document.querySelector(sel);
+    if (c) c.addEventListener('change', onPrefControlChange);
+  });
   // 用户手改过昵称后就不再用档案昵称覆盖
   $('#my-name').addEventListener('input', () => { $('#my-name').dataset.touched = '1'; });
   loadProfiles();
@@ -836,10 +841,62 @@ async function loadProfiles() {
     const cur = state.profiles.find((p) => p.id === saved && !p.archivedAt);
     state.profileId = cur ? cur.id : (state.profiles.find((p) => !p.archivedAt) || {}).id || r.defaultProfileId || null;
     renderProfileStrip();
+    applyProfilePrefs(currentProfilePrefs()); // 档案级偏好跟随当前档案（FIN-07 行4）
   } catch (e) {
     state.profileId = null;
     renderProfileStrip(`档案加载失败：${e.message}`);
   }
+}
+
+/** 当前档案的偏好（无档案时回落默认值） */
+function currentProfilePrefs() {
+  const p = state.profiles.find((x) => x.id === state.profileId);
+  return (p && p.preferences) || { fontScale: 1, layout: 'reading', reducedMotion: false };
+}
+
+/** 偏好应用：html[data-pref-*] → style.css 共享变量（双端同一套语义） */
+function applyProfilePrefs(prefs) {
+  const p = prefs || {};
+  const root = document.documentElement;
+  root.dataset.prefFont = Number(p.fontScale) > 1 ? 'lg' : (Number(p.fontScale) > 0 && Number(p.fontScale) < 1 ? 'sm' : 'std');
+  root.dataset.prefLayout = p.layout === 'compact' ? 'compact' : 'reading';
+  root.dataset.prefMotion = p.reducedMotion ? '0' : '1';
+  // 控件回显（设置页存在时）
+  const f = document.querySelector('#pref-font'), l = document.querySelector('#pref-layout'), m = document.querySelector('#pref-motion');
+  if (f) f.value = root.dataset.prefFont;
+  if (l) l.value = root.dataset.prefLayout;
+  if (m) m.checked = !!p.reducedMotion;
+}
+
+/** 偏好保存：PATCH 当前档案；失败回滚应用并给回退说明（计划 §11 行4） */
+async function saveProfilePrefs(prefs) {
+  const prof = state.profiles.find((x) => x.id === state.profileId);
+  const status = document.querySelector('#pref-status');
+  if (!prof) { applyProfilePrefs(currentProfilePrefs()); if (status) status.textContent = '尚未加载档案，偏好未保存。'; return; }
+  try {
+    const r = await api('PATCH', `/api/profiles/${prof.id}`, {
+      expectedRevision: prof.revision,
+      preferences: { fontScale: Number(prefs.fontScale) || 1, layout: prefs.layout || 'reading', reducedMotion: !!prefs.reducedMotion },
+    });
+    prof.preferences = r.profile.preferences;
+    prof.revision = r.profile.revision;
+    applyProfilePrefs(prof.preferences);
+    if (status) status.textContent = '已保存到当前档案 ✓';
+  } catch (e) {
+    applyProfilePrefs(prof.preferences); // 回滚到档案既有值
+    if (status) status.textContent = `保存失败已回退：${e.message}`;
+  }
+}
+
+function onPrefControlChange() {
+  const f = document.querySelector('#pref-font'), l = document.querySelector('#pref-layout'), m = document.querySelector('#pref-motion');
+  const prefs = {
+    fontScale: f && f.value === 'lg' ? 1.2 : (f && f.value === 'sm' ? 0.9 : 1),
+    layout: l && l.value === 'compact' ? 'compact' : 'reading',
+    reducedMotion: !!(m && m.checked),
+  };
+  applyProfilePrefs(prefs); // 先即时生效
+  saveProfilePrefs(prefs);  // 再落档案（失败自动回退）
 }
 
 function profileLabel(p) {
@@ -906,6 +963,7 @@ function onSelectProfile(pid) {
   const p = state.profiles.find((x) => x.id === pid);
   // 档案昵称作为"我的昵称"默认值（仍可手动改，不强制同步）
   if (p && $('#my-name') && !$('#my-name').dataset.touched) $('#my-name').value = p.nickname;
+  applyProfilePrefs(currentProfilePrefs()); // 切档 → 外观偏好跟着档案走
   renderHomeProfile();
   renderTopbarIdentity();
   renderSetupDigest();
@@ -1092,6 +1150,7 @@ function enterGameScreen() {
   state.playerView = null; state.godView = null; // 清掉上一局的缓存帧，避免切换对局后渲染残留
   state.roleShown = false;
   state.anno = { rev: 0, seats: {}, loaded: false, gameId: state.game.gameId };
+  state.annoUndo = null;
   try { state.tags = JSON.parse(localStorage.getItem(`ww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#stream').innerHTML = '';
   // FIN-10：座位结构作废（换局/人数可能变化），首次渲染全量重建，之后逐座位补丁
@@ -1376,10 +1435,12 @@ function seatTagSummary(seat) {
 function saveAnnotations(seat, entry) {
   const gid = state.game.gameId;
   const token = state.game.playerToken || state.game.godToken;
+  const prev = state.anno.seats[seat] ? JSON.parse(JSON.stringify(state.anno.seats[seat])) : null; // 撤销快照（§11 行11）
   return api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: state.anno.rev, seats: { [seat]: entry } })
     .then((r) => {
       state.anno.rev = r.revision;
       state.anno.seats = r.annotations.seats || {};
+      state.annoUndo = { seat, prev }; // 仅记录最近一次；撤销不复用游戏行动撤销
       updateSeats(state.view);
       if (!$('#notes-drawer').classList.contains('hidden')) renderNotesList();
       return true;
@@ -1584,6 +1645,46 @@ function renderNotesList() {
   const v = state.view;
   if (!state.anno.loaded) { box.appendChild(el('p', 'hint', '标注加载中…')); return; }
   if (!v) { box.appendChild(el('p', 'hint', '对局尚未开始')); return; }
+  // 最近一次笔记撤销（§11 行11）：独立于游戏行动撤销；仅记录最近一次
+  if (state.annoUndo && state.annoUndo.seat != null) {
+    const u = el('div', 'pm-row current');
+    const um = el('div', 'pm-main');
+    um.appendChild(elText('div', 'pm-name', `${state.annoUndo.seat} 号刚被修改`));
+    um.appendChild(el('div', 'hint', '可撤销回修改前的内容'));
+    u.appendChild(um);
+    const uo = el('div', 'pm-ops');
+    const ub = el('button', 'btn ghost small', '↩ 撤销');
+    ub.addEventListener('click', async () => {
+      const { seat, prev } = state.annoUndo;
+      state.annoUndo = null;
+      const token = state.game.playerToken || state.game.godToken;
+      try {
+        if (prev) {
+          const r = await api('PUT', `/api/games/${state.game.gameId}/annotations`, { token, expectedRevision: state.anno.rev, seats: { [seat]: prev } });
+          state.anno.rev = r.revision;
+          state.anno.seats = r.annotations.seats || {};
+        } else {
+          const r = await api('DELETE', `/api/games/${state.game.gameId}/annotations?token=${encodeURIComponent(token)}&seat=${seat}&expectedRevision=${state.anno.rev}`);
+          state.anno.rev = r.revision;
+          state.anno.seats = r.annotations.seats || {};
+        }
+      } catch (e) {
+        if (e.status === 409) {
+          try {
+            const r = await api('GET', `/api/games/${state.game.gameId}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+          } catch (_) {}
+        }
+        alert(`撤销失败：${e.message}`);
+      }
+      updateSeats(state.view);
+      renderNotesList();
+    });
+    uo.appendChild(ub);
+    u.appendChild(uo);
+    box.appendChild(u);
+  }
   const entries = Object.entries(state.anno.seats || {})
     .filter(([, a]) => a && (a.leaning !== 'neutral' || (a.candidateRoleIds || []).length || a.claimedRoleId || a.note));
   if (!entries.length) {

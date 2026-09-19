@@ -7,6 +7,8 @@ html, body { height: 100%; overscroll-behavior: none; }
 #m-app {
   height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1;
   /* FIN-03 手机控件 token：普通控件 ≥48、主操作 ≥52（视图随支持情况用 dvh 兜动态视口） */
+  /* 计划书 §7.1：手机正文默认 16px（桌面默认 14px，见 style.css） */
+  --fs-md: 15px; --fs-base: 16px; --fs-lg: 17px;
   --hctl-m: 48px;
   --hctl-main-m: 52px;
 }
@@ -796,3 +798,6 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 主操作键（发送/确认/投票/技能确认）：≥52px 且优先占主宽（FIN-03）；次要键 ≥44（chip 档） */
 .m-keys [data-confirm] { min-height: 52px; flex: 1 1 auto; }
 .m-keys .key { min-height: 44px; }
+
+/* 笔记页顶部「最近一次撤销」行（§11 行11） */
+.m-note-undo { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); background: rgba(216,178,95,.08); border: 1px solid rgba(216,178,95,.35); border-radius: var(--r-md); }
