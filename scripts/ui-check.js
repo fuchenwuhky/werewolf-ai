@@ -646,6 +646,15 @@ class Browser {
       await b.click('#btn-flip-done');
       await sleep(1500);
       check('翻牌确认后进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
+      // 收尾：终结本段开的 Mock 局。否则它会在 P4 断言期间被 4s 存盘定时器写盘，
+      // checkResume 的"自动找回"点亮恢复卡，P4-4 的两条断言（假设无其它活局）就会误红
+      // （清场用 /api/games 也扫不到还没落盘的内存局——施工期实测踩过）。
+      await b.eval(`(async () => {
+        const h = JSON.parse(localStorage.getItem('ww_current') || 'null');
+        if (!h) return;
+        await fetch(\`/api/games/\${h.gameId}/terminate\`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: h.playerToken || h.godToken }) });
+      })()`);
+      await sleep(600);
     }
 
     // ---- 7.5 P4 断言：恢复卡片详情 / 终止后刷新 / 推送降级与重连 / 空刀拦截 ----
@@ -696,10 +705,24 @@ class Browser {
 
       // (C) P2-c 终止后刷新：不得再被当活局恢复（客户端要自愈并清掉 localStorage）
       log('\n=== P4-4 终止后刷新 ===');
+      // 先清掉前序段落（手机翻牌/完整局等）遗留的活局：checkResume 的"自动找回会话"会把
+      // 那些局点亮成恢复卡，下面的两条断言只在"无任何其它活局"的基线上成立（施工期实测踩过）
+      {
+        const allGames = await api('GET', '/api/games');
+        for (const r of (allGames.rows || [])) {
+          if (r.started && !r.finished && r.inMemory) {
+            try {
+              const t = await api('GET', `/api/games/${r.id}/tokens`);
+              await api('POST', `/api/games/${r.id}/terminate`, { token: t.player || t.god });
+            } catch (_) { /* 已结束则忽略 */ }
+          }
+        }
+      }
       await api('POST', `/api/games/${g1.gameId}/start`, { token: g1.playerToken });
       await sleep(500);
       await api('POST', `/api/games/${g1.gameId}/terminate`, { token: g1.playerToken });
       await b.goto(base + '/', 2200);
+      await sleep(400);
       const afterTerm = await b.eval(`(() => {
         const box = document.getElementById('resume-box');
         return { hidden: !box || box.classList.contains('hidden'), saved: localStorage.getItem('ww_current') };
