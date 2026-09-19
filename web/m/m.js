@@ -113,6 +113,30 @@ window.addEventListener('popstate', (e) => {
   }
 });
 
+/** Android 硬件返回桥（Capacitor 无 @capacitor/app，由 MainActivity 拦截返回键后调用）：
+ *  与 popstate 同一条返回栈——处理一层；返回 true=已消费（留在应用），false=栈空（交给系统最小化）。
+ *  计划 §10-5：关闭最上层面板 → 功能页返回（发言页签）→ 离局确认；一次返回只关一层。 */
+window.__mwwBack = function () {
+  while (backStack.length && !overlayAlive(backStack[backStack.length - 1].kind)) backStack.pop();
+  if (!backStack.length) return false;
+  const top = backStack[backStack.length - 1];
+  if (top.kind === 'game') {
+    if (state.gameTab && state.gameTab !== 'speech') { setGameTab('speech'); return true; }
+    askLeaveGame();
+    if (state.leaveAskOpen) { try { history.replaceState({ mww: backStack.length }, ''); } catch (_) {} }
+    return true;
+  }
+  if (top.veto && top.veto()) return true;
+  backStack.pop();
+  try { top.closeDom(); } catch (_) {}
+  if (top.kind === 'modal' && state.leaveAskOpen) {
+    // 关掉的是"离局确认"= 取消离局：复位标志，之后仍可再次询问（与 popstate 分支同语义）
+    state.leaveAskOpen = false;
+    try { history.replaceState({ mww: backStack.length }, ''); } catch (_) {}
+  }
+  return true;
+};
+
 function closeModalDom() { $('#m-modal').innerHTML = ''; }
 function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; $('#m-sheet').innerHTML = ''; }
 /** UI 关闭中部弹窗（X / 取消 / 按钮） */
