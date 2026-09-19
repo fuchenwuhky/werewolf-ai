@@ -1,6 +1,6 @@
 # 验收结果（C01-C08 / R01-R08 / V01-V16）
 
-构建：commit cf024ab · productVersion 1.5.2 · androidVersionCode 9 · 2026-09-19
+构建：commit bd99743 · productVersion 1.5.2 · androidVersionCode 9 · 2026-09-19
 环境：Windows 10.0.26200 / Node 24.14 / Chrome(无头+IAB) / MuMu 12 (Android 12, PGBM10, adb 16384)
 
 ## 缓存与升级（FIN-01）
@@ -44,6 +44,7 @@
 | V09 | ✅ | ui:check 12 人局 + 320px 截图无溢出；长昵称弹层全名（M 报告） |
 | V10 | ✅ | FIN-03 token + ui:check 触区/双击检查；css.test 禁 ！important 冲突 |
 | V11 | ✅(部分) | 座位增量渲染+滚动锚点（D/M 报告+桌面截图）；500/2000/6000 事件压测专项**未执行**，如实标记 |
+| 补充 | ✅ | ui:check --full --strict 全绿（exit 0，P4-4 基线清场修复后）；npm test 601/601 |
 | V12 | ✅(抽样) | ui:check 推送降级/终止自愈；断线重连专项未系统压测，如实标记 |
 | V13 | ✅ | ui:check 结算/总结/复盘如实标注（Mock 终止不伪装） |
 | V14 | ✅(模拟器) | V14-mumu-launcher.png（v2 图标）+ EXE 资源段逐帧一致 + 首页/关于同源标识；**物理真机项待验** |
