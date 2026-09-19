@@ -498,3 +498,85 @@ html, body { height: 100%; overscroll-behavior: none; }
 .setinfo .set-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); font-size: var(--fs-sm); }
 .setinfo .set-row span { flex: none; color: var(--muted); }
 .setinfo .set-row b { color: var(--gold-bright); font-weight: 600; text-align: right; word-break: break-all; }
+
+/* ============================================================
+   玩家档案（PROF-01）+ 私人标注 V2（NOTE-04）：底部弹层与配套
+   ============================================================ */
+
+/* 开局设置页的"我的档案"行：选择器占满，管理按钮靠右（与上方 .row2 的两列节奏区分开） */
+.m-profile-row { display: flex; align-items: flex-end; gap: var(--sp-3); margin-bottom: var(--sp-4); }
+.m-profile-row label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; color: var(--text-dim); font-size: var(--fs-md); }
+.m-profile-row .btn { flex: none; min-height: 40px; }
+
+/* 底部弹层：贴底、圆角顶、内部滚动、按钮常驻（拇指位）。z-index 85：
+   高于全屏横幅/翻牌（80/95 中 95 是 m-flash 不需要被盖），低于 #m-modal 的 90 ——
+   409 冲突弹窗（走 #m-modal）要压在编辑器之上。 */
+#m-sheet .m-sheet-mask {
+  position: fixed; inset: 0; z-index: 85;
+  background: radial-gradient(ellipse at center, rgba(20,10,25,.6), rgba(3,2,6,.8));
+  display: flex; align-items: flex-end; justify-content: center;
+}
+.m-sheet {
+  width: 100%; max-width: 640px;
+  /* dvh 不被支持时退回 85vh；支持时用 min(85dvh, 100%) 兜住极端视口 */
+  max-height: 85vh; max-height: min(85dvh, 100%);
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, #101827, #0a0f1c);
+  border: 1px solid rgba(201,162,39,.4); border-bottom: none;
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -12px 32px rgba(0,0,0,.6);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  animation: mSheetUp .18s ease;
+}
+@keyframes mSheetUp { from { transform: translateY(36px); opacity: .35; } }
+.m-sheet-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4); border-bottom: 1px solid var(--gold-dim);
+}
+.m-sheet-head h3 {
+  margin: 0; font-family: var(--font-cn-title); color: var(--gold-bright);
+  font-size: var(--fs-lg); letter-spacing: 1px; overflow-wrap: anywhere;
+}
+.m-sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--sp-3) var(--sp-4); }
+.m-sheet-foot { flex: none; padding: var(--sp-2) var(--sp-4) var(--sp-3); border-top: 1px solid var(--gold-dim); background: #0b1120; }
+.m-sheet-foot .btnrow { margin: 0; flex-wrap: nowrap; }
+.m-sheet-foot .btn { flex: 1 1 0; min-height: 44px; justify-content: center; }
+.m-sheet h4 { margin: var(--sp-2) 0 var(--sp-1); color: var(--gold); font-size: var(--fs-md); letter-spacing: 1px; }
+
+/* 弹层内表单：镜像 style.css 的 .modal .mbody 控件样式（style.css 不许动，只能在这里补） */
+.m-sheet .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--sp-2) 0 var(--sp-3); }
+.m-sheet label {
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  margin: 0 0 var(--sp-3); color: var(--text-dim); font-size: var(--fs-md); line-height: 1.5;
+}
+.m-sheet input:not([type=checkbox]):not([type=radio]),
+.m-sheet select,
+.m-sheet textarea {
+  width: 100%; margin: 0; padding: 0 var(--sp-3); min-height: var(--h-ctl);
+  border: 1px solid var(--line); border-radius: var(--r-sm);
+  background: linear-gradient(180deg, rgba(5, 8, 16, .92), rgba(9, 14, 26, .78));
+  color: var(--text); font-size: var(--fs-base); font-family: inherit;
+  box-shadow: var(--inset-field);
+}
+.m-sheet textarea { height: auto; min-height: 84px; padding: var(--sp-2) var(--sp-3); line-height: 1.6; resize: vertical; }
+.m-sheet input:focus, .m-sheet select:focus, .m-sheet textarea:focus {
+  outline: none; border-color: var(--gold); background-color: rgba(13, 20, 38, .95);
+  box-shadow: var(--inset-field), var(--ring-soft);
+}
+.m-sheet input::placeholder, .m-sheet textarea::placeholder { color: #616a89; }
+.m-sheet select {
+  appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 34px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23d8b25f' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center;
+}
+
+/* 弹层里的档案列表复用 style.css 的 .pm-*；高度交给 .m-sheet-body 滚动 */
+#m-sheet .pm-list { max-height: none; }
+
+/* 标注摘要角标（NOTE-04）：座位号下方一枚小金签。座位列只有 52px 宽：
+   单行截断，全文点开座位看。真身公开后由角色 emoji 覆盖，不再渲染。 */
+.srow .tag-pill {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 9px; line-height: 1.6; padding: 0 5px; border-radius: var(--r-pill);
+  color: #e6c876; background: rgba(60,45,14,.55); border: 1px solid rgba(201,162,39,.4);
+}

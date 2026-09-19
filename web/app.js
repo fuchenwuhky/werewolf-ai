@@ -50,7 +50,9 @@ async function api(method, url, body) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401 && data.auth === 'pairing') showPairingGate(); // LAN 模式未配对（SEC-01）
-    throw new Error(data.error || `HTTP ${res.status}`);
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status; // 409 并发冲突等按状态码精确判定（错误文案不可靠）
+    throw err;
   }
   return data;
 }
@@ -1097,7 +1099,7 @@ function saveAnnotations(seat, entry) {
       return true;
     })
     .catch((e) => {
-      if (String(e.message).includes('409')) {
+      if (e.status === 409) {
         // 并发冲突（方案 §4.5）：另一窗口改过。给出"载入最新并保留我这版"的人工合并路径，绝不静默覆盖。
         const keep = entry; // 本地编辑的这份
         const box = el('div');

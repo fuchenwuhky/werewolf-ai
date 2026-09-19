@@ -17,6 +17,10 @@ const state = {
   stream: null, streamWatchdog: null, lastStreamAt: 0,
   roleShown: false, seatNames: {}, tags: {}, lastNightStep: null,
   speakingSeat: 0,
+  // 玩家档案（PROF-01）：本机档案列表 + 当前选中 id（开局随 POST /api/games 上送）
+  profiles: [], profileId: null,
+  // 私人标注 V2（NOTE-04）：enterGame 时初始化；loaded=已拉取过，available=服务端可读写
+  anno: null,
 };
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
 
@@ -25,7 +29,9 @@ async function api(method, url, body) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     if (res.status === 401 && data.auth === 'pairing') showPairingGate(); // LAN 模式未配对（SEC-01）
-    throw new Error(data.error || `HTTP ${res.status}`);
+    const err = new Error(data.error || `HTTP ${res.status}`);
+    err.status = res.status; // 档案/标注的 409 并发冲突靠它精确识别（服务端文案里未必含"409"字样）
+    throw err;
   }
   return data;
 }
@@ -106,6 +112,11 @@ async function init() {
   $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
   $('#m-flip-card').addEventListener('click', () => $('#m-flip-card').classList.add('flipped'));
   $('#m-flip-done').addEventListener('click', () => $('#m-flip').classList.add('hidden'));
+  // 玩家档案（PROF-01）：选择 + 管理 + "我的昵称"手改标记。加载失败不阻塞开局（服务端会归默认档案）
+  $('#m-profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
+  $('#m-profile-manage').addEventListener('click', openProfileManager);
+  $('#m-my-name').addEventListener('input', () => { $('#m-my-name').dataset.touched = '1'; });
+  loadProfiles();
   tryResume();
   window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
 }
@@ -690,6 +701,249 @@ function savedSeatChoice() {
   try { return localStorage.getItem('ww_seat') || 'random'; } catch (_) { return 'random'; } // 与桌面版共用同一个键
 }
 
+// ---------------- 底部弹层（手机习惯的交互容器） ----------------
+// 中部 modal（#m-modal）适合短内容；档案管理（PROF-01）与私人标注编辑（NOTE-04）
+// 用贴底弹层：拇指够得着按钮、输入框离软键盘近，长表单也不挤在屏幕中央。
+// 结构约束：max-height: min(85dvh, 100%)，正文（.m-sheet-body）内部滚动，
+// 保存/取消固定在 .m-sheet-foot —— 键盘弹出时按钮也不被顶走。
+let sheetViewportCleanup = null;
+function openSheet(title, bodyEl, footEl, opts) {
+  const o = opts || {};
+  const root = $('#m-sheet');
+  if (!root) return null;
+  if (sheetViewportCleanup) sheetViewportCleanup(); // 换页前先摘掉上一层的视口监听（避免叠加）
+  root.innerHTML = '';
+  const mask = el('div', 'm-sheet-mask');
+  const sheet = el('div', 'm-sheet');
+  const head = el('div', 'm-sheet-head');
+  const t = el('h3'); t.textContent = title || ''; // 标题可能拼座位昵称：textContent，不进 innerHTML
+  head.appendChild(t);
+  const close = el('button', 'btn ghost small', '✕');
+  close.addEventListener('click', () => (o.onClose ? o.onClose() : closeSheet()));
+  head.appendChild(close);
+  const body = el('div', 'm-sheet-body');
+  if (bodyEl) body.appendChild(bodyEl);
+  sheet.append(head, body);
+  if (footEl) { const foot = el('div', 'm-sheet-foot'); foot.appendChild(footEl); sheet.appendChild(foot); }
+  mask.appendChild(sheet);
+  mask.addEventListener('click', (e) => { if (e.target === mask) (o.onClose ? o.onClose() : closeSheet()); });
+  root.appendChild(mask);
+  // 软键盘遮挡补偿（简单实现）：输入框聚焦或视口被键盘压矮时，把焦点元素滚进可视区
+  const revealFocused = () => {
+    const ae = document.activeElement;
+    if (ae && sheet.contains(ae) && ae.scrollIntoView) setTimeout(() => ae.scrollIntoView({ block: 'nearest' }), 220);
+  };
+  sheet.addEventListener('focusin', revealFocused);
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', revealFocused);
+  sheetViewportCleanup = () => {
+    if (window.visualViewport) window.visualViewport.removeEventListener('resize', revealFocused);
+    sheetViewportCleanup = null;
+  };
+  return sheet;
+}
+function closeSheet() {
+  if (sheetViewportCleanup) sheetViewportCleanup();
+  $('#m-sheet').innerHTML = '';
+}
+
+// ---------------- 玩家档案（PROF-01，与桌面端同一套 API） ----------------
+// 本机多档案：战绩/笔记/经验池按档案隔离；API 配置是安装级的，切换档案不动它。
+// 唯一身份是 UUID，昵称允许重名；归档替代删除，删除只对已归档档案开放（服务端二次校验）。
+const AVATAR_EMOJI = { scholar: '🎓', hunter: '🏹', seer: '🔮', wolf: '🐺', witch: '🧪', night: '🌙', candle: '🕯️', mask: '🎭' };
+
+async function loadProfiles() {
+  try {
+    const r = await api('GET', '/api/profiles');
+    state.profiles = r.profiles || [];
+    let saved = null;
+    try { saved = localStorage.getItem('ww_profile_id'); } catch (_) {}
+    // 只恢复"存在且未归档"的选中 id；归档/删除过的档案不能再被悄悄选中
+    const cur = state.profiles.find((p) => p.id === saved && !p.archivedAt);
+    state.profileId = cur ? cur.id : (state.profiles.find((p) => !p.archivedAt) || {}).id || r.defaultProfileId || null;
+    renderProfileStrip();
+  } catch (e) {
+    state.profileId = null;
+    renderProfileStrip(`档案加载失败：${e.message}`);
+  }
+}
+
+function profileLabel(p) {
+  return `${AVATAR_EMOJI[p.avatarId] || '👤'} ${p.nickname}${p.archivedAt ? '（已归档）' : ''}`;
+}
+
+function renderProfileStrip(err) {
+  const sel = $('#m-profile-select');
+  if (!sel) return;
+  sel.innerHTML = '';
+  for (const p of state.profiles.filter((x) => !x.archivedAt)) {
+    const o = el('option'); o.value = p.id; o.textContent = profileLabel(p); // 昵称不可信：textContent
+    sel.appendChild(o);
+  }
+  if (state.profileId) sel.value = state.profileId;
+  sel.disabled = !state.profiles.length;
+  if (err) sel.title = err; else sel.removeAttribute('title');
+}
+
+function onSelectProfile(pid) {
+  state.profileId = pid;
+  try { localStorage.setItem('ww_profile_id', pid); } catch (_) {}
+  const p = state.profiles.find((x) => x.id === pid);
+  // 档案昵称作为"我的昵称"默认值；用户手改过（dataset.touched）就不再覆盖
+  if (p && $('#m-my-name') && !$('#m-my-name').dataset.touched) $('#m-my-name').value = p.nickname;
+}
+
+/** 档案管理弹层（底部）：新建/编辑/选用/归档/恢复/删除/导出/导入。每次操作后重开本层刷新列表。 */
+function openProfileManager() {
+  const body = el('div');
+  body.appendChild(el('p', 'hint', '同一台设备可以建多个玩家档案：战绩、笔记、AI 经验池互相隔离。API 配置是整台设备共享的，切换档案不会改动它。档案的唯一身份是 UUID，昵称允许重名。'));
+  const list = el('div', 'pm-list');
+  const rows = [...state.profiles].sort((a, b) => (a.archivedAt ? 1 : 0) - (b.archivedAt ? 1 : 0) || String(b.lastUsedAt || '').localeCompare(String(a.lastUsedAt || '')));
+  const usableCount = state.profiles.filter((p) => !p.archivedAt).length;
+  for (const p of rows) {
+    const row = el('div', 'pm-row' + (p.archivedAt ? ' archived' : '') + (p.id === state.profileId ? ' current' : ''));
+    const main = el('div', 'pm-main');
+    const name = elText('div', 'pm-name', profileLabel(p) + (p.id === state.profileId ? '（当前）' : ''));
+    main.appendChild(name);
+    main.appendChild(elText('div', 'hint', `创建于 ${(p.createdAt || '').slice(0, 10)}${p.archivedAt ? ` · 归档于 ${(p.archivedAt || '').slice(0, 10)}` : ''}`));
+    row.appendChild(main);
+    const ops = el('div', 'pm-ops');
+    const op = (label, fn, cls = 'btn ghost small') => {
+      const b = el('button', cls, label);
+      b.addEventListener('click', () => fn(p));
+      ops.appendChild(b);
+    };
+    if (!p.archivedAt) {
+      op('选用', (pp) => { onSelectProfile(pp.id); renderProfileStrip(); openProfileManager(); }, 'btn small');
+    }
+    op('编辑', (pp) => openProfileEdit(pp));
+    if (!p.archivedAt) {
+      op('归档', async (pp) => {
+        if (usableCount <= 1) { alert('最后一个可用档案不能归档（可先新建一个）'); return; }
+        if (!confirm(`归档「${pp.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
+        try {
+          await api('PATCH', `/api/profiles/${pp.id}`, { expectedRevision: pp.revision, archive: true });
+          await loadProfiles(); openProfileManager();
+        } catch (e) { alert(`归档失败：${e.message}`); }
+      });
+    } else {
+      op('恢复', async (pp) => {
+        try {
+          await api('PATCH', `/api/profiles/${pp.id}`, { expectedRevision: pp.revision, restore: true });
+          await loadProfiles(); openProfileManager();
+        } catch (e) { alert(`恢复失败：${e.message}`); }
+      });
+      op('删除…', async (pp) => {
+        if (!confirm(`彻底删除「${pp.nickname}」？\n\n其战绩与笔记将进入回收区（本期不自动清空）。\n建议先点「导出」留一份备份。`)) return;
+        try {
+          await api('DELETE', `/api/profiles/${pp.id}`);
+          if (state.profileId === pp.id) { state.profileId = null; try { localStorage.removeItem('ww_profile_id'); } catch (_) {} }
+          await loadProfiles(); openProfileManager();
+        } catch (e) { alert(`删除失败：${e.message}`); }
+      }, 'btn small danger');
+    }
+    op('导出', (pp) => { window.open(`/api/profiles/${pp.id}/export`, '_blank', 'noopener'); });
+    row.appendChild(ops);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+  body.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
+  const foot = el('div', 'btnrow');
+  const mk = el('button', 'btn', '＋ 新建档案');
+  mk.addEventListener('click', () => openProfileEdit(null));
+  foot.appendChild(mk);
+  const imp = el('button', 'btn ghost', '📥 导入');
+  imp.addEventListener('click', openProfileImport);
+  foot.appendChild(imp);
+  openSheet('👤 我的档案', body, foot);
+}
+
+/** 新建/编辑档案：在同一底部弹层里换页，保存后回列表（与桌面端同一套字段与校验） */
+function openProfileEdit(existing) {
+  const body = el('div');
+  const nameL = el('label');
+  nameL.appendChild(el('span', null, '昵称（1–20 字）'));
+  const nameI = el('input'); nameI.maxLength = 20; nameI.value = existing ? existing.nickname : '';
+  nameL.appendChild(nameI);
+  body.appendChild(nameL);
+
+  body.appendChild(el('div', 'hint', '头像（内置 8 选 1，仅作区分，不上传图片）'));
+  const av = el('div', 'chip-row');
+  let avatarId = existing ? existing.avatarId : 'scholar';
+  for (const [aid, emoji] of Object.entries(AVATAR_EMOJI)) {
+    const c = el('button', 'chip' + (aid === avatarId ? ' sel' : ''), emoji);
+    c.type = 'button';
+    c.addEventListener('click', () => { avatarId = aid; [...av.children].forEach((x) => x.classList.remove('sel')); c.classList.add('sel'); });
+    av.appendChild(c);
+  }
+  body.appendChild(av);
+
+  const bioL = el('label');
+  bioL.appendChild(el('span', null, '简介（选填，最多 100 字）'));
+  const bioI = el('textarea'); bioI.maxLength = 100; bioI.rows = 2; bioI.value = existing ? (existing.bio || '') : '';
+  bioL.appendChild(bioI);
+  body.appendChild(bioL);
+
+  const err = el('p', 'hint'); err.style.color = '#ff8080';
+  body.appendChild(err);
+
+  const foot = el('div', 'btnrow');
+  const back = el('button', 'btn ghost', '返回');
+  back.addEventListener('click', () => openProfileManager());
+  foot.appendChild(back);
+  const go = el('button', 'btn primary', existing ? '保存' : '创建');
+  go.addEventListener('click', async () => {
+    const nick = nameI.value.trim();
+    if (!nick) { err.textContent = '昵称不能为空'; return; }
+    go.disabled = true;
+    try {
+      if (existing) await api('PATCH', `/api/profiles/${existing.id}`, { expectedRevision: existing.revision, nickname: nick, avatarId, bio: bioI.value.trim() });
+      else {
+        const r = await api('POST', '/api/profiles', { nickname: nick, avatarId, bio: bioI.value.trim() });
+        onSelectProfile(r.profile.id); // 新建即选用
+      }
+      await loadProfiles();
+      openProfileManager();
+    } catch (e) {
+      go.disabled = false;
+      if (e.status === 409) err.textContent = '档案刚被别处修改过（另一窗口？），请返回后重新进入再试';
+      else err.textContent = e.message;
+    }
+  });
+  foot.appendChild(go);
+  openSheet(existing ? '✏️ 编辑档案' : '✨ 新建档案', body, foot);
+}
+
+/** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
+function openProfileImport() {
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = '.json,application/json';
+  inp.addEventListener('change', async () => {
+    const f = inp.files && inp.files[0];
+    if (!f) return;
+    let pkg = null;
+    try { pkg = JSON.parse(await f.text()); } catch (_) { alert('文件不是合法 JSON'); return; }
+    let pv;
+    try { pv = await api('POST', '/api/profiles/import/preview', { package: pkg }); } catch (e) { alert(`包校验失败：${e.message}`); return; }
+    const ok = confirm(
+      `导入预览（尚未写入任何数据）：\n\n` +
+      `档案：${pv.preview.nickname}（将创建为「${pv.preview.nickname}（导入）」新档案）\n` +
+      `已结束对局：${pv.preview.games} 局（ID 会重新生成，不覆盖现有对局）\n` +
+      `笔记：${pv.preview.notes} 份\n\n` +
+      `进行中的对局不会包含在包内。确认导入？`);
+    if (!ok) return;
+    try {
+      const r = await api('POST', '/api/profiles/import', { package: pkg });
+      await loadProfiles();
+      onSelectProfile(r.profileId);
+      renderProfileStrip();
+      openProfileManager();
+      alert(`导入完成：${r.imported} 局已归入新档案`);
+    } catch (e) { alert(`导入失败：${e.message}`); }
+  });
+  inp.click();
+}
+
 async function startGame() {
   $('#m-err').textContent = '';
   try {
@@ -719,6 +973,8 @@ async function startGame() {
       rules: state.rules, players, mock: useMock,
     };
     if (randomSeat) { body.mySeat = 'random'; body.myName = humanName; } // 座位由服务端抽签
+    // 对局归属固化（PROF-02）：开局即锁定到所选档案；未加载出档案时不带字段（服务端归默认档案）
+    if (state.profileId) body.profileId = state.profileId;
     try { localStorage.setItem('ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
     const created = await api('POST', '/api/games', body);
     state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat };
@@ -745,9 +1001,13 @@ function enterGame() {
   showScreen('m-game');
   state.playerAfter = 0; state.roleShown = false; state.lastNightStep = null;
   state.speakingSeat = 0;
+  // 私人标注 V2（NOTE-04/05）：先读旧 key（迁移的输入，读不到新存储时兜底显示），
+  // 再异步拉服务端标注（含旧数据一次性迁移）。拉到后 updateSeats 刷新角标。
+  state.anno = { rev: 0, seats: {}, loaded: false, available: false, gameId: state.game.gameId };
   try { state.tags = JSON.parse(localStorage.getItem(`mww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
   $('#m-flow').innerHTML = '';
   startPolling();
+  initAnnotations();
 }
 
 function startPolling() {
@@ -955,7 +1215,7 @@ async function resumePausedGame() {
   try {
     const r = await api('POST', `/api/games/${g.gameId}/resume`, { token: g.playerToken || g.godToken });
     state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
-    localStorage.setItem('ww_current', JSON.stringify(state.game));
+    localStorage.setItem('mww_current', JSON.stringify(state.game)); // 本端句柄 key 是 mww_current（曾误写 ww_current，恢复后句柄丢失）
     state.playerAfter = 0;
     $('#m-flow').innerHTML = '';
     const box = $('#m-paused-banner');
@@ -1117,12 +1377,22 @@ function updateSeats(v) {
       rc.style.color = rr.color;
       s.appendChild(rc);
     } else {
-      const tag = state.tags[p.seat];
-      const tagR = tag && roleInfo(tag);
-      if (tagR) {
-        const b = el('span', 'b l', '🏷');
-        b.style.color = tagR.color;
-        s.appendChild(b);
+      // 我的标注角标（NOTE-04）：倾向中文 · 首个候选身份 emoji+名。
+      // 真身公开后走上面分支由真身覆盖，不重复显示。
+      const sum = seatTagSummary(p.seat);
+      if (sum) {
+        const pill = el('span', 'tag-pill', `🏷${escapeHtml(sum)}`);
+        pill.title = '我的私人笔记摘要（AI 看不到）';
+        s.appendChild(pill);
+      } else {
+        // 旧格式兜底（无归属档案的旧局尚未迁移成功时）：保留旧 🏷 显示
+        const tag = state.tags[p.seat];
+        const tagR = tag && roleInfo(tag);
+        if (tagR) {
+          const b = el('span', 'b l', '🏷');
+          b.style.color = tagR.color;
+          s.appendChild(b);
+        }
       }
     }
     s.appendChild(el('div', 'nm', escapeHtml(p.name)));
@@ -1286,7 +1556,260 @@ function possibleRolesFor(v, seat) {
   return out;
 }
 
+// ---------------- 私人标注 V2（NOTE-04/05，与桌面端同一套 API 与语义） ----------------
+// 三层信息各司其职：候选身份（我还不确定）、自称身份（TA 说自己是谁）、倾向+把握（我的综合判断）。
+// 合法性判断统一走 window.WWAnnotationsModel（web/shared/annotations-model.js，与 Node 侧同一套白名单）；
+// 持久化在服务端档案目录（/api/games/:gid/annotations），带 revision 乐观并发；AI 完全不可见。
+const AM = () => window.WWAnnotationsModel;
+
+/** 进局初始化：① 旧 mww_tags_<gid>（{seat: roleId}）一次性迁移进新存储；② 拉取本局标注 */
+async function initAnnotations() {
+  const gid = state.game.gameId;
+  const token = state.game.playerToken || state.game.godToken;
+  // --- 迁移（NOTE-05）：旧格式只在这里读一次；服务端已有任何标注就不迁移，避免覆盖 ---
+  let legacy = null;
+  try { legacy = JSON.parse(localStorage.getItem(`mww_tags_${gid}`)) || null; } catch (_) {}
+  if (legacy && Object.keys(legacy).length) {
+    try {
+      const cur = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+      const hasAny = cur.annotations && Object.keys(cur.annotations.seats || {}).length > 0;
+      if (!hasAny) {
+        // roleId → 倾向：狼队身份 → lean_wolf，其余有阵营信息的 → lean_good；把握一律 low（旧数据本就是猜的）
+        const seats = {};
+        for (const [seat, rid] of Object.entries(legacy)) {
+          const r = state.meta.roles && state.meta.roles[rid];
+          seats[seat] = AM().normalizeSeatAnnotation({
+            candidateRoleIds: [rid],
+            leaning: r && r.team === 'wolf' ? 'lean_wolf' : (r && r.team ? 'lean_good' : 'neutral'),
+            confidence: 'low',
+            note: '（旧版身份标记自动迁移）',
+          });
+        }
+        const put = await api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: cur.revision, seats });
+        state.anno.rev = put.revision;
+        state.anno.seats = put.annotations.seats;
+      }
+      localStorage.removeItem(`mww_tags_${gid}`); // 迁移完成（或服务端已有标注）即清：新存储是唯一真源
+      state.tags = {};
+    } catch (_) { /* 无归属档案的旧局（404）或离线：保留本地旧格式继续显示，不阻塞对局 */ }
+  }
+  // --- 常规拉取 ---
+  try {
+    const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+    state.anno.rev = r.revision;
+    state.anno.seats = r.annotations.seats || {};
+    state.anno.available = true;
+  } catch (_) { /* 旧局无归属档案（404）：标注功能降级为旧格式本地标记，不阻塞对局 */ }
+  state.anno.loaded = true;
+  if (state.view) updateSeats(state.view); // 角标按最新标注重画
+}
+
+/** 座位角标文案：倾向中文 · 首个候选身份 emoji+名（与桌面端 seatTagSummary 同一规则） */
+function seatTagSummary(seat) {
+  const A_ = AM();
+  const a = state.anno && state.anno.seats && state.anno.seats[seat];
+  if (!a || !A_) return null;
+  if ((a.leaning || 'neutral') === 'neutral' && !(a.candidateRoleIds || []).length && !a.claimedRoleId) return null;
+  const parts = [];
+  if (a.leaning && a.leaning !== 'neutral') parts.push(A_.LEANING_CN[a.leaning] || a.leaning);
+  const rid = (a.candidateRoleIds && a.candidateRoleIds[0]) || a.claimedRoleId;
+  const r = rid && state.meta.roles && state.meta.roles[rid];
+  if (r) parts.push(`${r.emoji}${r.name}`);
+  return parts.join(' · ') || null;
+}
+
+/** 保存一座位标注：expectedRevision=当前 revision。成功刷新角标；409 弹人工合并，绝不静默覆盖 */
+function saveAnnotations(seat, entry) {
+  const gid = state.game.gameId;
+  const token = state.game.playerToken || state.game.godToken;
+  return api('PUT', `/api/games/${gid}/annotations`, { token, expectedRevision: state.anno.rev, seats: { [seat]: entry } })
+    .then((r) => {
+      state.anno.rev = r.revision;
+      state.anno.seats = r.annotations.seats || {};
+      if (state.view) updateSeats(state.view);
+      return true;
+    })
+    .catch((e) => {
+      if (e.status === 409 || String(e.message).includes('409') || /另一窗口/.test(e.message)) {
+        // 并发冲突：另一窗口更新过。给"载入最新并保留我这份"的人工合并路径，绝不静默覆盖。
+        const keep = entry; // 本地正在编辑的这份
+        const box = el('div');
+        box.appendChild(el('p', null, '⚠ 另一个窗口更新了笔记（版本冲突）。'));
+        box.appendChild(el('p', 'hint', '可载入最新笔记（保留你正在编辑的这一个座位的修改），或放弃本次修改。'));
+        const br = el('div', 'btnrow');
+        const merge = el('button', 'btn', '载入最新并保留我这份');
+        merge.addEventListener('click', async () => {
+          merge.disabled = true;
+          try {
+            const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+            $('#m-modal').innerHTML = '';
+            const okFlag = await saveAnnotations(seat, keep); // 以最新 revision 重放这一座位的修改
+            if (okFlag) closeSheet();
+          } catch (_) { alert('合并保存仍失败，请稍后重试'); merge.disabled = false; }
+        });
+        const discard = el('button', 'btn ghost', '放弃');
+        discard.addEventListener('click', async () => {
+          discard.disabled = true;
+          try {
+            const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+          } catch (_) { /* 拉不下来就保持内存现状 */ }
+          $('#m-modal').innerHTML = '';
+          closeSheet();
+          if (state.view) updateSeats(state.view);
+        });
+        br.append(merge, discard);
+        box.appendChild(br);
+        $('#m-modal').innerHTML = ''; // 中部 modal 压在底部弹层（z-index 更高）之上
+        openModal(box);
+      } else {
+        // 其它失败：底部弹层不关，草稿保留在输入框，把错误写在弹层里
+        const errBox = document.getElementById('m-anno-err');
+        if (errBox) errBox.textContent = `保存失败：${e.message}（草稿未丢失）`;
+        else alert(`保存失败：${e.message}`);
+      }
+      return false;
+    });
+}
+
+/** 标注编辑器（NOTE-04）：底部弹层。倾向/把握/候选（≤3）/自称/笔记/依据，保存取消常驻底部 */
 function openTagModal(seat) {
+  const v = state.view;
+  // 无归属档案的旧局（服务端 404）：退回旧版本地标记，保持可用可读（NOTE-05）
+  if (!state.anno || !state.anno.available) return openLegacyTagModal(seat);
+  const A_ = AM();
+  if (!A_) return openLegacyTagModal(seat); // 共享模型未加载（离线缓存旧包）时的兜底
+  const roles = possibleRolesFor(v, seat); // 仍可能的身份（沿用现有逻辑）
+  const cur = state.anno.seats[seat] || {};
+  const blank = () => ({
+    leaning: cur.leaning || 'neutral',
+    candidateRoleIds: [...(cur.candidateRoleIds || [])],
+    claimedRoleId: cur.claimedRoleId || null,
+    confidence: cur.confidence || 'low',
+    note: cur.note || '',
+    evidenceSeq: cur.evidenceSeq || null,
+    day: cur.day || (v ? v.day : null),
+    phase: cur.phase || (v ? v.phase : null),
+  });
+  const draft = blank();
+  const dirty = () => JSON.stringify(draft) !== JSON.stringify(blank());
+
+  const body = el('div');
+  const pname = (v.players.find((p) => p.seat === seat) || {}).name || '';
+  const intro = el('p', 'hint');
+  intro.textContent = `${seat}号 ${pname} · 只是你的推理笔记，AI 看不到；身份已公开的座位会自动显示真身。`;
+  body.appendChild(intro);
+
+  // ① 倾向 + ② 把握
+  body.appendChild(el('h4', null, '倾向判断'));
+  const leanRow = el('div', 'chip-row');
+  for (const lv of A_.LEANINGS) {
+    const c = el('button', 'chip' + (draft.leaning === lv ? ' sel' : ''), A_.LEANING_CN[lv]);
+    c.type = 'button';
+    c.addEventListener('click', () => { draft.leaning = lv; [...leanRow.children].forEach((x) => x.classList.remove('sel')); c.classList.add('sel'); });
+    leanRow.appendChild(c);
+  }
+  body.appendChild(leanRow);
+  const confRow = el('div', 'chip-row');
+  for (const cv of ['low', 'medium', 'high']) {
+    const c = el('button', 'chip' + (draft.confidence === cv ? ' sel' : ''), `${A_.CONFIDENCE_CN[cv]}把握`);
+    c.type = 'button';
+    c.addEventListener('click', () => { draft.confidence = cv; [...confRow.children].forEach((x) => x.classList.remove('sel')); c.classList.add('sel'); });
+    confRow.appendChild(c);
+  }
+  body.appendChild(confRow);
+
+  // ③ 候选身份（≤3）：只列"仍可能"的身份；再点一次取消
+  body.appendChild(el('h4', null, `候选身份（最多 ${A_.MAX_CANDIDATES} 个）`));
+  const candRow = el('div', 'chip-row');
+  for (const rid of roles) {
+    const r = roleInfo(rid);
+    const sel = () => draft.candidateRoleIds.includes(rid);
+    const c = el('button', 'chip' + (sel() ? ' sel' : ''), `${r.emoji} ${r.name}`);
+    c.type = 'button';
+    c.addEventListener('click', () => {
+      if (sel()) draft.candidateRoleIds = draft.candidateRoleIds.filter((x) => x !== rid);
+      else { if (draft.candidateRoleIds.length >= A_.MAX_CANDIDATES) return; draft.candidateRoleIds.push(rid); }
+      c.classList.toggle('sel');
+    });
+    candRow.appendChild(c);
+  }
+  body.appendChild(candRow);
+
+  // ④ 自称身份（TA 声称的，不等于你信的）
+  body.appendChild(el('h4', null, '自称身份（TA 声称的，不一定信）'));
+  const claimSel = el('select');
+  claimSel.appendChild(el('option', null, '（未声称）')).value = '';
+  for (const rid of roles) {
+    const r = roleInfo(rid);
+    claimSel.appendChild(el('option', null, `${r.emoji} ${r.name}`)).value = rid;
+  }
+  claimSel.value = draft.claimedRoleId || '';
+  claimSel.addEventListener('change', () => { draft.claimedRoleId = claimSel.value || null; });
+  body.appendChild(claimSel);
+
+  // ⑤ 笔记正文 + 依据出处（事件序号）
+  const noteL = el('label');
+  noteL.appendChild(el('span', null, `笔记（最多 ${A_.MAX_NOTE} 字；可记录"依据第几条发言"）`));
+  const noteI = el('textarea');
+  noteI.maxLength = A_.MAX_NOTE;
+  noteI.rows = 3;
+  noteI.value = draft.note || '';
+  noteI.placeholder = '例：跳预言家但查杀方向存疑，依据第 12 条发言';
+  noteL.appendChild(noteI);
+  body.appendChild(noteL);
+  const evL = el('label');
+  evL.appendChild(el('span', null, '依据事件序号（选填，发言流里每条前的 #号）'));
+  const evI = el('input');
+  evI.type = 'number';
+  evI.min = '1';
+  evI.value = draft.evidenceSeq || '';
+  evL.appendChild(evI);
+  body.appendChild(evL);
+
+  const err = el('p', 'hint'); err.style.color = '#ff8080'; err.id = 'm-anno-err';
+  body.appendChild(err);
+
+  const foot = el('div', 'btnrow');
+  const tryClose = () => { if (dirty() && !confirm('有未保存的修改，确定放弃？')) return; closeSheet(); };
+  const cancel = el('button', 'btn ghost', '取消');
+  cancel.addEventListener('click', tryClose);
+  foot.appendChild(cancel);
+  const save = el('button', 'btn primary', '保存笔记');
+  save.addEventListener('click', async () => {
+    const entry = A_.normalizeSeatAnnotation({
+      leaning: draft.leaning,
+      candidateRoleIds: draft.candidateRoleIds,
+      claimedRoleId: draft.claimedRoleId,
+      confidence: draft.confidence,
+      note: noteI.value,
+      evidenceSeq: evI.value ? Number(evI.value) : null,
+      day: draft.day, phase: draft.phase,
+    });
+    save.disabled = true;
+    const okFlag = await saveAnnotations(seat, entry);
+    if (okFlag) closeSheet();
+    else save.disabled = false; // 保存失败：弹层不关，草稿保留
+  });
+  foot.appendChild(save);
+  if (cur && (cur.leaning !== 'neutral' || (cur.candidateRoleIds || []).length || cur.claimedRoleId || cur.note)) {
+    const clr = el('button', 'btn danger', '清除');
+    clr.addEventListener('click', async () => {
+      save.disabled = true; clr.disabled = true;
+      const okFlag = await saveAnnotations(seat, A_.normalizeSeatAnnotation({}));
+      if (okFlag) closeSheet();
+      else { save.disabled = false; clr.disabled = false; }
+    });
+    foot.appendChild(clr);
+  }
+  openSheet(`📝 ${seat} 号的私人笔记`, body, foot, { onClose: tryClose });
+}
+
+/** 旧格式兜底（无归属档案的旧局 404 / 共享模型缺失）：本地身份标记 {seat: roleId}，只存 localStorage */
+function openLegacyTagModal(seat) {
   const v = state.view;
   const wrap = el('div');
   const head = el('div', 'mhead', `<h2>🏷 标记 ${seat} 号</h2>`);
@@ -1294,12 +1817,11 @@ function openTagModal(seat) {
   close.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
   head.appendChild(close);
   const body = el('div', 'mbody');
-  body.appendChild(el('p', 'hint', '仅自己的笔记，AI 看不到；不可能的身份不在列表中。'));
-  const chips = el('div'); chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;';
+  body.appendChild(el('p', 'hint', '本局的私人标注服务不可用（旧局无归属档案或网络受限），只能保存本地身份标记（旧格式，AI 看不到）；新开一局即可使用完整私人标注。'));
+  const chips = el('div', 'chip-row');
   for (const rid of possibleRolesFor(v, seat)) {
     const r = roleInfo(rid);
-    const c = el('button', 'chip', `${r.emoji} ${r.name}`);
-    if (state.tags[seat] === rid) c.classList.add('sel');
+    const c = el('button', 'chip' + (state.tags[seat] === rid ? ' sel' : ''), `${r.emoji} ${r.name}`);
     c.addEventListener('click', () => { state.tags[seat] = rid; saveTags(); $('#m-modal').innerHTML = ''; updateSeats(state.view); });
     chips.appendChild(c);
   }

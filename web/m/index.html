@@ -89,6 +89,11 @@
         <label><span data-i18n="players.seat">我的座位</span><select id="m-my-seat"></select></label>
         <label><span data-i18n="players.name">我的昵称</span><input id="m-my-name" value="我" maxlength="12"></label>
       </div>
+      <!-- 玩家档案（PROF-01）：对局归属到所选档案，战绩/笔记按档案隔离；管理弹层在 m.js 里 -->
+      <div class="m-profile-row">
+        <label><span>我的档案</span><select id="m-profile-select" title="对局将归属到该档案（战绩/笔记按档案隔离）"></select></label>
+        <button class="btn ghost small" id="m-profile-manage" type="button">管理档案…</button>
+      </div>
       <p class="hint" style="margin-top:10px" data-i18n="m.aiNamesHint">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
       <a class="btn ghost" href="../ai-cast.html?from=mobile" target="_blank" rel="noopener">AI 来客名册 ↗</a>
     </div>
@@ -136,6 +141,8 @@
 </div>
 
 <div id="m-modal"></div>
+<!-- 底部弹层（手机习惯）：档案管理（PROF-01）与私人标注编辑（NOTE-04）的容器，内容由 m.js 填充 -->
+<div id="m-sheet"></div>
 <div id="m-flash" class="m-flash hidden"></div>
 <div id="m-flip" class="m-flip hidden">
   <div class="flip-card" id="m-flip-card">
@@ -158,6 +165,7 @@
 <script src="../rulebook.js"></script>
 <script src="../pwa.js"></script>
 <script src="../ai-cast.js"></script>
+<script src="../shared/annotations-model.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

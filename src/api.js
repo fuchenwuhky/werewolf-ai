@@ -1601,7 +1601,8 @@ class Api {
       const checked = transfer.validateImportPackage(pkg);
       const prof = await this.profiles.create({ nickname: checked.profile.nickname + '（导入）', avatarId: checked.profile.avatarId || 'scholar', bio: checked.profile.bio || '' });
       const gameMap = transfer.buildGameIdMap(checked);
-      const notes = {};
+      const notes = checked.notes || {};
+      let importedNotes = 0;
       for (const g of checked.games) {
         const newId = gameMap[g.id];
         const doc = { schemaVersion: 2, tokens: {}, mock: !!g.mock,
@@ -1611,8 +1612,16 @@ class Api {
         const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
         await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
         await fs.promises.rename(tmpFile, path.join(this.saveDir, newId + '.json'));
+        // 笔记随局落地（PROF-04）：旧 gameId → 新 gameId 重映射，座位经白名单规范化；单局失败不阻断导入
+        const noteDoc = notes[g.id];
+        if (noteDoc && noteDoc.seats && Object.keys(noteDoc.seats).length) {
+          try {
+            this.annotations.putSync({ profileId: prof.id, gameId: newId, expectedRevision: 0, seats: noteDoc.seats });
+            importedNotes++;
+          } catch (_) { /* 笔记不合法则跳过，不阻断对局导入 */ }
+        }
       }
-      return { status: 200, body: { ok: true, profileId: prof.id, gameMap } };
+      return { status: 200, body: { ok: true, profileId: prof.id, gameMap, importedNotes } };
     }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
   }
 
