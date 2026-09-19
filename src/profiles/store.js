@@ -65,6 +65,8 @@ class ProfileStore {
     this.root = path.join(dataDir, 'profiles');
     this.logger = logger;
     this._queues = new Map(); // 文件路径 → 上一次写 promise（同文件串行）
+    // 审核 P1-3：并发创建/更新时 read-check-write 周期必须串行化，否则丢档案
+    this._mutex = Promise.resolve();
     fs.mkdirSync(this.root, { recursive: true });
   }
 
@@ -88,6 +90,13 @@ class ProfileStore {
     await job;
     // 队列尾部清理，防 Map 无限增长
     if (this._queues.get(file) === job) this._queues.delete(file);
+  }
+
+  /** 串行化 read-check-write 周期（审核 P1-3）：并发创建不丢档案 */
+  _serialize(fn) {
+    const prev = this._mutex;
+    this._mutex = prev.then(fn, fn);
+    return this._mutex;
   }
 
   _readJson(file, fallback) {
@@ -132,6 +141,10 @@ class ProfileStore {
 
   /** 创建档案。返回完整 profile */
   async create({ nickname, avatarId, bio = '' } = {}) {
+    return this._serialize(() => this._createInner({ nickname, avatarId, bio }));
+  }
+
+  async _createInner({ nickname, avatarId, bio = '' } = {}) {
     const prof = {
       schemaVersion: SCHEMA_VERSION,
       id: newId(),
@@ -158,6 +171,10 @@ class ProfileStore {
    *  expectedRevision 不匹配 → ConflictError(409)
    */
   async update(id, patch = {}) {
+    return this._serialize(() => this._updateInner(id, patch));
+  }
+
+  async _updateInner(id, patch = {}) {
     const prof = this.get(id);
     if (prof.archivedAt && !patch.restore) throw new ValidationError('已归档档案需先恢复才能编辑');
     if (typeof patch.expectedRevision === 'number' && patch.expectedRevision !== prof.revision) {
@@ -198,6 +215,10 @@ class ProfileStore {
    * 活动对局归属该档案时由调用方（API 层）拒绝——本层只管数据移动。
    */
   async trash(id, { activeGames = 0 } = {}) {
+    return this._serialize(() => this._trashInner(id, { activeGames }));
+  }
+
+  async _trashInner(id, { activeGames = 0 } = {}) {
     const prof = this.get(id);
     if (!prof.archivedAt) throw new ValidationError('只能删除已归档的档案');
     if (activeGames > 0) throw new ValidationError(`该档案仍有 ${activeGames} 局进行中，不能删除`);

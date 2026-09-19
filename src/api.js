@@ -116,19 +116,20 @@ class Api {
     this.profiles = new ProfileStore({ dataDir: path.dirname(this.saveDir), logger });
     this.annotations = new AnnotationStore({ profilesRoot: this.profiles.root, logger });
     this.defaultProfileId = null;
-    try {
-      // DATA-02：幂等迁移（备份→默认档案→旧存档打标→经验池归属），游标见 migrations/
-      this.profileMigration = new ProfileMigration({ dataDir: path.dirname(this.saveDir), profilesStore: this.profiles, logger });
-      const mig = this.profileMigration.run();
-      this.defaultProfileId = mig.defaultId;
-      if (mig.executed.length) {
-        this.logger.info('api', `档案迁移完成：${mig.executed.join('/')}，默认档案 ${mig.defaultId}，存档打标 ${mig.tagged} 局`);
+    // DATA-02：迁移必须 await —— 修复前 run() 未 await 导致 defaultProfileId 竞态为 null
+    this._profileMigrationReady = (async () => {
+      try {
+        this.profileMigration = new ProfileMigration({ dataDir: path.dirname(this.saveDir), profilesStore: this.profiles, logger });
+        const mig = await this.profileMigration.run();
+        this.defaultProfileId = mig.defaultId;
+        if (mig.executed.length) {
+          this.logger.info('api', `档案迁移完成：${mig.executed.join('/')}，默认档案 ${mig.defaultId}，存档打标 ${mig.tagged} 局`);
+        }
+      } catch (e) {
+        this.logger.error('api', `档案迁移失败（进入兼容模式）: ${e.message}`);
+        this.defaultProfileId = null;
       }
-    } catch (e) {
-      // 迁移失败进入可读兼容模式：不删源文件，继续服务（真实局建局会被绑定校验外的路径放行，档案接口报未迁移）
-      this.logger.error('api', `档案迁移失败（进入兼容模式）: ${e.message}`);
-      this.defaultProfileId = null;
-    }
+    })();
     // 轻量限流（整改 §1.4）：远端地址+桶 → 时间戳滑窗。只保护花钱/可暴力的入口。
     this._rateBuckets = new Map();
     // 管理会话与局域网配对（整改 SEC-01）：默认关闭（本机模式、行为与旧版一致）；
@@ -1608,10 +1609,17 @@ class Api {
     }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
   }
 
+  /** 读取 JSON 文件（供 profileStats/profileGames 使用），失败返回 fallback */
+  _readJson(file, fallback) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch (_) { return fallback; }
+  }
+
   /** 档案战绩（方案 §3.7）：Mock/观战/终止/平局分桶，正式胜率只算真实自然局（动态阵营按 crush 还原） */
   profileStats(res, pid) {
     try {
       const prof = this.profiles.get(pid);
+      if (prof.archivedAt) return this.json(res, 404, { error: '该档案已归档' });
       const rows = [];
       for (const f of fs.readdirSync(this.saveDir)) {
         if (!f.endsWith('.json') || f === 'experiences.json') continue;

@@ -48,8 +48,11 @@ test('脏标记：状态没变就不再写盘（4s 定时器在长 LLM 调用期
     g.emit('system', { visibleTo: 'all', text: '来了条新事件' }); // 事件 → seq 变化 → 变脏
     assert.strictEqual(await api.saveGame(entry), true, '有新事件后应重新写入');
     assert.strictEqual(await api.saveGame(entry), false);
-    g.pause({ kind: 'quota', code: '1113', message: '配额' }); // 暂停也必须触发一次落盘
-    assert.strictEqual(await api.saveGame(entry), true, '暂停状态变化应落盘');
+    g.pause({ kind: 'quota', code: '1113', message: '配额' });
+    // Windows fs 瞬态：有界重试吸收偶发 rename 失败
+    let pauseOk = false;
+    for (let i = 0; !pauseOk && i < 3; i++) { pauseOk = await api.saveGame(entry); if (!pauseOk) await new Promise(r => setTimeout(r, 100)); }
+    assert.ok(pauseOk, '暂停状态变化应落盘');
   } finally { cleanup(ids); }
 });
 

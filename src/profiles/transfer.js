@@ -28,14 +28,15 @@ function collectExportableGames(savesDir, ownerProfileId) {
     try { doc = JSON.parse(fs.readFileSync(path.join(savesDir, f), 'utf8')); } catch (_) { continue; }
     if (!doc || doc.ownerProfileId !== ownerProfileId || !doc.game || !doc.game.finished) continue;
     out.push({
-      gameId: doc.game.id,
+      id: doc.game.id,
+      finished: !!doc.game.finished,
       day: doc.game.day || 0,
       winner: doc.game.winner || null,
       winReason: doc.game.winReason || '',
       mock: !!doc.mock,
       savedAt: doc.savedAt || null,
       players: doc.game.players || [],
-      events: (doc.game.events || []).slice(0, 5000), // 防御性上限；正常终局远小于此
+      events: (doc.game.events || []).slice(0, 5000),
       board: doc.game.board || null,
       rules: doc.game.rules || null,
     });
