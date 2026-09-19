@@ -1,0 +1,5 @@
+{
+  "productVersion": "1.5.2",
+  "androidVersionCode": 9,
+  "_comment": "版本单一来源（FIN-11）。productVersion 与 androidVersionCode 由此文件唯一决定；根/app/desktop package.json、package-lock、build.gradle 由 scripts/version-sync.js 校验/同步。下一个对外版本号由发布负责人在此修改，其它声明点不得各自硬编码。"
+}

@@ -1,6 +1,6 @@
 {
   "name": "werewolf-ai",
-  "version": "0.1.0",
+  "version": "1.5.2",
   "description": "AI 狼人杀 — 本地网页版，1 名人类玩家 + N 名 AI，OpenAI 兼容接口，运行时零依赖",
   "type": "commonjs",
   "main": "server.js",
@@ -12,7 +12,7 @@
     "format": "prettier --write",
     "coverage": "node scripts/coverage-gate.js",
     "eval": "node scripts/eval/eval-harness.js --games=30",
-    "gate": "npm run lint && npm run eslint && npm run coverage && npm run eval && npm run brand:check",
+    "gate": "npm run lint && npm run eslint && npm run coverage && npm run eval && npm run brand:check && npm run version:check",
     "brand:apply": "node scripts/apply-brand-v2.js",
     "brand:check": "node scripts/check-brand-assets.js",
     "simulate": "node scripts/simulate.js",
@@ -28,7 +28,8 @@
     "app:win": "node scripts/build-win.js",
     "app:desktop": "node scripts/build-desktop.js",
     "playtest:fake": "node scripts/fake-llm.js",
-    "playtest:report": "node scripts/playtest-report.js"
+    "playtest:report": "node scripts/playtest-report.js",
+    "version:check": "node scripts/version-sync.js"
   },
   "engines": {
     "node": ">=18.18"
