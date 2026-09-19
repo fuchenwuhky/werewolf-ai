@@ -482,7 +482,7 @@ test('§1.4：凭证外带防护——改 baseUrl 不重输 Key 后，test/probe
   const { Api } = require('../src/api');
   const dir = tmpDir('rekey');
   let saved = { apiKey: 'sk-secret', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', journal: false };
-  const api = new Api({ config: { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } }, logger: silentLogger, saveDir: dir });
+  const api = new Api({ config: { get: () => saved, save(b) { const clean = { ...b }; if (typeof clean.apiKey === 'string' && clean.apiKey.includes('****')) delete clean.apiKey; if (Array.isArray(clean.apiKeys)) clean.apiKeys = clean.apiKeys.filter((v) => v && !String(v).includes('****')); saved = { ...saved, ...clean }; return saved; } }, logger: silentLogger, saveDir: dir });
   // 旧 Key 保存时的地址基准
   api.baseUrlNeedsRekey = false;
 
@@ -920,7 +920,7 @@ test('P0-1：启动自动绑定；改地址不重输 Key → 真实建局/test/p
   const { Api } = require('../src/api');
   const dir = tmpDir('bind');
   let saved = { apiKey: 'sk-real', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', journal: false };
-  const api = new Api({ config: { get: () => saved, save(b) { saved = { ...saved, ...b }; return saved; } }, logger: silentLogger, saveDir: dir });
+  const api = new Api({ config: { get: () => saved, save(b) { const clean = { ...b }; if (typeof clean.apiKey === 'string' && clean.apiKey.includes('****')) delete clean.apiKey; if (Array.isArray(clean.apiKeys)) clean.apiKeys = clean.apiKeys.filter((v) => v && !String(v).includes('****')); saved = { ...saved, ...clean }; return saved; } }, logger: silentLogger, saveDir: dir });
   assert.ok(saved.keyBinding, '启动时必须自动建立绑定（升级路径）');
   assert.ok(api.keyBindingValid(), '初始状态必须有效');
 
@@ -936,9 +936,9 @@ test('P0-1：启动自动绑定；改地址不重输 Key → 真实建局/test/p
   await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), t1.res, '/api/config/test', new URLSearchParams());
   assert.strictEqual(t1.code, 400);
 
-  // 提交垃圾 apiKeys 数组不能解除：绑定覆盖主 Key，主 Key 未重输依旧失配
+  // 审核 P0-1 二轮反例：绑定失配期间仅动 extras 不得解锁（必须重输主 Key）
   await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { apiKeys: ['junk'] } }), stubRes().res, '/api/config', new URLSearchParams());
-  assert.strictEqual(api.keyBindingValid(), true, 'apiKeys 提交即视为重输凭证（写入新绑定）');
+  assert.strictEqual(api.keyBindingValid(), false, '失配期间仅动 extras 不得解锁');
   // 但注意：此时 baseUrl 仍是 evil.example + junk 主 Key？——主 Key 未动，apiKeys 变化
   // 会重写绑定，这是"用户显式改凭证"语义；单独把 baseUrl 改回未重输 Key 的路径再验证：
   await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { baseUrl: 'https://open.bigmodel.cn/api/paas/v4' } }), stubRes().res, '/api/config', new URLSearchParams());
@@ -1129,4 +1129,90 @@ test('二轮 P0：startReview / resume（真实局）绑定失配时全部拒绝
   assert.strictEqual(r1.code, 400, `整改前：复盘绕过绑定校验，实测 ${r1.code}`);
   assert.match(r1.body.error, /重新验证|重新输入/);
   api.games.delete(g1.id);
+});
+
+// ---------- 三轮审核 P0-1：空数组/掩码绕过密钥重绑 ----------
+
+test('三轮 P0-1：空 apiKeys、掩码 apiKey、清空 extras 都不能解除绑定失配', async () => {
+  const { Api } = require('../src/api');
+  const dir = tmpDir('rebind3');
+  let saved = { apiKey: 'sk-real', baseUrl: 'https://api.example/v1', apiKeys: ['sk-extra1'], journal: false };
+  const api = new Api({ config: { get: () => saved, save(b) { const clean = { ...b }; if (typeof clean.apiKey === 'string' && clean.apiKey.includes('****')) delete clean.apiKey; if (Array.isArray(clean.apiKeys)) clean.apiKeys = clean.apiKeys.filter((v) => v && !String(v).includes('****')); saved = { ...saved, ...clean }; return saved; } }, logger: silentLogger, saveDir: dir });
+  assert.ok(api.keyBindingValid(), '初始必须有效');
+
+  const realCreate = async () => {
+    const box = stubRes();
+    await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { board: { wolf: 1, seer: 1, witch: 1, villager: 2 }, players: Array.from({ length: 5 }, () => ({ isHuman: false })), mock: false } }), box.res, '/api/games', new URLSearchParams());
+    return box;
+  };
+  const put = async (body) => {
+    const box = stubRes();
+    await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body }), box.res, '/api/config', new URLSearchParams());
+    return box;
+  };
+
+  // ① 审核反例：改 baseUrl + 清空 apiKeys（空数组）→ 不得解除
+  await put({ baseUrl: 'https://evil.example/v1', apiKeys: [] });
+  assert.strictEqual(api.keyBindingValid(), false, '清空 extras + 改地址 → 依旧失配');
+  let mk = await realCreate();
+  assert.strictEqual(mk.code, 400, '空数组绕过后真实建局必须 400');
+  // 失败关闭语义：只改回地址、不完整重输凭证（extras 也算凭证）→ 依旧失配
+  await put({ baseUrl: 'https://api.example/v1', apiKey: 'sk-real', apiKeys: ['sk-extra1'] });
+  assert.ok(api.keyBindingValid(), '完整重输凭证后必须解除');
+
+  // ② 审核反例：掩码 apiKey 占位 → save 滤掉 → 凭证未变 → 不得解除
+  await put({ baseUrl: 'https://evil.example/v1', apiKey: '****' });
+  assert.strictEqual(saved.apiKey, 'sk-real', '掩码不得污染真实 Key');
+  assert.strictEqual(api.keyBindingValid(), false, '掩码占位不得解除失配');
+  mk = await realCreate();
+  assert.strictEqual(mk.code, 400);
+
+  // ③ 审核反例：掩码 apiKeys 数组（清洗后为空）→ 同样不得解除
+  await put({ baseUrl: 'https://evil.example/v1', apiKeys: ['****', '****'] });
+  assert.strictEqual(api.keyBindingValid(), false, '掩码 apiKeys 清空 extras 不得解除');
+  mk = await realCreate();
+  assert.strictEqual(mk.code, 400);
+
+  // ③b（失败关闭语义）：绑定失配期间同地址 extras 变更也不解锁，须重输主 Key
+  await put({ baseUrl: 'https://evil.example/v1', apiKeys: ['sk-extra1'] });
+  assert.strictEqual(api.keyBindingValid(), false, '失配期间同地址 extras 变更不得解锁');
+
+  // ④ 合法路径：真的重输了主 Key → 解除，建局放行
+  await put({ baseUrl: 'https://evil.example/v1', apiKey: 'sk-new2' });
+  assert.ok(api.keyBindingValid(), '真重输 Key 必须解除');
+  mk = await realCreate();
+  assert.strictEqual(mk.code, 200, '重输后应放行');
+  api.games.clear();
+});
+
+// ---------- 三轮审核 P1-4：关服等待补写 ----------
+
+test('三轮 P1-4：saveActive 必须等到第一批期间安排的补写真正落地', async () => {
+  const dir = tmpDir('late');
+  const api = makeFinishedApi(dir);
+  const { Game } = require('../src/engine/game');
+  const board = { wolf: 1, seer: 1, witch: 1, villager: 2 };
+  const players = Array.from({ length: 5 }, (_, i) => ({ name: `P${i + 1}`, isHuman: false }));
+  const g = new Game({ id: 'late-flush', board, players, stepPauseMs: 1, logger: silentLogger });
+  g.deal(); g.started = true;
+  const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now(), review: null };
+  api.games.set(g.id, entry);
+
+  // 手工制造"在途 + 已安排补写"的状态：savePromise 挂一个 300ms 后才落盘的补写
+  const file = path.join(dir, 'late-flush.json');
+  let landed = false;
+  entry.saving = true;
+  entry.savePromise = new Promise((r) => setTimeout(() => {
+    entry.saving = false;
+    landed = true;
+    api.saveGame(entry, { force: true }).then(() => r(true)).catch(() => r(false));
+  }, 300));
+
+  const t0 = Date.now();
+  await api.saveActive();
+  const waited = Date.now() - t0;
+  assert.strictEqual(landed, true, '整改前：saveActive 不等补写 → 退出时最终快照丢失');
+  assert.ok(waited >= 250, `必须等到补写完成（实际 ${waited}ms）`);
+  assert.ok(fs.existsSync(file), '补写的存档必须真实存在');
+  api.games.clear();
 });

@@ -655,3 +655,17 @@ npm audit --omit=dev
 | ESLint | 0 error 0 warning（elText 未定义 error、2 个未用变量已清） |
 
 终值：测试 **516/516** 三轮全绿 · 覆盖率门禁五项 ✅（全局 93.84/85.62/87.56 + api.js 90.60/76.10）· 双端审计 0（Android 工具链 3 moderate 维持登记）· **APK 与 Windows 包已重建且 app:verify 双通过**
+
+### 三轮审核整改（2026-09-19 深夜）
+
+| 项 | 修复 |
+|---|---|
+| P0 复盘/恢复绕过 + P0 空数组/掩码绕过 + P1 绑定丢保存（同一根因簇） | 绑定规则重写为**两条安全通道的合取**：(a) 保存前绑定有效且地址未变 → 同主机凭证增删自由重绑；(b) 显式重输主 apiKey（非掩码且清洗后仍在）→ 为新地址重新背书。反例全覆盖：空 apiKeys 清空 extras、掩码主 Key、掩码 extras 数组、先改地址再动 extras 的两步组合——一律 fail-closed 失配，唯一解锁路径是重输主 Key。keyBinding 进 DEFAULT_CONFIG 白名单持久化，重启不失效。新 LLM 出口门禁：AI 复盘（startReview）、存档恢复（resumeGame/resumePaused）、局后经验（generateLessons）全部校验绑定 |
+| P1 关服不等补写 | saveActive 增加二轮收集：第一批等待期间 saveGame finally 再安排的补写（entry.savePromise 被替换）也会被后续轮次收齐等待；补写链有界，最多两轮 |
+| P1 结算弹层报错 | web/m/m.js 补 elText 定义（此前只在 app.js 定义，手机端 ReferenceError） |
+| P2 校验漏查图标 | verify-packages 新增 5 个图标资产的 sha256 内容比对（svg+4 png），从"只查存在"升级 |
+| ESLint | 0 error 0 warning |
+
+回归测试（新增/修正 9 个断言组）：空数组绕过、掩码主 Key、掩码 extras、清空 extras+改地址、两步组合、失配期间 extras 变更不解锁、真重输 Key 解除、keyBinding 持久化跨重启、saveActive 等待补写。
+
+终值：lint ✅ · 测试 **516/516 三轮全绿** · 覆盖率门禁五项 ✅（全局 94.01/85.87/87.50 + api.js 90.72/76.37）· 双端审计 0（Android 3 moderate 维持登记）· **APK+WIN 已按最终源码重建，app:verify 双通过（含图标哈希比对）**

@@ -437,7 +437,19 @@ class Api {
     for (const entry of this.games.values()) {
       if (entry.savePromise) jobs.push(entry.savePromise.then(() => true).catch(() => false));
     }
-    const results = await Promise.all(jobs);
+    let results = await Promise.all(jobs);
+    // 审核 P1-4 二轮反例：第一批等待期间，saveGame 的 finally 还可能**再安排**补写
+    // （entry.savePromise 会被替换成补写 Promise）—— 那份补写必须在退出前也等完。
+    // 补写链是有界的（补写本身不再触发新补写），所以最多再收两轮。
+    for (let round = 0; round < 2; round++) {
+      const late = [];
+      for (const entry of this.games.values()) {
+        if (entry.savePromise) late.push(entry.savePromise.then(() => true).catch(() => false));
+      }
+      if (!late.length) break;
+      const r = await Promise.allSettled(late);
+      results = results.concat(r.filter((x) => x.status === 'fulfilled').map((x) => x.value));
+    }
     return results.filter(Boolean).length;
   }
 
@@ -548,16 +560,23 @@ class Api {
       if (pathname === '/api/config' && method === 'PUT') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const body = await this.readBody(req);
-        // 整改 §1.4（防凭证外带）：换 baseUrl 却沿用旧 Key → 标记"密钥未对新地址验证"，
-        // /config/test 与 /probe 会拒绝发凭证，直到用户重新输入 Key。否则一个已配对的
-        // 局域网设备就能把机主的 Key 静默送到任意服务器。
-        const keySupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== '';
-        const keysChanged = Array.isArray(body.apiKeys);
+        // 审核 P0-1（含三轮反例）最终规则 = 两条安全通道的合取：
+        //   (a) 保存前绑定有效 且 地址未变 → 同一已确认主机上的凭证增删，自由重绑；
+        //   (b) 本次显式重输主 apiKey（非掩码且清洗后仍在）→ 为新地址重新背书。
+        // 反例全覆盖：改 baseUrl+清空 extras（a 败于地址变；b 败于未重输）→ 一律失配；
+        // 先改地址再动 extras 的两步组合也始终失配（wasValid 在地址变更后即为 false）。
+        const wasValid = this.keyBindingValid();
+        const before = { baseUrl: this.config.get().baseUrl, apiKey: this.config.get().apiKey, apiKeys: this.config.get().apiKeys || [] };
         const saved = this.config.save(body);
-        // 整改（审核 P0-1）：只有"重新输入了凭证"才重写密钥-地址绑定；只改地址的保存
-        // 会让绑定失配 → 所有 LLM 出口拒绝发凭证，直到用户重输 Key。
-        if (keySupplied || keysChanged) {
-          this.config.save({ keyBinding: keyBindingOf(this.config.get()) });
+        const after = this.config.get();
+        const urlChanged = after.baseUrl !== before.baseUrl;
+        const mainKeyResupplied = typeof body.apiKey === 'string' && body.apiKey.trim() !== ''
+          && !body.apiKey.includes('****') && after.apiKey === body.apiKey;
+        const credsChanged = after.apiKey !== before.apiKey
+          || JSON.stringify(after.apiKeys || []) !== JSON.stringify(before.apiKeys || []);
+        const rebind = credsChanged && ((wasValid && !urlChanged) || mainKeyResupplied);
+        if (rebind) {
+          this.config.save({ keyBinding: keyBindingOf(after) });
           this.baseUrlNeedsRekey = false;
         } else {
           this.baseUrlNeedsRekey = !this.keyBindingValid();
