@@ -27,6 +27,8 @@ class ProfileMigration {
     this.cursorFile = path.join(this.dir, CURSOR);
     this.savesDir = path.join(dataDir, 'saves');
     this.done = new Set(this._readCursor().done || []);
+    // 持久化的默认档案 ID（防止改名后重复创建）
+    try { this.defaultId = fs.readFileSync(path.join(this.dir, 'default-profile-id'), 'utf8').trim() || null; } catch (_) { this.defaultId = null; }
   }
 
   _readCursor() {
@@ -40,11 +42,40 @@ class ProfileMigration {
   _log(msg) { if (this.logger) this.logger.info('migration', msg); }
 
   /** 默认档案 id（没有则创建）。返回 profileId（异步：create 是原子写） */
+  /** 默认档案 id：持久化到游标（_mark 已有的 done set），改名/重启后不重复创建 */
   async ensureDefaultProfile() {
+    // ① 游标中已记录 → 验证档案存在且未归档
+    if (this.defaultId) {
+      try {
+        const prof = this.store.get(this.defaultId);
+        if (prof && !prof.archivedAt) return this.defaultId;
+      } catch (_) {}
+      // 已被删除 → 清除，走下方创建逻辑
+      this.defaultId = null;
+      this._persistDefaultId();
+    }
+    // ② 按昵称查找（兼容升级）
     const profiles = this.store.list({ includeArchived: true });
     const legacy = profiles.find((p) => p.nickname === '默认玩家' && !p.archivedAt);
-    if (legacy) return legacy.id;
-    return (await this.store.create({ nickname: '默认玩家', avatarId: 'scholar', bio: '升级时自动创建的本机档案' })).id;
+    if (legacy) {
+      this.defaultId = legacy.id;
+      this._persistDefaultId();
+      return legacy.id;
+    }
+    // ③ 首次创建
+    const prof = await this.store.create({ nickname: '默认玩家', avatarId: 'scholar', bio: '升级时自动创建的本机档案' });
+    this.defaultId = prof.id;
+    this._persistDefaultId();
+    return prof.id;
+  }
+  _persistDefaultId() {
+    if (!this.defaultId) return;
+    const cursorFile = path.join(this.dir, 'default-profile-id');
+    fs.writeFileSync(cursorFile, this.defaultId);
+  }
+  _clearDefaultId() {
+    try { fs.rmSync(path.join(this.dir, 'default-profile-id'), { force: true }); } catch (_) {}
+    this.defaultId = null;
   }
 
   /** 为无归属存档写入 owner 字段（返回处理数量） */

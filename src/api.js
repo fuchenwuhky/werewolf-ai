@@ -848,6 +848,9 @@ class Api {
     if (!useMock && !this.config.get().apiKey) return this.json(res, 400, { error: '尚未配置 API Key（或在设置中勾选 Mock 试玩）' });
     // 对局归属固化（方案 PROF-02）：以创建时的不可变归属为准，不从"当前档案"推导存盘归属。
     // 兼容期：缺 profileId 的请求归入默认档案并记录弃用日志（本机旧客户端）。
+    // 审核 P0（三轮/四轮）：createGame 必须等待迁移完成后再解析归属，
+    // 否则竞态下 defaultProfileId 为 null → 无归属对局
+    await this._profileMigrationReady;
     let ownerProfileId = this.defaultProfileId;
     let ownerNicknameSnapshot = null;
     let ownerHumanSeat = null;
