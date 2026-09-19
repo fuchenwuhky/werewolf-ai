@@ -1055,6 +1055,9 @@ async function initAnnotations() {
     state.anno.seats = r.annotations.seats || {};
   } catch (_) { /* 无归属档案的旧局：标注功能只读不可用，不阻塞对局 */ }
   state.anno.loaded = true;
+  // 关键：进局首次渲染座位时标注往往还在拉取中；数据到达后必须补一次重绘，
+  // 否则刷新恢复的场景下角标要等下一次全量重绘才会出现（实测踩过）
+  if (state.view) updateSeats(state.view);
   if (!$('#notes-drawer').classList.contains('hidden')) renderNotesList();
 }
 
