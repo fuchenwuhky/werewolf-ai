@@ -72,6 +72,7 @@
   --violet: #9b7fd4;    /* 神秘 / 查验 */
   --ember: #e0903c;     /* 当前发言 / 白天 */
   --warn: #d8b25f;
+  --err: #ff8f8f;      /* 错误提示文字（原 var(--err) 散写归一） */
   --priv: #1b2440;      /* 私密内容底色 */
 
   /* ---- 圆角：小控件 / 卡片 / 面板 / 胶囊 ---- */
@@ -468,7 +469,7 @@ details.fold > summary:hover { color: var(--gold); }
 input[type=checkbox], input[type=radio] {
   width: 17px; height: 17px; flex: none; margin: 0; cursor: pointer;
   appearance: none; -webkit-appearance: none;
-  border: 1px solid var(--line-strong); border-radius: 4px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-xs);
   background: linear-gradient(180deg, rgba(5, 8, 16, .95), rgba(10, 15, 28, .8));
   box-shadow: var(--inset-field);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
@@ -1551,7 +1552,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   width: 100%; height: 100%; aspect-ratio: 2/3;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-2);
   background: radial-gradient(ellipse at 50% 36%, #26355c 0%, #0d1425 74%);
-  border-radius: 2px; margin: 0;
+  border-radius: var(--r-xs); margin: 0;
 }
 .role-art-fallback .fa-emoji { font-size: 44px; filter: drop-shadow(0 4px 10px rgba(0,0,0,.85)); }
 .role-art-fallback .fa-name { font-family: var(--font-cn-title); color: var(--gold-bright); letter-spacing: 2px; }
@@ -1640,7 +1641,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   width: min(360px, 88vw); min-height: 56px;
   display: flex; flex-direction: column; gap: var(--sp-1); justify-content: center;
   background: linear-gradient(180deg, rgba(24,34,60,.94), rgba(9,14,26,.97));
-  border: 1px solid rgba(201,162,39,.32);
+  border: 1px solid rgba(216, 178, 95,.32);
   border-radius: var(--r-md);
   box-shadow: var(--el-3);
   padding: var(--sp-3) var(--sp-4); text-align: center;
@@ -1659,7 +1660,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .inspect-stage::before {
   content: ''; position: absolute; inset: -20%;
   background: radial-gradient(ellipse at 30% 20%, rgba(179,46,62,.14), transparent 45%),
-              radial-gradient(ellipse at 75% 80%, rgba(201,162,39,.1), transparent 45%);
+              radial-gradient(ellipse at 75% 80%, rgba(216, 178, 95,.1), transparent 45%);
   animation: mist 9s ease-in-out infinite alternate;
 }
 @keyframes mist { from { transform: translateX(-3%) scale(1); } to { transform: translateX(3%) scale(1.06); } }
@@ -1757,10 +1758,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 }
 .rb-chip {
   padding: 6px 10px; border-radius: var(--r-pill); cursor: pointer;
-  font-size: var(--fs-sm); color: var(--gold); background: rgba(201,162,39,.08);
-  border: 1px solid rgba(201,162,39,.35);
+  font-size: var(--fs-sm); color: var(--gold); background: rgba(216, 178, 95,.08);
+  border: 1px solid rgba(216, 178, 95,.35);
 }
-.rb-chip:active { background: rgba(201,162,39,.2); }
+.rb-chip:active { background: rgba(216, 178, 95,.2); }
 .rb-body { padding-top: 10px; }
 .rb-sec { margin-bottom: var(--sp-5); scroll-margin-top: 56px; }
 .rb-h {
@@ -1785,7 +1786,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid var(--line-dim); padding: 6px 8px; text-align: left;
   vertical-align: top; line-height: 1.65;
 }
-.rb-table th { background: rgba(201,162,39,.12); color: var(--gold-bright); white-space: nowrap; }
+.rb-table th { background: rgba(216, 178, 95,.12); color: var(--gold-bright); white-space: nowrap; }
 .rb-table tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
 
 /* 齿轮菜单（手机对局页左上角） */

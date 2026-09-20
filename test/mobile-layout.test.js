@@ -149,26 +149,29 @@ test('滚动：流程区跟随状态不能用"离底部距离"判断', () => {
 
 // ---------------------------------------------------------------- ③ 技能键语义
 
-test('技能键：可用=红、不可用=灰红、次要=暗红，并且 disabled 与视觉一致', () => {
+// 契约变更说明（UI 审查轮）：技能键「可用」由血红改为金色——主操作=金，与桌面 .btn.primary 统一；
+// 红色语义收敛到「危险操作」（结束本局/退出）。不可用=灰、次要=暗红描边保持不变。
+test('技能键：可用=金（主操作语义）、不可用=灰、次要=暗红描边，并且 disabled 与视觉一致', () => {
   const on = block(MCSS, '.key.on {');
   const off = block(MCSS, '.key.off {');
   const alt = block(MCSS, '.key.alt {');
   const cols = (s) => (s.match(/#[0-9a-f]{6}/gi) || []).map((h) => [1, 3, 5].map((i) => parseInt(h.substr(i, 2), 16)));
   const chroma = ([r, g, b]) => Math.max(r, g, b) - Math.min(r, g, b);
-  // 可用：底色是明确的红（红通道显著高于绿蓝）
-  assert.ok(cols(on).some(([r, g, b]) => r > 150 && r - g > 60 && r - b > 60), `.key.on 必须是红色系：${on}`);
-  // 不可用：必须"灰"——所有用色的彩度都低（不是鲜红），且底色压暗
-  assert.ok(cols(off).every((c) => chroma(c) < 60), `.key.off 必须是去饱和的灰红（彩度过高就不像"不可用"）：${off}`);
+  // 可用：底色是明确的金（红绿通道都高、蓝通道显著低）
+  assert.ok(cols(on).some(([r, g, b]) => r > 200 && g > 170 && b < 170 && r - b > 60), `.key.on 必须是金色系：${on}`);
+  assert.match(on, /var\(--gold\)/, '.key.on 应引用 --gold token（与桌面主操作同源）');
+  // 不可用：必须「灰」——所有用色彩度低，且底色压暗
+  assert.ok(cols(off).every((c) => chroma(c) < 60), `.key.off 必须是去饱和的灰（彩度过高就不像「不可用」）：${off}`);
   assert.ok(cols(off).every(([r, g, b]) => r < 160 && g < 130), `.key.off 必须压暗：${off}`);
   assert.match(off, /cursor:\s*not-allowed/);
-  // 次要但可用：介于两者之间，必须有可见的红色描边以区分"不可用"
+  // 次要但可用：保留暗红描边以区分「不可用」（次要≠危险）
   assert.ok(cols(alt).length >= 2, '.key.alt 需要底色与描边两色');
-  assert.match(alt, /border-color:[^;]*rgba\(179,\s*46,\s*62/, '.key.alt 的描边要是血红，才能与灰红的"不可用"区分');
+  assert.match(alt, /border-color:[^;]*rgba\(179,\s*46,\s*62/, '.key.alt 的描边保留暗红，与灰红的「不可用」区分');
   // 代码侧：setKeyEnabled 必须同时改类与 disabled
   const fn = MJS.slice(MJS.indexOf('function setKeyEnabled'), MJS.indexOf('function setKeyEnabled') + 420);
   assert.match(fn, /classList\.toggle\('on'/, 'setKeyEnabled 未切换 .on');
   assert.match(fn, /classList\.toggle\('off'/, 'setKeyEnabled 未切换 .off');
-  assert.match(fn, /btn\.disabled = !on/, 'setKeyEnabled 必须同步 disabled —— 否则"看着能点其实点了没用"');
+  assert.match(fn, /btn\.disabled = !on/, 'setKeyEnabled 必须同步 disabled —— 否则「看着能点其实点了没用」');
 });
 
 test('技能键：有目标类任务时才让座位变成可点选目标', () => {

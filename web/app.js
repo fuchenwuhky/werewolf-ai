@@ -784,7 +784,10 @@ function showResumeCard(title, detail) {
   const empty = $('#resume-empty');
   if (empty) empty.classList.add('hidden');
   const h = box.querySelector('h2');
-  if (h) h.textContent = detail ? `${title}（${detail}）` : title;
+  if (h) h.textContent = title;
+  // meta 独立成行（UI 审查：一行五层括号信息过载，层级混乱）
+  const meta = box.querySelector('#resume-meta');
+  if (meta) meta.textContent = detail || '';
 }
 
 /**
@@ -801,7 +804,7 @@ async function resumeDetail(gameId, v) {
     const r = (rows || []).find((x) => x.id === gameId);
     if (r) {
       if (r.seats) parts.push(`${r.seats} 人局`);
-      parts.push(r.mock ? '试玩局（不调用 API）' : '真实对局（调用 API，会消耗额度）');
+      parts.push(r.mock ? '试玩局' : '真实对局');
       if (r.date) {
         const mins = Math.round((Date.now() - new Date(r.date).getTime()) / 60000);
         if (mins >= 1) parts.push(`存档于 ${mins} 分钟前`);
@@ -1908,7 +1911,10 @@ function applyView(pv, gv) {
   const G = state.godView || null;
   const primary = state.godMode ? (G || P) : P;
   if (!primary) return;
+  const hadView = !!state.view;
   state.view = state.godMode ? { ...primary, me: P && P.me, pending: P && P.pending } : P;
+  // 首帧 view 到达时刷新笔记抽屉：抽屉可能在标注先到、view 未到时渲染过"对局尚未开始"假态（UI 审查）
+  if (!hadView && state.view && !$('#notes-drawer').classList.contains('hidden')) renderNotesList();
   const fresh = (list, cursor) => (list || []).filter((e) => e.seq > (cursor || 0));
   const playerEvents = fresh(P && P.events, state.playerAfter);
   const godEvents = fresh(G && G.events, state.godAfter);

@@ -696,7 +696,9 @@ class Browser {
       await enter(g1);
       const cardText = await b.eval(`(() => {
         const box = document.getElementById('resume-box');
-        return { hidden: !box || box.classList.contains('hidden'), h2: box ? box.querySelector('h2').textContent : '' };
+        // UI 审查轮：标题与详情 meta 分两行（一行五层括号信息过载），断言读整卡文本
+        const text = box ? (box.querySelector('h2')?.textContent || '') + '|' + (box.querySelector('#resume-meta')?.textContent || '') : '';
+        return { hidden: !box || box.classList.contains('hidden'), h2: text };
       })()`);
       check('刷新后出现恢复卡片', cardText.hidden === false, cardText.h2);
       check('卡片含人数', /\d+\s*人局/.test(cardText.h2), cardText.h2);

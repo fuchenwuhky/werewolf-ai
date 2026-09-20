@@ -93,7 +93,7 @@
         </div>
         <div class="hero-text">
           <p class="hero-kicker" data-i18n="app.kicker">月夜集会 · 村人闭眼，狼人睁眼</p>
-          <h1 id="app-title" data-i18n="app.title">🐺 AI 狼人杀</h1>
+          <h1 id="app-title" data-i18n="app.title">AI 狼人杀</h1>
           <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
         </div>
         <button class="btn ghost small hero-lang" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
@@ -119,6 +119,7 @@
             <!-- 继续上局：有可恢复局时显示（模式 / 阶段 / 保存时间来自 checkResume）；无可恢复局给空态 -->
             <div id="resume-box" class="hidden card home-card">
               <h2 data-i18n="resume.title">发现进行中的对局</h2>
+              <p class="hint" id="resume-meta" style="margin:-4px 0 0"></p>
               <div class="btnrow">
                 <button class="btn primary" id="btn-resume" data-i18n="resume.continue">▶ 继续对局</button>
                 <button class="btn ghost" id="btn-discard" data-i18n="resume.discard">放弃并清除</button>
