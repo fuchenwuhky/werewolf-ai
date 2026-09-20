@@ -484,7 +484,7 @@ test('导入时笔记写盘故障：不报成功、回滚已写存档与档案�
   const { api, dataDir, savesDir } = makeIsolatedApi('diskfail');
   try {
     // 故障注入：putSync 模拟磁盘写失败（旧实现对这类错误静默跳过 → 导出丢笔记却报成功）
-    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM: 磁盘写入失败（注入）'), { code: 'EPERM' }); };
+    api.annotations.put = async () => { throw Object.assign(new Error('EPERM: 磁盘写入失败（注入）'), { code: 'EPERM' }); };
     const pkg = {
       manifest: { exportVersion: 1, packageId: 'pkg-4', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 1 } },
       profile: { nickname: '磁盘故障', avatarId: 'scholar', bio: '' },
@@ -510,7 +510,7 @@ test('回滚未完成：清理失败必须如实报 rolledBack:false + 落恢复
   const realUnlink = fs.unlinkSync;
   try {
     // 故障组合：笔记写盘失败（触发回滚）+ unlink 失败（回滚也不完整）
-    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM: 注入写盘失败'), { code: 'EPERM' }); };
+    api.annotations.put = async () => { throw Object.assign(new Error('EPERM: 注入写盘失败'), { code: 'EPERM' }); };
     fs.unlinkSync = (p) => {
       if (String(p).startsWith(savesDir)) throw Object.assign(new Error('EPERM: 注入清理失败'), { code: 'EPERM' });
       return realUnlink(p);
@@ -537,7 +537,7 @@ test('回滚未完成：清理失败必须如实报 rolledBack:false + 落恢复
 
     // 恢复：解除故障后，下一次导入入口自动重试清理，记录被消化
     fs.unlinkSync = realUnlink;
-    delete api.annotations.putSync;
+    delete api.annotations.put;
     const okPkg = {
       manifest: { exportVersion: 1, packageId: 'pkg-6', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 0, notes: 0 } },
       profile: { nickname: '触发重试', avatarId: 'scholar', bio: '' },

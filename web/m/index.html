@@ -73,9 +73,14 @@
 
       <!-- 主行动 -->
       <button class="btn primary big m-home-cta" id="m-play-new" type="button">⚔ 开始新局</button>
-      <div class="m-home-hints">
-        <button class="btn" id="m-mock-btn" type="button" title="Mock 试玩：不调用 API、不消耗额度">🧪 试玩</button>
-        <span class="hint">🧪 Mock 试玩不调用 API、不消耗额度；真实对局按模型用量计费。</span>
+      <!-- AC-11/§4：模式选择改单选卡（红开关形似扣费主行动按钮——审查项） -->
+      <div class="m-mode-cards" role="radiogroup" aria-label="对局模式">
+        <button class="m-mode-card sel" id="m-mock-btn" type="button" role="radio" aria-checked="true" data-mode="mock">
+          <b>🧪 试玩</b><span>不调用 API · 不花钱</span>
+        </button>
+        <button class="m-mode-card" id="m-real-btn" type="button" role="radio" aria-checked="false" data-mode="real">
+          <b>💳 真实对局</b><span>调用 API · 按用量计费</span>
+        </button>
       </div>
 
       <!-- 开始新局 · 第一步：选板子（保留原有 m-grid 功能） -->

@@ -151,7 +151,7 @@
       </div>
 
       <!-- ======== 开局设置区：分组折叠，默认在首屏之下（FIN-04 §8.2/8.3） ======== -->
-      <div class="setup-section" id="setup-section">
+      <div class="setup-section" id="setup-section" hidden>
         <div class="setup-grid">
           <!-- 左列：⓪ 外观与操作 + ① 板子 + ② 玩家 + ③ 规则 -->
           <div class="setup-col">
@@ -284,6 +284,8 @@
             <!-- 设备与数据：只列真实存在的能力 -->
             <h2 class="group-head">设备与数据</h2>
             <div class="card" id="card-device">
+              <div class="btnrow"><button class="btn ghost small" id="btn-recovery-check" type="button">检查待清理恢复记录</button><span class="hint" id="recovery-status"></span></div>
+              <div id="recovery-list" class="pm-list" style="display:none"></div>
               <div class="btnrow">
                 <button class="btn ghost" id="btn-device-profiles" type="button">👤 档案管理（导入 / 导出 / 战绩）</button>
                 <a class="btn ghost" href="/m/">📱 手机端页面</a>

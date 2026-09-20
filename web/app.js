@@ -60,7 +60,12 @@ const state = {
 const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
 
 // 座位视图偏好（FIN-05）：圆桌 / 列表记住上一次选择
-try { if (localStorage.getItem('ww_seat_view') === 'list') state.seatView = 'list'; } catch (_) { /* 隐私模式忽略 */ }
+// AC-10：左栏 240px 塞 12 人圆桌（座位 56px/姓名 10px）不可读——默认用列表视图；
+// 圆桌作为可切换的展示模式保留，用户显式选过就记住（含 ring）。
+try {
+  const savedSeatView = localStorage.getItem('ww_seat_view');
+  state.seatView = savedSeatView === 'ring' ? 'ring' : 'list';
+} catch (_) { state.seatView = 'list'; }
 
 async function api(method, url, body) {
   const res = await fetch(url, {
@@ -190,7 +195,9 @@ async function initSetup() {
   const entrySettings = $('#entry-settings');
   if (entrySettings) entrySettings.addEventListener('click', () => {
     const sec = $('#setup-section');
-    if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (!sec) return;
+    sec.hidden = !sec.hidden; // AC-11：长表单默认收起，入口展开/收起
+    if (!sec.hidden) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   const profilesEntry = $('#btn-profiles-entry');
   if (profilesEntry) profilesEntry.addEventListener('click', openProfileManager);
@@ -230,11 +237,47 @@ async function initSetup() {
     state.setup.boardId = e.target.value;
     if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); renderRulesEditor(); }
   });
-  $('#btn-start').addEventListener('click', startGame);
+  $('#btn-start').addEventListener('click', openStartConfirm);
   // 玩家档案（PROF-01）：加载列表 + 绑定选择/管理入口；失败不阻塞开局（服务端会归默认档案）
   $('#profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#btn-profile-manage').addEventListener('click', openProfileManager);
   // 外观与操作（档案级偏好）：即时生效 + 落档案（失败回退）
+  // AC-08：待清理恢复记录的可见入口（列出 / 重试，不泄露绝对路径）
+  const rcBtn = document.querySelector('#btn-recovery-check');
+  if (rcBtn) rcBtn.addEventListener('click', async () => {
+    const list = document.querySelector('#recovery-list');
+    const status = document.querySelector('#recovery-status');
+    try {
+      const r = await api('GET', '/api/import/recoveries');
+      if (!r.items.length) { status.textContent = '没有待清理的恢复记录 ✓'; if (list) list.style.display = 'none'; return; }
+      status.textContent = `有 ${r.items.length} 条待清理恢复记录：`;
+      if (list) {
+        list.style.display = '';
+        list.innerHTML = '';
+        for (const it of r.items) {
+          const row = el('div', 'pm-row');
+          const main = el('div', 'pm-main');
+          main.appendChild(elText('div', 'pm-name', it.file));
+          main.appendChild(el('div', 'hint', `残留 ${(it.residue || []).length} 项 · ${it.error || it.reason || ''}`));
+          row.appendChild(main);
+          const ops = el('div', 'pm-ops');
+          const retry = el('button', 'btn ghost small', '重试清理');
+          retry.addEventListener('click', async () => {
+            retry.disabled = true;
+            try {
+              const rr = await api('POST', '/api/import/recoveries/retry');
+              status.textContent = `已清理 ${rr.cleaned} 条，剩余 ${rr.remaining} 条`;
+              row.remove();
+              if (!rr.remaining) { status.textContent = '没有待清理的恢复记录 ✓'; list.style.display = 'none'; }
+            } catch (e) { retry.disabled = false; status.textContent = `重试失败：${e.message}`; }
+          });
+          ops.appendChild(retry);
+          row.appendChild(ops);
+          list.appendChild(row);
+        }
+      }
+    } catch (e) { if (status) status.textContent = `检查失败：${e.message}`; }
+  });
   ['#pref-font', '#pref-layout', '#pref-motion'].forEach((sel) => {
     const c = document.querySelector(sel);
     if (c) c.addEventListener('change', onPrefControlChange);
@@ -242,7 +285,19 @@ async function initSetup() {
   // 用户手改过昵称后就不再用档案昵称覆盖
   $('#my-name').addEventListener('input', () => { $('#my-name').dataset.touched = '1'; });
   loadProfiles();
-  $('#btn-resume').addEventListener('click', () => {
+  $('#btn-resume').addEventListener('click', async () => {
+    // AC-04：恢复前归属守卫（与 boot 自动恢复同一套确认）
+    try {
+      const g = JSON.parse(localStorage.getItem('ww_current') || 'null');
+      if (g && (!g.ownerProfileId || !state.profileId || g.ownerProfileId !== state.profileId)) {
+        const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+        if (v && v.ownerProfileId && state.profileId && v.ownerProfileId !== state.profileId) {
+          const proceed = await confirmForeignOwner(v, g);
+          if (!proceed) return;
+          return; // confirmForeignOwner 内部已 enterGameScreen
+        }
+      }
+    } catch (_) { /* 守卫失败不阻断原恢复路径 */ }
     if (localStorage.getItem('ww_resumable')) resumeFromAnchor();
     else resumeGame();
   });
@@ -669,6 +724,51 @@ async function testConfig() {
   } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
 }
 
+/** AC-11 §8.2：开局最终确认页——档案/板子/人数/座位策略/模式/模型状态一次复核；
+ *  无 Key 的真实模式提供「改用 Mock 开局」的一步入局路径（不改服务端安全门禁）。 */
+function openStartConfirm() {
+  const useMock = document.querySelector('#use-mock') && document.querySelector('#use-mock').checked;
+  const total = boardTotal();
+  const seatChoice = state.setup.mode === 'play' ? String(($('#my-seat') && $('#my-seat').value) || 'random') : '0';
+  const owner = (state.profiles || []).find((x) => x.id === state.profileId);
+  const tpl = state.meta.boards[state.setup.boardId];
+  const boardName = tpl ? tpl.name : '自定义板子';
+  const hasKey = !!(state.cfg && state.cfg.hasKey);
+  const wolves = Object.entries(state.setup.boardCounts || {}).filter(([r]) => state.meta.roles[r] && state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
+  const row = (k, v, warn) => `<div class="setinfo-row" style="display:flex;justify-content:space-between;gap:12px;padding:4px 0"><span style="color:var(--muted)">${k}</span><b style="color:${warn ? 'var(--err)' : 'var(--text)'}">${v}</b></div>`;
+  const wrap = el('div');
+  const head = el('div', 'mhead', '<h2>开局确认</h2>');
+  const body = el('div', 'mbody');
+  body.innerHTML = [
+    row('档案', owner ? `${AVATAR_EMOJI[owner.avatarId] || '👤'} ${escapeHtml(owner.nickname)}` : '默认档案'),
+    row('板子', `${escapeHtml(boardName)} · ${total} 人局 · 狼 ${wolves}/好 ${total - wolves}`),
+    row('我的座位', seatChoice === '0' ? '观战' : seatChoice === 'random' ? '随机' : seatChoice + ' 号'),
+    row('模式', useMock ? '🧪 Mock 试玩（不调用 API）' : '💳 真实对局（按用量计费）', !useMock && !hasKey),
+    row('模型', hasKey ? `${escapeHtml(String(state.cfg.model || ''))} · 已配置` : '未配置 API Key', !hasKey && !useMock),
+  ].join('');
+  body.appendChild(el('p', 'hint', useMock ? 'Mock 局不调用 API、完全免费。' : (hasKey ? '真实对局将按模型用量计费。' : '⚠ 真实模式需要先保存 API Key——当前尚未配置。')));
+  const br = el('div', 'btnrow');
+  const back = el('button', 'btn ghost', '← 返回调整');
+  back.addEventListener('click', () => closeModal());
+  const go = el('button', 'btn primary', useMock ? '🎮 开始 Mock 对局' : '🎮 开始真实对局');
+  go.addEventListener('click', () => { closeModal(); startGame(); });
+  br.append(back, go);
+  body.appendChild(br);
+  // 无 Key：一步 Mock 入口（门禁仍在服务端：真实模式没 Key 依旧被拒）
+  if (!hasKey && !useMock) {
+    const mockNow = el('button', 'btn primary', '🧪 改用 Mock 开局（免费）');
+    mockNow.addEventListener('click', () => {
+      const cb = document.querySelector('#use-mock');
+      if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+      closeModal();
+      startGame();
+    });
+    body.appendChild(el('div', 'btnrow')).appendChild(mockNow);
+  }
+  wrap.append(head, body);
+  openModal(wrap);
+}
+
 async function startGame() {
   $('#setup-error').textContent = '';
   try {
@@ -711,7 +811,9 @@ async function startGame() {
     if (state.profileId) body.profileId = state.profileId;
     persistSeatChoice(seatChoice);
     const created = await api('POST', '/api/games', body);
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!useMock };
+    const owner = (state.profiles || []).find((x) => x.id === state.profileId);
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!useMock,
+      ownerProfileId: state.profileId || null, ownerNickname: owner ? owner.nickname : null };
     state.gameMeta = { mock: !!useMock }; // 结算层要如实标注试玩局（视图负载里没有 mock 字段）
     localStorage.setItem('ww_current', JSON.stringify(state.game));
     if (created.mySeat) console.info(`[ww] 本局你在 ${created.mySeat} 号座位`);
@@ -851,6 +953,46 @@ async function loadProfiles() {
   }
 }
 
+/**
+ * AC-04：恢复前的归属守卫。本局 owner ≠ 当前浏览档案时弹三选：
+ * ① 切回原档案并恢复（推荐）② 仍以当前档案身份进入（顶栏如实标注本局归属）③ 取消留在首页
+ */
+async function confirmForeignOwner(v, handle) {
+  const ownerName = v.ownerNickname || '原档案';
+  const cur = (state.profiles || []).find((x) => x.id === state.profileId);
+  const curName = cur ? cur.nickname : '当前档案';
+  const withOwner = { ...handle, ownerProfileId: v.ownerProfileId || null, ownerNickname: v.ownerNickname || null };
+  return new Promise((resolve) => {
+    const wrap = el('div');
+    const head = el('div', 'mhead', '<h2>⚠ 对局归属确认</h2>');
+    const body = el('div', 'mbody');
+    body.appendChild(elText('p', null, `这局对局属于档案「${ownerName}」，而当前浏览的是「${curName}」。笔记与战绩始终记入本局归属档案。`));
+    const br = el('div', 'btnrow');
+    const sw = el('button', 'btn', `切回「${ownerName}」并恢复`);
+    sw.addEventListener('click', () => {
+      const op = (state.profiles || []).find((x) => x.id === v.ownerProfileId);
+      if (op) { onSelectProfile(op.id); }
+      state.game = withOwner;
+      $('#modal-root').innerHTML = '';
+      enterGameScreen();
+      resolve(true);
+    });
+    const keep = el('button', 'btn ghost', `仍以「${curName}」身份进入`);
+    keep.addEventListener('click', () => {
+      state.game = withOwner; // 不改写归属：handle 保留 owner 快照，顶栏如实显示
+      $('#modal-root').innerHTML = '';
+      enterGameScreen();
+      resolve(true);
+    });
+    const cancel = el('button', 'btn ghost', '暂不恢复');
+    cancel.addEventListener('click', () => { $('#modal-root').innerHTML = ''; resolve(false); });
+    br.append(sw, keep, cancel);
+    body.appendChild(br);
+    wrap.append(head, body);
+    openModal(wrap);
+  });
+}
+
 /** 当前档案的偏好（无档案时回落默认值） */
 function currentProfilePrefs() {
   const p = state.profiles.find((x) => x.id === state.profileId);
@@ -939,9 +1081,12 @@ function renderHomeProfile(err) {
 function renderTopbarIdentity() {
   const node = $('#topbar-profile');
   if (!node) return;
-  const p = (state.profiles || []).find((x) => x.id === state.profileId);
+  // AC-04：对局中显示**本局实际归属**（创建时固化的 owner 快照），不是当前浏览档案
+  const owner = state.game && state.game.ownerNickname ? { nickname: state.game.ownerNickname } : null;
+  const p = owner || (state.profiles || []).find((x) => x.id === state.profileId);
+  const foreign = owner && state.profileId && state.game.ownerProfileId !== state.profileId;
   node.textContent = p ? `${AVATAR_EMOJI[p.avatarId] || '👤'} ${p.nickname}` : '';
-  node.title = p ? '当前玩家档案（本局归属）' : '';
+  node.title = owner ? (foreign ? '本局归属该档案（非当前浏览档案）：笔记/战绩仍记入本局 owner' : '本局归属档案') : '';
 }
 
 /** 「关于」分组：版本 + 运行端（不做假信息；能力只有实际接入的才展示） */
@@ -1577,12 +1722,14 @@ function openTagModal(seat) {
   }
   body.appendChild(candRow);
 
-  // ④ 自称身份（TA 声称的，不等于你信的）
+  // ④ 自称身份（TA 声称的，不等于你信的）。AC-07：自称 ≠ 候选——
+  // 候选池扣除本人唯一身份是"我的推测"的语义；自称要能记录对跳（他人声称你的唯一身份），
+  // 所以列出全板子角色，不按 possibleRolesFor 过滤
   body.appendChild(el('h4', null, '自称身份（TA 声称的，不一定信）'));
   const claimSel = el('select');
   claimSel.appendChild(el('option', null, '（未声称）')).value = '';
-  for (const rid of roles) {
-    const r = state.meta.roles[rid];
+  for (const [rid, r] of Object.entries(state.meta.roles)) {
+    if (r.hidden) continue;
     claimSel.appendChild(el('option', null, `${r.emoji} ${r.name}`)).value = rid;
   }
   claimSel.value = draft.claimedRoleId || '';
@@ -3404,8 +3551,21 @@ function openModal(inner) {
     else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
   });
   root.appendChild(mask);
+  // AC-06：初始焦点必须落在弹窗内（否则 Tab 会先落到背景按钮），背景整体 inert 防交互
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.inert = true;
+  const focusables = modal.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])');
+  (focusables[0] || modal).focus({ preventScroll: true });
+  if (!focusables[0]) modal.tabIndex = -1;
   return modal;
 }
+
+// modal-root 被任何路径清空（含 innerHTML 直清）都自动解除背景 inert
+new MutationObserver(() => {
+  const root = document.getElementById('modal-root');
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.inert = !!root && root.children.length > 0;
+}).observe(document.getElementById('modal-root'), { childList: true });
 
 /** 关闭最上层模态并把焦点还给来源。链式打开下一个弹窗时来源保持不变。 */
 function closeModal() {
@@ -3421,7 +3581,13 @@ function closeModal() {
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const root = $('#modal-root');
-  if (root && root.children.length) { closeModal(); return; }
+  if (root && root.children.length) {
+    // AC-06：Esc 等价于点最上层弹窗自己的关闭键——编辑类弹窗的"未保存放弃"守卫在那里
+    const closeBtn = [...root.querySelectorAll('.modal button')].find((b) => b.offsetParent !== null && b.textContent.trim() === '✕');
+    if (closeBtn) { closeBtn.click(); return; }
+    closeModal();
+    return;
+  }
   const notes = $('#notes-drawer');
   if (notes && !notes.classList.contains('hidden') && !notesDocked()) toggleNotesDrawer();
 });
@@ -3758,17 +3924,23 @@ function ensureCardBacks() {
   }
 }
 ensureCardBacks();
-initSetup().then(() => {
+initSetup().then(async () => {
+  await loadProfiles(); // AC-04：归属守卫需要当前档案 id，先确保档案列表就绪
   const saved = localStorage.getItem('ww_current');
   if (saved) {
     try {
       const g = JSON.parse(saved);
-      return api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`).then((v) => {
-        if (v && !v.finished) {
-          state.game = g;
+      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+      if (v && !v.finished) {
+        // AC-04：本局 owner ≠ 当前浏览档案时不得静默进入——提示切回/明示进入/取消
+        const foreign = v.ownerProfileId && state.profileId && v.ownerProfileId !== state.profileId;
+        if (!foreign) {
+          state.game = { ...g, ownerProfileId: v.ownerProfileId || g.ownerProfileId || null, ownerNickname: v.ownerNickname || g.ownerNickname || null };
           enterGameScreen();
+          return;
         }
-      });
+        await confirmForeignOwner(v, g);
+      }
     } catch (_) { /* noop */ }
   }
 }).catch((e) => {

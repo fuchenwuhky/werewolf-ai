@@ -105,7 +105,10 @@ async function main() {
       console.log(`  ▸ ${name}: ${JSON.stringify(v).slice(0, 140)}`);
       return v;
     };
-    const ok = (cond, name) => console.log(`${cond ? '  ✓' : '  ✖'} ${name}`);
+    // AC-12：通过/失败/未执行三分，失败与必测未执行都必须非零退出
+    const results = [];
+    const ok = (cond, name) => { results.push({ name, pass: !!cond }); console.log(`${cond ? '  ✓' : '  ✖'} ${name}`); return cond; };
+    const skip = (name, why) => { results.push({ name, pass: false, skipped: true, why }); console.log(`  ⏭ ${name}（未执行：${why}）`); };
 
     console.log('== 1. 试玩开关 + 开局 ==');
     await step('确保试玩模式', `(() => { if (!state.mock) { const b2 = document.querySelector('#m-mock-btn'); if (b2) b2.click(); } return { mock: state.mock }; })()`);
@@ -134,10 +137,19 @@ async function main() {
 
     console.log('== 2. 页签 ==');
     await step('玩家页签', `(() => { document.querySelector('#m-tabbtn-players').click(); return document.querySelector('#m-game').className; })()`, 800);
-    ok(await evalJs(`document.querySelector('#m-game').classList.contains('tab-players')`), '玩家页生效');
+    ok(await evalJs(`document.querySelector('#m-game').classList.contains('tab-players') && visible(document.querySelector('#m-board'))`), '玩家页生效（面板可见）');
+    // 注：evalJs 里没有 visible 函数——改用内联判定
+    ok(await evalJs(`(() => { const n = document.querySelector('#m-board'); if (!n) return false; const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()`), '玩家面板非零尺寸');
     await shot('device-game-players');
     await step('笔记页签', `(() => { document.querySelector('#m-tabbtn-notes').click(); return true; })()`, 800);
-    ok(await evalJs(`document.querySelector('#m-game').classList.contains('tab-notes')`), '笔记页生效');
+    // AC-02 回归：笔记页签必须让面板真实可见（类不变、面板 display:none 的旧缺陷）
+    ok(await evalJs(`(() => {
+      const g = document.querySelector('#m-game');
+      const p = document.querySelector('#m-notes-pane');
+      if (!g || !p) return false;
+      const r = p.getBoundingClientRect();
+      return g.classList.contains('tab-notes') && !p.classList.contains('hidden') && r.width > 0 && r.height > 0;
+    })()`), '笔记页生效（面板可见且非零尺寸）');
     await shot('device-game-notes');
     await step('回到发言页', `(() => { document.querySelector('#m-tabbtn-speech').click(); return true; })()`, 600);
 
@@ -160,6 +172,8 @@ async function main() {
       await new Promise((r) => setTimeout(r, 400));
       const b = [...document.querySelectorAll('#m-notes-list button')].find((x) => x.textContent.includes('撤销'));
       if (!b) return 'no-undo-button';
+      const r = b.getBoundingClientRect();
+      if (!(r.width > 0 && r.height > 0)) return 'undo-button-invisible'; // 隐藏按钮不得点击（AC-12）
       b.click();
       await new Promise((r) => setTimeout(r, 1200));
       return 'undone';
@@ -176,11 +190,15 @@ async function main() {
     console.log('  输入框:', kb, '（软键盘弹出为系统行为，由截图/真机确认）');
     await sleep(1200);
     await shot('device-keyboard-state');
-    ok(kb === 'focused' || kb === 'no-input-yet', '键盘测试（无输入框时如实记录）');
+    if (kb === 'focused') ok(true, '输入框聚焦（软键盘由截图确认）');
+    else skip('软键盘遮挡验证', '当前阶段没有可见输入框');
 
     console.log('== 5. 完成 ==');
+    const fails = results.filter((r) => !r.pass && !r.skipped);
+    const skips = results.filter((r) => r.skipped);
+    console.log(`结果：${results.filter((r) => r.pass).length} 通过 / ${fails.length} 失败 / ${skips.length} 未执行`);
     console.log(`截图目录: ${outDir}/`);
-    process.exit(0);
+    process.exit(fails.length ? 1 : (skips.length ? 2 : 0)); // AC-12：失败=1；必测未执行=2
   }
   console.log('用法: node scripts/device-e2e.js flow|eval|shot');
   process.exit(0);

@@ -728,13 +728,35 @@ class Api {
           return this.json(res, e.code || 400, { error: e.message });
         }
       }
+      if (pathname === '/api/import/recoveries' && method === 'GET') {
+        // AC-08：设备与数据——待清理恢复记录的可见入口（只返回相对名与原因，不含绝对路径）
+        if (!mgmt) return this._denyManagement(res);
+        let files = [];
+        try { files = fs.readdirSync(this.saveDir).filter((f) => f.startsWith('.import-recovery-') && f.endsWith('.json')); } catch (_) {}
+        const items = [];
+        for (const name of files) {
+          try {
+            const rec = JSON.parse(fs.readFileSync(path.join(this.saveDir, name), 'utf8'));
+            items.push({ file: name, profileId: rec.profileId || null, residue: rec.residue || [], error: String(rec.error || '').slice(0, 120), createdAt: rec.createdAt || null });
+          } catch (_) { items.push({ file: name, reason: 'corrupt' }); }
+        }
+        return this.json(res, 200, { items });
+      }
+      if (pathname === '/api/import/recoveries/retry' && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        const r = await this._retryImportRecoveries();
+        return this.json(res, 200, { cleaned: r.cleaned, remaining: r.kept.length, kept: r.kept });
+      }
       if (pathname === '/api/profiles/import' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         const body = await this.readBody(req, transfer.MAX_BYTES); // 20MiB：与导出包上限一致（§3.5）
         // 唯一实现：与内部 importApplyRes 共用，避免双份逻辑漂移（笔记/偏好只随这里落地）
         const out = await this.importApplyRes(body.package);
         if (out.status === 200) {
-          return this.json(res, 200, { ok: true, imported: (out.body.gameMap && Object.keys(out.body.gameMap).length) || 0, profileId: out.body.profileId, gameMap: out.body.gameMap, importedNotes: out.body.importedNotes || 0 });
+          // AC-08：成功也必须透传恢复状态白名单字段——损坏/未清完的记录不能在 HTTP 重拼时被丢掉
+          const clean = { ok: true, imported: (out.body.gameMap && Object.keys(out.body.gameMap).length) || 0, profileId: out.body.profileId, gameMap: out.body.gameMap, importedNotes: out.body.importedNotes || 0 };
+          if (Array.isArray(out.body.pendingRecoveries)) clean.pendingRecoveries = out.body.pendingRecoveries;
+          return this.json(res, 200, clean);
         }
         return this.json(res, out.status, out.body);
       }
@@ -1133,6 +1155,9 @@ class Api {
       // 暂停态：配额/套餐等外部原因，前端据此显示横幅与"恢复对局"
       paused: game.paused || null,
       players, events, pending, queued, rules: game.rules, wolfTalk,
+      // AC-04：本局实际归属快照（顶栏/恢复守卫用；客户端当前浏览档案 ≠ 本局 owner）
+      ownerProfileId: entry.ownerProfileId || null,
+      ownerNickname: entry.ownerNicknameSnapshot || null,
       // 终局评分（MVP 体系）：对局结束后计算并缓存
       score: game.finished ? (entry.score || (entry.score = computeScores(game))) : undefined,
       // 局后 AI 教练（P2-4）：状态与文本随视图下发，SSE 会把它推给前端（无需额外轮询）
@@ -1664,7 +1689,7 @@ class Api {
           // 审核 P1-2 复验：**不再吞掉写盘故障**——磁盘失败视为整次导入失败，走下方回滚。
           const noteDoc = notes[g.id];
           if (noteDoc && noteDoc.seats && Object.keys(noteDoc.seats).length) {
-            this.annotations.putSync({ profileId: prof.id, gameId: newId, expectedRevision: 0, seats: noteDoc.seats });
+            await this.annotations.put({ profileId: prof.id, gameId: newId, expectedRevision: 0, seats: noteDoc.seats });
             importedNotes++;
           }
         }
@@ -1853,16 +1878,20 @@ class Api {
     return this.json(res, 200, { annotations: this.annotations.get(pid, entry.game.id), revision: this.annotations.get(pid, entry.game.id).revision });
   }
 
-  gameAnnotationsPut(res, entry, req, body) {
+  async gameAnnotationsPut(res, entry, req, body) {
     const pid = entry.ownerProfileId;
     if (!pid) return this.json(res, 404, { error: '该对局没有归属档案' });
     if (!this._annotationAccess(req, entry, { get: () => body.token })) return this.json(res, 403, { error: 'token 无效' });
+    // AC-01：必须走与 DELETE/clearSeat 同一条每文件串行队列——
+    // 旧实现 putSync() 在队列外同步执行，与入队的 clearSeat 并发时双方都 200、PUT 内容丢失
     try {
-      const doc = this.annotations.putSync({ profileId: pid, gameId: entry.game.id, expectedRevision: body.expectedRevision, seats: body.seats || {} });
+      const doc = await this.annotations.put({ profileId: pid, gameId: entry.game.id, expectedRevision: body.expectedRevision, seats: body.seats || {} });
       return this.json(res, 200, { annotations: doc, revision: doc.revision });
     } catch (e) {
-      if (e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
-      return this.json(res, 400, { error: e.message });
+      if (e.code === 409 || e.name === 'AnnotationConflict') return this.json(res, 409, { error: e.message, code: 409 });
+      // 数值语义码（4xx）透传；真实 IO 故障（EACCES/ENOSPC 等字符串码）按服务端错误 500
+      const n = Number(e.code);
+      return this.json(res, Number.isInteger(n) && n >= 400 && n < 500 ? n : 500, { error: e.message });
     }
   }
 

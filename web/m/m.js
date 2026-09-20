@@ -113,6 +113,60 @@ window.addEventListener('popstate', (e) => {
   }
 });
 
+/** AC-11：我的对局列表（当前档案）——可恢复局置顶可继续，已结束局只读展示 */
+async function showMyGamesSheet() {
+  if (!state.profileId) { flash('尚未选择档案', ''); return; }
+  let rows = [];
+  try {
+    const r = await api('GET', `/api/profiles/${state.profileId}/games`);
+    rows = r.rows || [];
+  } catch (e) { flash(`对局列表加载失败：${e.message}`); return; }
+  const wrap = el('div');
+  wrap.appendChild(el('h3', 'mtitle', '🎲 我的对局'));
+  const body = el('div', 'mbody');
+  if (!rows.length) { body.appendChild(el('p', 'hint', '当前档案还没有对局。回「开始」页开一局吧。')); }
+  else {
+    const unfinished = rows.filter((r) => !r.finished);
+    const finished = rows.filter((r) => r.finished).slice(-20).reverse();
+    for (const r of unfinished) {
+      const row = el('div', 'pm-row current');
+      const main = el('div', 'pm-main');
+      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${r.id}`));
+      main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.phase || ''} · 进行中`));
+      row.appendChild(main);
+      const ops = el('div', 'pm-ops');
+      const go = el('button', 'btn small', '继续');
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        try {
+          const t = await api('GET', `/api/games/${r.id}/tokens`);
+          const handle = { gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: Date.now() };
+          state.resume = { handle, fromDisk: !r.inMemory };
+          try { localStorage.setItem('mww_current', JSON.stringify(handle)); } catch (_) {}
+          $('#m-modal').innerHTML = '';
+          resumeGame();
+        } catch (e) { go.disabled = false; flash(`恢复失败：${e.message}`); }
+      });
+      ops.appendChild(go);
+      row.appendChild(ops);
+      body.appendChild(row);
+    }
+    for (const r of finished) {
+      const row = el('div', 'pm-row');
+      const main = el('div', 'pm-main');
+      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${r.winner ? (r.winner === 'wolf' ? '狼阵营胜' : r.winner === 'good' ? '好人阵营胜' : r.winner) : '已结束'}`));
+      main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.savedAt ? new Date(r.savedAt).toLocaleString() : ''}`));
+      row.appendChild(main);
+      body.appendChild(row);
+    }
+  }
+  const close = el('button', 'btn ghost', '关闭');
+  close.addEventListener('click', closeModalTop);
+  body.appendChild(close);
+  wrap.appendChild(body);
+  openModal(wrap);
+}
+
 /** Android 硬件返回桥（Capacitor 无 @capacitor/app，由 MainActivity 拦截返回键后调用）：
  *  与 popstate 同一条返回栈——处理一层；返回 true=已消费（留在应用），false=栈空（交给系统最小化）。
  *  计划 §10-5：关闭最上层面板 → 功能页返回（发言页签）→ 离局确认；一次返回只关一层。 */
@@ -241,13 +295,15 @@ async function init() {
   // P2-b：试玩开关必须一眼可见。它原来只藏在「⚙ 设置」弹窗最底下，
   // 实测出现过"以为在试玩、其实在花额度"（设置弹窗里的勾选状态看不见）。
   if ($('#m-mock-btn')) {
-    $('#m-mock-btn').addEventListener('click', () => {
-      state.mock = !state.mock;
+    const setMode = (mockMode) => {
+      if (state.mock === mockMode) return;
+      state.mock = mockMode;
       syncMockBtn();
-      flash(state.mock
-        ? '🧪 已切换为 Mock 试玩：不调用 API、不消耗额度'
-        : '💳 已切换为真实对局：会调用 API 并消耗额度');
-    });
+      flash(state.mock ? '🧪 已切换为 Mock 试玩：不调用 API、不消耗额度' : '💳 已切换为真实对局：会调用 API 并消耗额度');
+    };
+    $('#m-mock-btn').addEventListener('click', () => setMode(true));
+    const realBtn = document.querySelector('#m-real-btn');
+    if (realBtn) realBtn.addEventListener('click', () => setMode(false));
     syncMockBtn();
   }
   $('#m-gear').addEventListener('click', openGear);
@@ -280,9 +336,11 @@ async function init() {
   $('#m-tab-start').addEventListener('click', () => {
     $('.m-home-scroll') && $('.m-home-scroll').scrollTo({ top: 0, behavior: 'smooth' });
   });
-  $('#m-tab-game').addEventListener('click', () => {
-    if (state.resume) resumeGame();
-    else { $('#m-resume-card').scrollIntoView({ behavior: 'smooth', block: 'center' }); flash('没有进行中的对局——先开始一局吧', ''); }
+  $('#m-tab-game').addEventListener('click', async () => {
+    if (state.resume) return resumeGame();
+    await loadResumeCard(); // AC-03：无句柄也按服务端可恢复局找回（磁盘/暂停）
+    if (state.resume) return resumeGame();
+    await showMyGamesSheet(); // AC-11：按档案列出可恢复/已结束对局，而非一句提示
   });
   $('#m-tab-codex').addEventListener('click', () => openCodex());
   $('#m-tab-me').addEventListener('click', openProfileManager);
@@ -434,6 +492,28 @@ function openSettingsModal() {
   rowM.appendChild(mchk);
   prefBox.append(rowF, rowL, rowM);
   body.appendChild(prefBox);
+
+  // AC-08：待清理恢复记录的移动端可见入口（列出计数 + 重试）
+  body.appendChild(el('p', 'hint', '🧹 待清理恢复记录'));
+  const recLine = el('div', 'hint');
+  recLine.textContent = '检查中…';
+  body.appendChild(recLine);
+  const recBtn = el('button', 'btn ghost small', '重试清理');
+  recBtn.style.marginBottom = '10px';
+  recBtn.addEventListener('click', async () => {
+    recBtn.disabled = true;
+    try {
+      const r = await api('POST', '/api/import/recoveries/retry');
+      recLine.textContent = r.remaining ? `仍有 ${r.remaining} 条待清理（残留文件被占用）` : '没有待清理的恢复记录 ✓';
+    } catch (e) { recLine.textContent = `重试失败：${e.message}`; recBtn.disabled = false; }
+  });
+  body.appendChild(recBtn);
+  try {
+    api('GET', '/api/import/recoveries').then((r) => {
+      recLine.textContent = r.items.length ? `有 ${r.items.length} 条待清理恢复记录` : '没有待清理的恢复记录 ✓';
+      if (!r.items.length) recBtn.style.display = 'none';
+    }).catch(() => { recLine.textContent = '恢复记录不可用（需管理会话）'; recBtn.style.display = 'none'; });
+  } catch (_) {}
 
   const list = el('div', 'gear-list');
   const add = (label, fn, danger) => {
@@ -1278,7 +1358,9 @@ async function startGame() {
     try { localStorage.setItem('ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
     const created = await api('POST', '/api/games', body);
     // mock 随句柄保存：首页「继续上局」卡要如实标出试玩/真实（防止恢复时误标花钱）
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!created.mock || useMock, savedAt: Date.now() };
+    const owner = state.profiles.find((x) => x.id === state.profileId);
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!created.mock || useMock, savedAt: Date.now(),
+      ownerProfileId: state.profileId || null, ownerNickname: owner ? owner.nickname : null };
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGame();
   } catch (e) { $('#m-err').textContent = `✗ ${e.message}`; }
@@ -1296,35 +1378,99 @@ async function loadResumeCard() {
   const card = $('#m-resume-card');
   if (!card) return;
   const saved = localStorage.getItem('mww_current');
-  if (!saved) { card.classList.add('hidden'); return; }
+  if (!saved) { await adoptResumableForHandleless(); return; }
   let g = null;
   try { g = JSON.parse(saved); } catch (_) { localStorage.removeItem('mww_current'); card.classList.add('hidden'); return; }
+  // AC-03：用 /api/games 的行状态区分「运行中 / 仅在磁盘可恢复 / 已结束 / 不存在」。
+  // 旧实现拿 view 探测——服务重启后 entry 不在内存，view 404，把磁盘可恢复局误判为
+  // 「从未开局」并删掉句柄，用户从此找不到那一局。
   try {
-    const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-    // inMemory = 对局还在服务端内存里（v.live 是流式缓冲，空闲时为 null，不能用来判断能否继续）
-    if (v && !v.finished && v.started && v.inMemory) {
+    const { rows } = await api('GET', '/api/games');
+    const r = (rows || []).find((x) => x.id === g.gameId);
+    if (!r || r.finished || !r.started) {
+      localStorage.removeItem('mww_current'); // 确实已结束 / 不存在 / 从未开局 → 才允许清句柄
+      card.classList.add('hidden');
+      return;
+    }
+    // AC-04：本局 owner ≠ 当前浏览档案 → 先确认（切回原档案 / 明示进入 / 暂不）
+    const foreign = g.ownerProfileId && state.profileId && g.ownerProfileId !== state.profileId;
+    if (foreign) {
+      card.classList.add('hidden');
+      const ownerName = g.ownerNickname || '原档案';
+      const cur = state.profiles.find((x) => x.id === state.profileId);
+      const curName = cur ? cur.nickname : '当前档案';
+      const wrap = el('div');
+      wrap.appendChild(el('h3', 'mtitle', '⚠ 对局归属确认'));
+      const body = el('div', 'mbody');
+      body.appendChild(elText('p', null, `这局对局属于档案「${ownerName}」，当前浏览的是「${curName}」。笔记与战绩始终记入本局归属档案。`));
+      const row = el('div', 'btnrow');
+      const sw = el('button', 'btn', `切回「${ownerName}」恢复`);
+      sw.addEventListener('click', () => { onSelectProfile(g.ownerProfileId); state.resume = { handle: g, fromDisk: !r.inMemory }; $('#m-modal').innerHTML = ''; resumeGame(); });
+      const keep = el('button', 'btn ghost', `仍以「${curName}」进入`);
+      keep.addEventListener('click', () => { state.resume = { handle: g, fromDisk: !r.inMemory }; $('#m-modal').innerHTML = ''; resumeGame(); });
+      const no = el('button', 'btn ghost', '暂不恢复');
+      no.addEventListener('click', () => { $('#m-modal').innerHTML = ''; });
+      row.append(sw, keep, no);
+      body.appendChild(row);
+      wrap.appendChild(body);
+      openModal(wrap);
+      return;
+    }
+    state.resume = { handle: g, fromDisk: !r.inMemory };
+    $('#m-resume-meta').textContent = resumeMetaText(g, null) + (!r.inMemory ? ' · 服务已重启，将从存档恢复' : '');
+    card.classList.remove('hidden');
+  } catch (_) {
+    // 网络失败 / 非管理会话拿不到列表：不删句柄，尝试 view 兜底（LAN 手机路径）
+    try {
+      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+      if (v && v.finished) { localStorage.removeItem('mww_current'); card.classList.add('hidden'); return; }
       state.resume = { handle: g, view: v };
       $('#m-resume-meta').textContent = resumeMetaText(g, v);
       card.classList.remove('hidden');
-    } else {
-      localStorage.removeItem('mww_current'); // 已结束或从未开局 → 不再展示
-      card.classList.add('hidden');
-    }
-  } catch (_) { card.classList.add('hidden'); } // 网络失败：首页不显示卡，也不删句柄（联网后刷新可恢复）
+    } catch (_) { card.classList.add('hidden'); } // 离线：保留句柄，联网刷新再恢复
+  }
+}
+
+/** 无句柄时（换浏览器/清了存储）按服务端可恢复局找回（管理会话；LAN 手机仍靠句柄） */
+async function adoptResumableForHandleless() {
+  const card = $('#m-resume-card');
+  try {
+    const { rows } = await api('GET', '/api/games');
+    const r = (rows || []).find((x) => x.resumable || (x.inMemory && !x.finished && x.started));
+    if (!r) { card.classList.add('hidden'); return; }
+    const t = await api('GET', `/api/games/${r.id}/tokens`);
+    const handle = { gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: r.date ? new Date(r.date).getTime() : null };
+    state.resume = { handle, fromDisk: !r.inMemory };
+    try { localStorage.setItem('mww_current', JSON.stringify(handle)); } catch (_) {}
+    $('#m-resume-meta').textContent = resumeMetaText(handle, null) + (!r.inMemory ? ' · 服务已重启，将从存档恢复' : '');
+    card.classList.remove('hidden');
+  } catch (_) { card.classList.add('hidden'); }
 }
 
 function resumeMetaText(g, v) {
-  const seats = (v.players || []).length;
-  const phase = `第 ${v.day || 0} 天 · ${PHASE_LABEL[v.phase] || v.phase}`;
+  // v 为 null（磁盘可恢复局，只有行状态）时退化为句柄里的信息
+  const seats = v && v.players ? v.players.length : (g.seats || 0);
+  const phase = v ? `第 ${v.day || 0} 天 · ${PHASE_LABEL[v.phase] || v.phase}` : '从存档恢复';
   const mode = g.mock === undefined ? '' : ` · ${g.mock ? '🧪 Mock 试玩' : '💳 真实对局'}`;
   const at = g.savedAt ? ` · 保存于 ${new Date(g.savedAt).toLocaleString()}` : '';
-  return `${seats} 人局${mode} · ${phase}${at}`;
+  return `${seats ? seats + ' 人局 · ' : ''}${mode ? mode.replace(' · ', '') + ' · ' : ''}${phase}${at}`;
 }
 
-function resumeGame() {
+async function resumeGame() {
   if (!state.resume) return;
-  state.game = state.resume.handle;
-  enterGame();
+  const { handle, fromDisk } = state.resume;
+  if (!fromDisk) { state.game = handle; enterGame(); return; }
+  // AC-03：磁盘局走 /resume（服务端从锚点重建，返回轮换后的新令牌）
+  try {
+    const r = await api('POST', `/api/games/${handle.gameId}/resume`, { token: handle.playerToken || handle.godToken });
+    const next = { gameId: r.gameId || handle.gameId, playerToken: r.playerToken || handle.playerToken, godToken: r.godToken || handle.godToken, mock: handle.mock, savedAt: Date.now() };
+    state.resume = { handle: next };
+    state.game = next;
+    try { localStorage.setItem('mww_current', JSON.stringify(next)); } catch (_) {}
+    enterGame();
+  } catch (e) {
+    flash(`从存档恢复失败：${e.message}`);
+  }
 }
 
 /** 把对局句柄（含保存时间）落回 localStorage；immediate=true 跳过 60s 节流 */
@@ -1370,6 +1516,16 @@ function setGameTab(name) {
   game.classList.toggle('tab-speech', name === 'speech');
   game.classList.toggle('tab-players', name === 'players');
   game.classList.toggle('tab-notes', name === 'notes');
+  // AC-02：页签类与面板显隐必须同一处管理——旧实现只切类，#m-notes-pane 的 hidden
+  // 从未摘掉，笔记页签选中后面板仍 display:none（验收实测复现）
+  const notes = name === 'notes';
+  const board = $('#m-board');
+  const pane = $('#m-notes-pane');
+  if (board) board.classList.toggle('hidden', notes);
+  if (pane) {
+    pane.classList.toggle('hidden', !notes);
+    pane.setAttribute('aria-hidden', notes ? 'false' : 'true');
+  }
   const map = { speech: 'm-tabbtn-speech', players: 'm-tabbtn-players', notes: 'm-tabbtn-notes' };
   for (const [tab, id] of Object.entries(map)) {
     const b = document.getElementById(id);
@@ -1399,7 +1555,8 @@ function stopPolling() {
 /**
  * SSE 推送：只在服务端有变化时推帧。推送是优化不是依赖——
  * 不支持/被反代缓冲/断流一律回退轮询，手机端照常可玩。
- * 看门狗：8s 内既无帧也无心跳即判定连接已死。
+ * 看门狗：40s 既无帧也无心跳才判定连接已死（AC-09：服务端心跳 ≈16s 一次，
+ * 旧值 8s 小于一个心跳周期，正常空闲必误降级；40s = 2 个心跳 + 余量，轮询兜底不受影响）。
  */
 function startStream() {
   if (typeof window === 'undefined' || !window.EventSource) return false;
@@ -1422,12 +1579,12 @@ function startStream() {
     });
     state.streamWatchdog = setInterval(() => {
       if (!state.stream) return;
-      if (Date.now() - (state.lastStreamAt || 0) > 8000) {
+      if (Date.now() - (state.lastStreamAt || 0) > 40000) {
         stopStream();
         appendSys('⚠ 推送无响应，已切换为轮询');
         startPollFallback();
       }
-    }, 4000);
+    }, 8000);
     return true;
   } catch (_) {
     stopStream();
@@ -2304,12 +2461,12 @@ function openTagModal(seat) {
   }
   body.appendChild(candRow);
 
-  // ④ 自称身份（TA 声称的，不等于你信的）
+  // ④ 自称身份（TA 声称的，不等于你信的）。AC-07：列出全板子角色（可记录对跳），不按候选池过滤
   body.appendChild(el('h4', null, '自称身份（TA 声称的，不一定信）'));
   const claimSel = el('select');
   claimSel.appendChild(el('option', null, '（未声称）')).value = '';
-  for (const rid of roles) {
-    const r = roleInfo(rid);
+  for (const [rid, r] of Object.entries(state.meta.roles)) {
+    if (r.hidden) continue;
     claimSel.appendChild(el('option', null, `${r.emoji} ${r.name}`)).value = rid;
   }
   claimSel.value = draft.claimedRoleId || '';
@@ -2648,8 +2805,12 @@ function hint(t) { $('#m-pending-hint').textContent = t; }
 function syncMockBtn() {
   const b = $('#m-mock-btn');
   if (!b) return;
+  // AC-11：模式卡选中态（#m-mock-btn 现为模式卡之一；红字开关已废除）
   b.textContent = state.mock ? I18N.t('m.mockOn') : I18N.t('m.mockOff');
-  b.classList.toggle('danger', !state.mock);
+  b.classList.toggle('sel', !!state.mock);
+  b.setAttribute('aria-checked', state.mock ? 'true' : 'false');
+  const rb = document.querySelector('#m-real-btn');
+  if (rb) { rb.classList.toggle('sel', !state.mock); rb.setAttribute('aria-checked', state.mock ? 'false' : 'true'); }
 }
 
 /**

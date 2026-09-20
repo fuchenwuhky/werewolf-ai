@@ -59,7 +59,7 @@ test('R03 回滚未完成 + 恢复记录也写失败：rolledBack:false、recove
   const realUnlink = fs.unlinkSync;
   try {
     // 故障叠加：笔记写失败（触发回滚）→ unlink 失败（残留）→ 恢复记录写失败（原缺陷路径）
-    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM: 注入写盘失败'), { code: 'EPERM' }); };
+    api.annotations.put = async () => { throw Object.assign(new Error('EPERM: 注入写盘失败'), { code: 'EPERM' }); };
     fs.unlinkSync = (p) => {
       if (String(p).startsWith(savesDir)) throw Object.assign(new Error('EPERM: 注入清理失败'), { code: 'EPERM' });
       return realUnlink(p);
@@ -142,7 +142,7 @@ test('R05 幂等复验：正常重试清理后记录消化，再次重试零副�
   const { api, dataDir, savesDir } = makeIsolatedApi('r05');
   const realUnlink = fs.unlinkSync;
   try {
-    api.annotations.putSync = () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
+    api.annotations.put = async () => { throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); };
     fs.unlinkSync = (p) => {
       if (String(p).startsWith(savesDir)) throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
       return realUnlink(p);
@@ -151,7 +151,7 @@ test('R05 幂等复验：正常重试清理后记录消化，再次重试零副�
     assert.strictEqual(out.body.cleanupPending, true);
     const recName = out.body.recoveryFile;
     fs.unlinkSync = realUnlink;
-    delete api.annotations.putSync;
+    delete api.annotations.put;
     const r1 = await api._retryImportRecoveries();
     assert.strictEqual(r1.cleaned, 1, '首次重试消化记录');
     assert.strictEqual(fs.readdirSync(savesDir).filter((f) => f.startsWith('.import-recovery-')).length, 0);

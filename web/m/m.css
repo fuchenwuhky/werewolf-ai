@@ -802,8 +802,17 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-to-bottom .newcnt { color: #ffd7dd; font-weight: 700; }
 
 /* 主操作键（发送/确认/投票/技能确认）：≥52px 且优先占主宽（FIN-03）；次要键 ≥44（chip 档） */
-.m-keys [data-confirm] { min-height: 52px; flex: 1 1 auto; }
+.m-keys .key[data-confirm] { min-height: 52px; flex: 1 1 auto; } /* AC-10：特异性高于 .m-keys .key，52px 不再被 44px 覆盖 */
 .m-keys .key { min-height: 44px; }
 
 /* 笔记页顶部「最近一次撤销」行（§11 行11） */
 .m-note-undo { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); padding: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-2); background: rgba(216,178,95,.08); border: 1px solid rgba(216,178,95,.35); border-radius: var(--r-md); }
+
+/* AC-11/§4：模式单选卡（替代形似扣费按钮的红开关） */
+.m-mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.m-mode-card { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; padding: var(--sp-2) var(--sp-3); min-height: 48px; text-align: left; cursor: pointer; border-radius: var(--r-md); border: 1px solid var(--line); background: rgba(16, 26, 41, .6); color: var(--text); font-family: inherit; }
+.m-mode-card b { font-size: var(--fs-md); color: var(--text); }
+.m-mode-card span { font-size: var(--fs-xs); color: var(--muted); }
+.m-mode-card.sel { border-color: var(--gold); background: linear-gradient(180deg, rgba(216, 178, 95, .16), rgba(16, 26, 41, .6)); }
+.m-mode-card.sel b { color: var(--gold-bright); }
+.m-mode-card:not(.sel) b { color: var(--text-dim); }
