@@ -137,9 +137,7 @@ async function main() {
 
     console.log('== 2. 页签 ==');
     await step('玩家页签', `(() => { document.querySelector('#m-tabbtn-players').click(); return document.querySelector('#m-game').className; })()`, 800);
-    ok(await evalJs(`document.querySelector('#m-game').classList.contains('tab-players') && visible(document.querySelector('#m-board'))`), '玩家页生效（面板可见）');
-    // 注：evalJs 里没有 visible 函数——改用内联判定
-    ok(await evalJs(`(() => { const n = document.querySelector('#m-board'); if (!n) return false; const r = n.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()`), '玩家面板非零尺寸');
+    ok(await evalJs(`(() => { const g = document.querySelector('#m-game'); const n = document.querySelector('#m-board'); if (!g || !n) return false; const r = n.getBoundingClientRect(); return g.classList.contains('tab-players') && r.width > 0 && r.height > 0; })()`), '玩家页生效（面板可见非零尺寸）');
     await shot('device-game-players');
     await step('笔记页签', `(() => { document.querySelector('#m-tabbtn-notes').click(); return true; })()`, 800);
     // AC-02 回归：笔记页签必须让面板真实可见（类不变、面板 display:none 的旧缺陷）

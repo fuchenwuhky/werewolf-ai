@@ -360,13 +360,83 @@ function verifyWin(dir) {
   return { ...tree, exeInfo, problems };
 }
 
-/** DESKTOP：Electron portable 单文件 EXE（NSIS 壳）的图标与版本资源实检 */
+/** DESKTOP：Electron portable 单文件 EXE（NSIS 壳）。
+ *  壳内 payload 是 NSIS 压缩（零依赖无法解包），但 NSIS 打包的输入
+ *  desktop/dist/win-unpacked/resources/** 与壳内内容一致（electron-builder 先组目录再压缩）。
+ *  AC-05：对 win-unpacked 的 server 载荷做与目录包同级的**内容核对**（web/src/server.js），
+ *  并解析 app.asar 校验 main.js；再核对外壳图标与版本资源。 */
 function verifyDesktop(exePath) {
   const problems = [];
   const buf = fs.readFileSync(exePath);
   const exeInfo = checkExeBrandIcon('DESKTOP', exePath, problems);
   checkExeVersion('DESKTOP', exePath, readVersion(), problems);
-  return { checked: 0, binary: 1, files: 1, bytes: buf.length, hash: sha256(buf), exeInfo, problems };
+
+  // ---- Electron payload 内容核对（win-unpacked = NSIS 打包输入）----
+  const unpacked = path.join(path.dirname(exePath), '..', 'desktop', 'dist', 'win-unpacked');
+  const resDir = path.join(unpacked, 'resources');
+  let checked = 0;
+  if (!fs.existsSync(resDir)) {
+    problems.push('DESKTOP: 找不到 win-unpacked/resources（portable 的打包输入不存在，无法核对 payload）');
+    return { checked: 0, binary: 1, files: 1, bytes: buf.length, hash: sha256(buf), exeInfo, problems };
+  }
+  // a) asar 内 main.js：零依赖解析 asar 头，提取 main.js 与源码 desktop/main.js 比对
+  const asarPath = path.join(resDir, 'app.asar');
+  if (fs.existsSync(asarPath)) {
+    try {
+      const want = fs.readFileSync(path.join(DESKTOP_SRC, 'main.js'));
+      const got = readAsarFile(asarPath, 'main.js');
+      if (!got) problems.push('DESKTOP: app.asar 缺少 main.js');
+      else if (!got.equals(want)) problems.push('DESKTOP: app.asar 内 main.js 与源码不一致（包里是旧版本）');
+      checked++;
+    } catch (e) { problems.push('DESKTOP: app.asar 解析失败 ' + e.message); }
+  }
+  // b) extraResources：server/web、server/src、server.js 与源码全量比对（extraResources 原样拷贝）
+  const map = new Map();
+  const walk = (dir, prefix) => {
+    for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, f.name);
+      const rel = prefix ? prefix + '/' + f.name : f.name;
+      if (f.isDirectory()) walk(full, rel);
+      else { map.set(rel, fs.readFileSync(full)); checked++; }
+    }
+  };
+  const serverDir = path.join(resDir, 'server');
+  if (fs.existsSync(serverDir)) {
+    // 以 server/ 为根整树映射 → 键名与 sourceFiles() 的仓内相对名（web/…、src/…、server.js）一致
+    walk(serverDir, '');
+    const r = compareTree('DESKTOP-payload', map, problems);
+    checked = r.checked;
+  } else {
+    problems.push('DESKTOP: payload 缺少 server/（extraResources 未随包？）');
+  }
+  return { checked, binary: 1, files: checked + 1, bytes: buf.length, hash: sha256(buf), exeInfo, problems };
+}
+
+const DESKTOP_SRC = path.join(ROOT, 'desktop');
+
+/** 零依赖 asar 文件提取（AC-05）：asar = 8 字节头 + pickle(JSON 目录) + 连续文件区 */
+function readAsarFile(asarPath, innerName) {
+  const fd = fs.openSync(asarPath, 'r');
+  try {
+    // asar 布局：[u32=4][u32 headerSize][u32 dictSize][u32 strLen][JSON 字典][对齐填充][文件区]
+    // Chromium pickle 会在 JSON 前加 8 字节前缀，因此从 headerSize 区间里找第一个 '{' 起解析
+    const head = Buffer.alloc(8);
+    fs.readSync(fd, head, 0, 8, 0);
+    const headerSize = head.readUInt32LE(4);
+    const jsonBuf = Buffer.alloc(headerSize);
+    fs.readSync(fd, jsonBuf, 0, headerSize, 8);
+    const jsonStart = jsonBuf.indexOf('{');
+    if (jsonStart < 0) throw new Error('asar 头里找不到 JSON 字典');
+    const jsonEnd = jsonBuf.lastIndexOf('}');
+    if (jsonEnd < jsonStart) throw new Error('asar 头 JSON 不完整');
+    const index = JSON.parse(jsonBuf.slice(jsonStart, jsonEnd + 1).toString('utf8'));
+    const entry = index.files && index.files[innerName];
+    if (!entry || !entry.size) return null;
+    const offset = 8 + headerSize + Number(entry.offset);
+    const out = Buffer.alloc(entry.size);
+    fs.readSync(fd, out, 0, entry.size, offset);
+    return out;
+  } finally { fs.closeSync(fd); }
 }
 
 function report(label, target, r) {
@@ -419,12 +489,22 @@ function main(argv) {
   ];
   let ok = true;
   let seen = 0;
+  // AC-05：发布模式（--release 或 REQUIRE_PACKAGES=1）下必交包缺失 = 失败，
+  // 不再"全部没有也 exit 0"；日常开发默认保持跳过语义
+  const releaseMode = argv.includes('--release') || process.env.REQUIRE_PACKAGES === '1';
   for (const [label, target, fn] of targets) {
-    if (!fs.existsSync(target)) { console.log(`- ${label}：未找到 ${path.relative(ROOT, target)}（跳过）`); continue; }
+    if (!fs.existsSync(target)) {
+      if (releaseMode) { console.log(`✖ ${label}：发布模式必交包缺失 ${path.relative(ROOT, target)}`); ok = false; continue; }
+      console.log(`- ${label}：未找到 ${path.relative(ROOT, target)}（跳过）`);
+      continue;
+    }
     seen++;
     try { ok = report(label, target, fn(target)) && ok; } catch (e) { ok = false; console.log(`✖ ${label}：校验失败 ${e.message}`); }
   }
-  if (!seen) { console.log('没有可校验的产物：先跑 npm run app:apk / npm run app:win / npm run app:desktop'); return 0; }
+  if (!seen) {
+    console.log('没有可校验的产物：先跑 npm run app:apk / npm run app:win / npm run app:desktop');
+    return releaseMode ? 1 : 0;
+  }
   return ok ? 0 : 1;
 }
 
