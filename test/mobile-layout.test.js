@@ -91,14 +91,22 @@ test('对局页：身份牌在左，输入框+技能键同在一个右列（技�
   assert.match(MCSS, /\.m-keys \[data-confirm\] \{ order: -1; \}/, '确认键要用 order:-1 固定到最右');
 });
 
-test('尺寸：按钮整体收小（用户反馈"按钮太大"）', () => {
+test('尺寸：按钮整体收小（用户反馈"按钮太大"），技能键触区按新规格贴住 48 下限', () => {
   const px = (css, re) => Number((css.match(re) || [])[1]);
   const gear = block(MCSS, '.m-gear {');
   assert.ok(px(gear, /width:\s*(\d+)px/) <= 38, '齿轮按钮宽 ≤38px');
   assert.ok(px(gear, /height:\s*(\d+)px/) <= 38, '齿轮按钮高 ≤38px');
   assert.ok(px(block(MCSS, '.m-bar-btn {'), /width:\s*(\d+)px/) <= 38, '规则书按钮 ≤38px');
+  // 契约变更（M1 / §3 行75-76）——这是**改口径**，不是放宽：
+  //   本条原来把 .key 钉成「min-height ≤40px」，那是"按钮太大"这轮用户反馈的产物，
+  //   与 §3 行75「手机常用触区至少 48×48px」直接冲突；按 §3 行76「缩小字号或启用紧凑布局
+  //   不得缩小最低触区」⇒ 48 胜出。旧断言的**意图保留并加强**：高度恰好贴住 --h-touch-min
+  //   （下限之上、且不许再超标成 52/56），字号仍必须是紧凑值 --fs-sm（不许靠放大字号充数）。
+  const tokens = read(path.join('shared', 'tokens.css'));
+  const touchMin = px(tokens, /--h-touch-min:\s*(\d+)px/);
+  assert.ok(touchMin >= 48, `--h-touch-min 不得低于 48（§3 行75，当前 ${touchMin}）`);
   const key = block(MCSS, '.key {');
-  assert.ok(px(key, /min-height:\s*(\d+)px/) <= 40, '技能键高度 ≤40px');
+  assert.match(key, /min-height:\s*var\(--h-touch-min\)/, '技能键高度必须恰好贴住 --h-touch-min(48px)，不许再超标');
   assert.match(key, /font-size:\s*var\(--fs-sm\)/, '技能键字号用 --fs-sm(12px)，不要 --fs-md');
   const ta = block(MCSS, '.m-dialog textarea {');
   assert.ok(px(ta, /min-height:\s*(\d+)px/) <= 52, '输入框最小高度 ≤52px');

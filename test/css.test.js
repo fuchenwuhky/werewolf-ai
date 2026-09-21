@@ -205,6 +205,14 @@ const TOUCH_WIRING = [
   ['web/m/m.css', '#m-app .btn.primary, #m-app .btn.big', '--h-touch-main', 52],
   ['web/m/m.css', '.m-keys .key', '--h-touch-min', 48],
   ['web/m/m.css', '.m-keys .key[data-confirm]', '--h-touch-main', 52],
+  // M1 手机触区收口（计划书 §3 行75）：下面 4 条是实测真的 <48 的触区，且各自就是胜出规则。
+  // 另外 5 处（.key / .key.seat / .m-keys .btn / .m-dialog .btnrow .btn / .m-profile-row .btn）
+  // 的收小声明已被上面 #m-app .btn / .m-keys .key 这类更高优先级的规则压住（实测已 48），
+  // 生效规则已在本表内，故不重复接线（避免"钉住死规则"造成的假安心）。
+  ['web/m/m.css', '.m-sheet-foot .btn', '--h-touch-min', 48],
+  ['web/m/m.css', '.cdx-pager button', '--h-touch-min', 48],
+  ['web/m/m.css', '.m-tabs .m-tab-btn', '--h-touch-min', 48],
+  ['web/m/m.css', '.m-to-bottom', '--h-touch-min', 48],
 ];
 
 /** 取某个选择器的规则体（行首 `sel {` 起、按大括号配对收；允许缩进，@media 里的规则也能取到） */
