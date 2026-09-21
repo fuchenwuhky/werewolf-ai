@@ -600,8 +600,11 @@ async function openSummarySheet() {
     body.appendChild(el('h4', null, '我的得分构成'));
     const list = el('div', 'gear-list');
     for (const d of mine.details) {
-      const pts = d.points != null ? d.points : d.score;
-      list.appendChild(el('div', 'set-row', `<span>${escapeHtml(d.label || d.reason || '')}</span><b>${pts != null ? `${pts} 分` : ''}</b></div>`));
+      // ⚠ details 是**字符串数组**（src/engine/score.js:26 push 的是 "+5 守刀成功 2 夜" 这种整句），
+      // 不是对象。早先这里按 d.points / d.label 取值，每一行都渲染成空字符串 ——
+      // 真机截图（output/takeover-2026-09-20/mobile-summary.png）里"我的得分构成"标题下面
+      // 一片空白就是这个原因。验收时发现并修正。
+      list.appendChild(el('div', 'set-row', `<span>${escapeHtml(String(d))}</span><b></b>`));
     }
     body.appendChild(list);
   }

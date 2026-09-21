@@ -941,6 +941,16 @@ class Browser {
       check('手机端总结：呈现"AI 越玩越强"（跨局经验池）', sum.exp, sum.text.slice(0, 90));
       const sumH = await b.eval(`(() => { const m = document.querySelector('#m-modal .modal'); return m ? Math.round(m.getBoundingClientRect().height) : -1; })()`);
       check('手机端总结：弹层有实际高度（不是塌成一条线）', sumH >= 200, `高度=${sumH}px`);
+      // 验收发现的缺陷回归：score.details 是字符串数组（src/engine/score.js:26），
+      // 曾按对象取 d.points/d.label → 每行渲染成空字符串，真机截图里"我的得分构成"下面是空白。
+      const sumDet = await b.eval(`(() => {
+        const h = [...document.querySelectorAll('#m-modal .modal h4')].find((n) => n.textContent.includes('我的得分构成'));
+        if (!h) return { header: false };
+        const list = h.nextElementSibling;
+        const rows = list ? [...list.querySelectorAll('.set-row')].map((r) => r.textContent.replace(/\\s+/g, ' ').trim()) : [];
+        return { header: true, rows, blank: rows.filter((t) => !t).length };
+      })()`);
+      check('手机端总结：得分构成每行都有内容（不许渲染成空行）', sumDet.header && sumDet.rows.length > 0 && sumDet.blank === 0, JSON.stringify(sumDet).slice(0, 120));
       await b.shot(path.join(SHOTS, '13c-mobile-summary.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
       await b.setViewport(1280, 900, false);
