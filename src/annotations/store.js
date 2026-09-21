@@ -12,6 +12,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { tmpPathFor } = require('../tmp-files');
 
 const SCHEMA_VERSION = 2;
 const LEANINGS = ['neutral', 'lean_good', 'lean_wolf', 'third_party', 'wolf', 'good']; // 'wolf'/'good'：方案 §4.2 示例直接使用，接受为合法值
@@ -98,7 +99,7 @@ class AnnotationStore {
       }
       doc.revision += 1;
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+      const tmp = tmpPathFor(file); // FIX-12：命名统一（src/tmp-files.js），档案仓启动清理据此识别
       try {
         await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
         await fs.promises.rename(tmp, file);
@@ -131,7 +132,7 @@ class AnnotationStore {
       delete doc.seats[String(seat)];
       doc.revision += 1;
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+      const tmp = tmpPathFor(file); // FIX-12：命名统一（src/tmp-files.js），档案仓启动清理据此识别
       try {
         await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
         await fs.promises.rename(tmp, file);

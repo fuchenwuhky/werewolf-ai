@@ -17,6 +17,8 @@ const os = require('os');
 const path = require('path');
 
 const { Api } = require('../src/api');
+const { ProfileStore } = require('../src/profiles/store');
+const { tmpPathFor } = require('../src/tmp-files');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 const HOUR = 60 * 60 * 1000;
@@ -81,6 +83,86 @@ test('FIX-12：启动清理只删陈旧 tmp（三种历史命名），不动新�
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
+
+test('FIX-12：档案仓（ProfileStore）启动清理——档案/标注目录的陈旧 tmp 被清，回收站分毫未动', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-tmpclean3-'));
+  try {
+    // ① 先造出**真实落盘布局**（夹具必须放在代码真正写文件的位置，不是 saves/）
+    const store = new ProfileStore({ dataDir, logger: silentLogger });
+    const a = await store.create({ nickname: '甲' });
+    const b = await store.create({ nickname: '乙' });
+    await store.update(b.id, { archive: true });
+    await store.trash(b.id); // → profiles/trash/<archiveId>/{restore.json, profile-dir/...}
+
+    const trashRoot = path.join(store.root, 'trash');
+    const archiveIds = fs.readdirSync(trashRoot);
+    assert.strictEqual(archiveIds.length, 1, '前置：回收站里应有一条可恢复档案');
+    const trashEntry = path.join(trashRoot, archiveIds[0]);
+    const trashProfileDir = path.join(trashEntry, 'profile-dir');
+
+    // 标注目录（AnnotationStore 的落盘位置）
+    const annoDir = path.join(store.root, a.id, 'annotations');
+    fs.mkdirSync(annoDir, { recursive: true });
+    fs.writeFileSync(path.join(annoDir, 'g1.json'), JSON.stringify({ schemaVersion: 2, profileId: a.id, gameId: 'g1', revision: 1, seats: { 1: { leaning: 'lean_wolf' } } }));
+
+    // ② 陈旧残渣：三种真实命名族，分别落在根目录 / 档案目录 / 标注目录
+    const stale = [
+      path.join(store.root, 'index.json.tmp-4242-1'),                  // C 族（旧档案仓中缀命名）
+      path.join(store.root, a.id, 'profile.json.tmp-4242-2'),          // C 族
+      path.join(annoDir, path.basename(tmpPathFor(path.join(annoDir, 'g1.json'), 4242))), // A 族（新前缀命名）
+    ];
+    for (const f of stale) { fs.writeFileSync(f, '{"half":'); backdate(f, HOUR); }
+    // ③ 新鲜残渣：可能是别的进程正在写，不许删
+    const fresh = [
+      path.join(store.root, 'index.json.tmp-999-9'),
+      path.join(store.root, a.id, path.basename(tmpPathFor(path.join(store.root, a.id, 'profile.json'), 999))),
+    ];
+    for (const f of fresh) fs.writeFileSync(f, '{"half":');
+    // ④ 回收站里故意放一个"陈旧 tmp"：回收站是用户数据（等着恢复的档案），必须原封不动
+    const trashTmp = path.join(trashProfileDir, 'profile.json.tmp-4242-7');
+    fs.writeFileSync(trashTmp, '{"half":');
+    backdate(trashTmp, HOUR);
+    // ⑤ 越界哨兵：migrations/ 与 dataDir 顶层不在档案仓的清理范围内（不能在别人的目录里删东西）
+    const migrations = path.join(dataDir, 'migrations');
+    fs.mkdirSync(migrations, { recursive: true });
+    const outsideSentinel = path.join(migrations, 'default-profile-id.tmp-4242-5');
+    fs.writeFileSync(outsideSentinel, 'x');
+    backdate(outsideSentinel, HOUR);
+
+    // ⑥ 记下"用户数据"的指纹，清理后必须逐字节一致
+    const trashFilesBefore = listFiles(trashEntry);
+    const restoreBytesBefore = fs.readFileSync(path.join(trashEntry, 'restore.json'));
+    const profileBytesBefore = fs.readFileSync(path.join(store.root, a.id, 'profile.json'));
+    const indexBytesBefore = fs.readFileSync(path.join(store.root, 'index.json'));
+    const annoBytesBefore = fs.readFileSync(path.join(annoDir, 'g1.json'));
+
+    // ⑦ 重启（新实例的构造函数里应完成清理）
+    new ProfileStore({ dataDir, logger: silentLogger });
+
+    for (const f of stale) assert.strictEqual(fs.existsSync(f), false, `陈旧 tmp 必须被档案仓清理：${path.relative(dataDir, f)}`);
+    for (const f of fresh) assert.strictEqual(fs.existsSync(f), true, `新鲜 tmp 不得删除：${path.relative(dataDir, f)}`);
+    assert.strictEqual(fs.existsSync(trashTmp), true, '回收站里的任何文件都不得被清理触碰');
+    assert.deepStrictEqual(listFiles(trashEntry), trashFilesBefore, '回收站内容必须分毫未动（含 restore.json 与 profile-dir）');
+    assert.deepStrictEqual(fs.readFileSync(path.join(trashEntry, 'restore.json')), restoreBytesBefore, 'restore.json 必须逐字节一致');
+    assert.deepStrictEqual(fs.readFileSync(path.join(store.root, a.id, 'profile.json')), profileBytesBefore, '真实 profile.json 必须逐字节一致');
+    assert.deepStrictEqual(fs.readFileSync(path.join(store.root, 'index.json')), indexBytesBefore, '真实 index.json 必须逐字节一致');
+    assert.deepStrictEqual(fs.readFileSync(path.join(annoDir, 'g1.json')), annoBytesBefore, '真实标注文件必须逐字节一致');
+    assert.strictEqual(fs.existsSync(outsideSentinel), true, '档案仓不得越界清理 migrations/ 等不属于它的目录');
+    // 清理后重读还是同一份数据（不能把档案读坏）
+    assert.strictEqual(new ProfileStore({ dataDir, logger: silentLogger }).get(a.id).nickname, '甲');
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+/** 递归列出目录下所有相对路径（用于"分毫未动"比对） */
+function listFiles(dir, base = dir) {
+  const out = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...listFiles(p, base));
+    else out.push(path.relative(base, p).split(path.sep).join('/'));
+  }
+  return out.sort();
+}
 
 test('FIX-12：临时文件命名同族——导入/恢复写出的 tmp 必须能被启动清理识别', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-tmpclean2-'));

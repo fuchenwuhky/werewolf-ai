@@ -52,6 +52,7 @@ const { ProfileStore } = require('./profiles/store');
 const { AnnotationStore } = require('./annotations/store');
 const { ProfileMigration } = require('./profiles/migration');
 const transfer = require('./profiles/transfer');
+const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('./tmp-files');
 
 /** 调度器的 Key 池快照（"实际可用并发数"的唯一可信来源，见 /api/config 的 pool 字段） */
 function poolSnapshot() {
@@ -95,32 +96,9 @@ function keyBindingOf(cfg) {
   ).digest('hex');
 }
 
-// ---------- 原子写的临时文件命名（FIX-12：只有这一处定义）----------
-// 两种形态都在用，且都必须能被启动清理（_cleanupStaleTmp）认出来：
-//   · 后缀式 `<目标>.tmp`：saveGame 的存档替换。**故意保留**——test/remediation.test.js 用
-//     "把 `<存档>.tmp` 预先占成目录"做 EISDIR 故障注入，改掉这个路径会让那条故障注入失效；
-//   · 前缀式 `.tmp-<目标名>-<pid>-<时间戳>`：导入/恢复等新代码。点开头 + 不以 .json 结尾，
-//     所以 listSaves/profileStats 的 `*.json` 扫描天生收不到半截文件。
-// 旧版迁移用过 `.migtmp` 后缀，这里仍然识别（只清理历史残留，不再产生新文件）。
-const TMP_PREFIX = '.tmp-';
-const LEGACY_TMP_SUFFIXES = ['.tmp', '.migtmp'];
-
-/** 该文件名是不是"我们的原子写临时文件"（启动清理据此判定） */
-function isTmpFileName(name) {
-  return String(name).startsWith(TMP_PREFIX) || LEGACY_TMP_SUFFIXES.some((s) => String(name).endsWith(s));
-}
-
-/** 原子写的临时文件路径（与最终文件同目录：同目录 rename 才是原子替换） */
-function tmpPathFor(finalFile, stamp = Date.now()) {
-  return path.join(path.dirname(finalFile), `${TMP_PREFIX}${path.basename(finalFile)}-${process.pid}-${stamp}`);
-}
-
-/**
- * 启动清理的年龄阈值：比这个更老的临时文件才认为"上一个进程崩溃留下的"。
- * 为什么不无条件删：同一份数据目录可能被两个进程同时用（例如手动起了第二个实例），
- * 无差别删除会把**正在写**的临时文件删掉，反而制造"写了一半的存档"。
- */
-const STALE_TMP_MS = 10 * 60 * 1000;
+// ---------- 原子写的临时文件命名（FIX-12：判据唯一，见 src/tmp-files.js）----------
+// 历史教训：判据分叉过一次（这里只认 `.json.tmp`），于是导入/恢复/档案仓的 `.tmp-*` 残渣
+// 永远清不掉。现在命名与判定都来自 src/tmp-files.js，本文件只负责"扫自己的 saveDir"。
 
 class Api {
   constructor({ config, logger, saveDir = null }) {
@@ -191,28 +169,34 @@ class Api {
    *   ① 本方法**没有调用者**（只在定义里存在）→ 崩溃遗留的 tmp 永远躺在数据目录里；
    *   ② 过滤条件是 `endsWith('.json.tmp')`，只认 saveGame 的后缀式命名，认不出导入/恢复
    *      的 `.tmp-*` 与旧迁移的 `.migtmp` → 那两类残留哪怕被调用也清不掉。
-   * 现在：命名统一由本文件的 TMP_PREFIX/LEGACY_TMP_SUFFIXES 定义，过滤走 isTmpFileName()，
-   * 并在构造函数里真正执行一次。
+   * 现在：命名与判定都来自 src/tmp-files.js（含档案仓/标注仓的中缀族），本方法只负责扫自己的
+   * saveDir，并在构造函数里真正执行一次。
    *
    * @param {{maxAgeMs?: number}} opts 只有早于 maxAgeMs 的 tmp 才算"陈旧"（见 STALE_TMP_MS）
    * @returns {number} 实际删除的文件数
    */
   _cleanupStaleTmp({ maxAgeMs = STALE_TMP_MS } = {}) {
-    let entries = [];
-    try { entries = fs.readdirSync(this.saveDir); } catch (_) { return 0; } // 目录不可读：不影响启动
-    const now = Date.now();
-    const removed = [];
-    for (const name of entries) {
-      if (!isTmpFileName(name)) continue;
-      const full = path.join(this.saveDir, name);
-      let stat = null;
-      try { stat = fs.statSync(full); } catch (_) { continue; }
-      if (!stat.isFile()) continue; // 目录/符号链接等一律不动
-      if (now - stat.mtimeMs < maxAgeMs) continue; // 新鲜：可能是别的进程正在写，留着
-      try { fs.rmSync(full, { force: true }); removed.push(name); } catch (_) { /* 删不掉不影响启动 */ }
-    }
+    const removed = cleanupStaleTmp(this.saveDir, { maxAgeMs });
     if (removed.length) this.logger.info('api', `清理残留临时文件 ${removed.length} 个（${removed.join('、')}）`);
     return removed.length;
+  }
+
+  /**
+   * FIX-09：把"使用"落到档案的 lastUsedAt（档案列表按此字段倒序，见 store.list() 的注释）。
+   *
+   * 服务端唯一可观测的"使用" = **用这份档案开了一局**（createGame 带着 profileId）。
+   * 取舍（明确写下来，别让读代码的人以为是遗漏）：
+   *   · await 一次小文件原子写（与一次存档同量级，毫秒级），换取确定性——测试与"失败不影响开局"
+   *     都能被断言，不用 fire-and-forget 制造竞态；
+   *   · **任何失败只 warn**：使用痕迹不是关键数据，绝不能让"记不上最近使用时间"导致建局失败。
+   */
+  async _touchProfileUsage(profileId) {
+    if (!profileId) return;
+    try {
+      await this.profiles.touch(profileId);
+    } catch (e) {
+      this.logger.warn('profiles', `记录最近使用失败（${profileId}）：${e.message}`);
+    }
   }
 
   /** 按对局归属解析经验池（方案 PROF-03）：默认档案 → 旧池；其他档案 → 各自档案池 */
@@ -1049,6 +1033,7 @@ class Api {
     logger.openGameLog(gameId);
     logger.info('api', `对局已创建 ${gameId}（${useMock ? 'Mock' : llmCfg.model}，${check.total}人${mySeat ? '，你在 ' + mySeat + ' 号' : '，纯观战'}）`, { gameId });
     await this.saveGame(entry, { force: true });
+    // REVERSE-CHECK 注入：临时停用建局时的 touch
     return this.json(res, 200, { gameId, playerToken: entry.tokens.player, godToken: entry.tokens.god, mock: useMock, mySeat });
   }
 

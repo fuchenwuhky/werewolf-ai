@@ -19,6 +19,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('../tmp-files');
 
 const SCHEMA_VERSION = 1;
 const MAX_NICKNAME = 20;
@@ -68,10 +69,48 @@ class ProfileStore {
     // 审核 P1-3：并发创建/更新时 read-check-write 周期必须串行化，否则丢档案
     this._mutex = Promise.resolve();
     fs.mkdirSync(this.root, { recursive: true });
+    // FIX-12：启动清理本仓拥有的目录里崩溃遗留的原子写临时文件。
+    // 与 api.js 共用同一套判据（src/tmp-files.js）；只扫顶层、只删常规文件、有年龄门。
+    // **绝不进入 trash/**：回收站里是等待恢复的用户档案（含 restore.json 与 profile-dir），
+    // 哪怕里面真躺着 tmp 也只有用户自己该决定怎么处理。
+    this._cleanupStaleTmp();
     // 启动对账（验收 P1 修复的配套）：把「目录已搬进回收区，但索引/restore.json 没写完」这类
     // 崩溃或异常中断留下的中间态收敛掉。数据优先：删除没走完就让它走完（数据在回收区，可恢复），
     // 回滚失败的则把它搬回来。详见 _reconcileTrash。
     this._reconcileTrash();
+  }
+
+  /**
+   * FIX-12：清理本仓各目录**顶层**的陈旧原子写临时文件（崩溃残渣）。
+   *
+   * 覆盖范围（一一对应真实的落盘点）：
+   *   · `<root>/`                    —— index.json 的原子写残渣（`index.json.tmp-<pid>-<ts>`）
+   *   · `<root>/<profileId>/`        —— profile.json / experiences.json 的原子写残渣
+   *   · `<root>/<profileId>/annotations/` —— 私人标注的原子写残渣（AnnotationStore 写的就在这层）
+   * 明确**不覆盖**（见方法末尾注释与报告的"诚实边界"）：
+   *   · `<root>/trash/**`（用户数据，绝不动）
+   *   · 不递归到更深的自定义子目录（本仓今天不产生，也没有别的生产者）
+   * @param {{maxAgeMs?: number}} opts 年龄门（默认 10 分钟，见 STALE_TMP_MS）
+   * @returns {number} 实际删除的文件数
+   */
+  _cleanupStaleTmp({ maxAgeMs = STALE_TMP_MS } = {}) {
+    const dirs = [this.root];
+    const trashName = path.basename(this.trashDir());
+    try {
+      for (const entry of fs.readdirSync(this.root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || entry.name === trashName) continue; // 回收站：绝不进入
+        const dir = path.join(this.root, entry.name);
+        dirs.push(dir);
+        const anno = path.join(dir, 'annotations');
+        if (fs.existsSync(anno)) dirs.push(anno);
+      }
+    } catch (_) { /* 根目录不可读：不影响启动 */ }
+    const removed = [];
+    for (const dir of dirs) {
+      for (const name of cleanupStaleTmp(dir, { maxAgeMs })) removed.push(path.relative(this.root, path.join(dir, name)));
+    }
+    if (removed.length && this.logger) this.logger.info('profiles', `清理残留临时文件 ${removed.length} 个（${removed.join('、')}）`);
+    return removed.length;
   }
 
   indexPath() { return path.join(this.root, 'index.json'); }
@@ -86,7 +125,7 @@ class ProfileStore {
   async _atomicWrite(file, data) {
     const prev = this._queues.get(file) || Promise.resolve();
     const job = prev.catch(() => {}).then(async () => {
-      const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+      const tmp = tmpPathFor(file); // FIX-12：命名统一走 src/tmp-files.js（启动清理据此识别）
       await fs.promises.writeFile(tmp, data, 'utf8');
       await fs.promises.rename(tmp, file); // 同目录 rename，原子替换
     });
@@ -98,7 +137,7 @@ class ProfileStore {
 
   /** 同步版原子写：启动对账/回收区恢复这类不能 await 的路径用（同样是 tmp → rename） */
   _atomicWriteSync(file, data) {
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+    const tmp = tmpPathFor(file);
     fs.writeFileSync(tmp, data, 'utf8');
     fs.renameSync(tmp, file);
   }
@@ -139,7 +178,13 @@ class ProfileStore {
         preferences: prof.preferences || { fontScale: 1, layout: 'reading', reducedMotion: false },
         createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
         archivedAt: prof.archivedAt || null,
-        lastUsedAt: prof.lastUsedAt || prof.updatedAt,
+        // 排序语义（FIX-09；消费方 = web/app.js:1110 与 web/m/m.js:1185 的"按 lastUsedAt 倒序"）：
+        //   lastUsedAt = **最近一次使用**（用这份档案开局时由 API 层 touch），updatedAt = 最近一次**编辑**。
+        // 两者必须分开：旧实现回落 updatedAt，于是"最近改了个昵称"会冒充"最近用过"，界面排序看起来
+        // 像是乱的（这正是 lastUsedAt 长期是死字段、排序实际按"最近编辑"的根因）。
+        // 从未使用过的档案回落 createdAt（创建即首次可用），最后才回落 updatedAt（只在数据损坏、
+        // 两个字段都缺失时才走到）。**绝不回落 updatedAt 作为常规路径。**
+        lastUsedAt: prof.lastUsedAt || prof.createdAt || prof.updatedAt,
       });
     }
     return out;
@@ -157,6 +202,9 @@ class ProfileStore {
   }
 
   async _createInner({ nickname, avatarId, bio = '', preferences } = {}) {
+    // 同一时间戳给三个字段：createdAt/updatedAt/lastUsedAt 必须**严格相等**才谈得上
+    // "从未使用过的档案按其创建时间排序"（分成两次 new Date() 会差 1ms，排序与断言都不确定）
+    const now = new Date().toISOString();
     const prof = {
       schemaVersion: SCHEMA_VERSION,
       id: newId(),
@@ -164,8 +212,11 @@ class ProfileStore {
       avatarId: cleanAvatar(avatarId),
       bio: cleanBio(bio),
       preferences: { fontScale: 1, layout: 'reading', reducedMotion: false },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
+      // FIX-09：创建即"首次可用"，落 lastUsedAt，让"从未使用过"的档案在排序里有确定位置
+      // （否则只能回落 updatedAt，见 list() 的注释）
+      lastUsedAt: now,
       archivedAt: null,
       revision: 1,
     };
@@ -332,7 +383,7 @@ class ProfileStore {
     if (prof) {
       const idx = this._readIndex();
       if (!idx.profiles.some((p) => p.id === prof.id)) {
-        idx.profiles.push({ id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, archivedAt: prof.archivedAt || null, updatedAt: prof.updatedAt, lastUsedAt: prof.lastUsedAt || null });
+        idx.profiles.push({ id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, archivedAt: prof.archivedAt || null, updatedAt: prof.updatedAt, lastUsedAt: prof.lastUsedAt || prof.createdAt || null });
         idx.revision = (idx.revision || 0) + 1;
         // 走原子写：原先 fs.writeFileSync 直写，既没有 tmp→rename 的原子性，也会和并发写互相覆盖
         this._atomicWriteSync(this.indexPath(), JSON.stringify(idx, null, 2));
@@ -389,16 +440,35 @@ class ProfileStore {
     }
   }
 
-  /** 标记最近使用（切档/开局时调用；轻量，只动索引与 profile 的 lastUsedAt） */
-  touch(id) {
-    try {
-      const prof = this.get(id);
-      prof.lastUsedAt = new Date().toISOString();
-      fs.writeFileSync(this.profileFile(id), JSON.stringify(prof, null, 2));
-      const idx = this._readIndex();
-      const row = idx.profiles.find((p) => p.id === id);
-      if (row) { row.lastUsedAt = prof.lastUsedAt; fs.writeFileSync(this.indexPath(), JSON.stringify(idx, null, 2)); }
-    } catch (e) { if (this.logger) this.logger.warn('profiles', `touch 失败：${e.message}`); }
+  /**
+   * 标记"最近使用"（FIX-09：让 lastUsedAt 真正生效）。
+   *
+   * 语义边界（诚实说明）：服务端能观测到的"使用"只有**用这份档案开了一局**（API 层的 createGame
+   * 会带 profileId）。客户端档案管理里的"选用"按钮是纯本地状态（web/app.js 的 onSelectProfile
+   * 只写 localStorage），服务端看不到，所以 lastUsedAt ≠ "用户点开过它"，而是"最近一次以它开局"。
+   *
+   * 可靠性（FIX-09 的第二个缺陷）：旧实现是"同步 writeFileSync 直写 + 吞掉所有异常"，既绕开
+   * 原子替换（写到一半被杀 → profile.json 损坏），也绕开 create/update 的串行队列（与 PATCH 并发
+   * 时互相覆盖）。现在：走 _serialize（与 create/update/trash 同一条队）+ _atomicWrite（tmp→rename）。
+   *
+   * 写多少：只写 profile.json 一份（索引摘要里的 lastUsedAt 只是历史快照，list() 一律以
+   * profile.json 为准，故不必为了它多写一次 index.json）——即"每局开局一次小文件原子写"。
+   *
+   * 失败语义：**抛给调用方**（不做静默吞错）。是否让"记录使用痕迹"的失败影响主流程，
+   * 由调用方按业务优先级决定：api.js 的 createGame 选择吞错 + warn（开局绝不能因为记不上
+   * 使用时间而失败，见 _touchProfileUsage）。
+   * @returns {Promise<object>} 更新后的 profile（归档档案直接原样返回，不写盘）
+   */
+  async touch(id) {
+    return this._serialize(() => this._touchInner(id));
+  }
+
+  async _touchInner(id) {
+    const prof = this.get(id); // 不存在 → NotFoundError，由调用方决定怎么处理
+    if (prof.archivedAt) return prof; // 归档档案不算"使用"，也不该被写盘修改
+    prof.lastUsedAt = new Date().toISOString();
+    await this._atomicWrite(this.profileFile(id), JSON.stringify(prof, null, 2));
+    return prof;
   }
 }
 

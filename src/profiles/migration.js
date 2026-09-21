@@ -14,6 +14,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { tmpPathFor } = require('../tmp-files');
 
 const CURSOR = 'profiles-v1.json';
 
@@ -100,7 +101,7 @@ class ProfileMigration {
    * 传空值等价于 _clearDefaultId()。
    */
   setDefaultId(id) {
-    if (!id) return this._clearDefaultId();
+    if (!id) { this._clearDefaultId(); return null; }
     this.defaultId = String(id);
     this._persistDefaultId();
     return this.defaultId;
@@ -125,9 +126,9 @@ class ProfileMigration {
       doc.ownerNicknameSnapshot = human ? human.name : null;
       doc.ownerHumanSeat = human ? human.seat : null;
       doc.profileSchemaVersion = 1;
-      // 临时文件命名与 api.js 的 TMP_PREFIX 家族一致（`.tmp-` 前缀 + pid + 时间戳）：
-      // 旧实现用 `<file>.migtmp`，既不在 api.js 启动清理的识别范围内，也不好在数据目录里一眼看出归属。
-      const tmp = path.join(path.dirname(file), `.tmp-${path.basename(file)}-${process.pid}-${Date.now()}`);
+      // 临时文件命名统一走 src/tmp-files.js（FIX-12）：旧实现用 `<file>.migtmp`，
+      // 既不在启动清理的识别范围内，也不好在数据目录里一眼看出归属。
+      const tmp = tmpPathFor(file);
       fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
       fs.renameSync(tmp, file);
       n++;
