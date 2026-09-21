@@ -16,19 +16,35 @@ const { Game } = require('../src/engine/game');
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `papi-${tag}-`));
 
+// 每个 Api 实例独占一份 dataDir：saveDir = <dataDir>/saves。
+// ⚠ 不能让 saveDir 直接落在 os.tmpdir()（原来的"平铺"布局）：api.js 用 dirname(saveDir) 推导
+// ProfileStore 根（<tmp>/profiles）、迁移游标（<tmp>/migrations）、迁移源目录（<tmp>/saves），
+// 这些都是**全机共享**路径。node --test 默认并行跑各测试文件，多个进程同时把
+// profiles/index.json.tmp-* rename 成 profiles/index.json，Windows 会间歇性拒绝：
+//   EPERM: operation not permitted, rename '...\Temp\profiles\index.json.tmp-<pid>-<ts>' -> '...\Temp\profiles\index.json'
+// API 层如实把 e.code 当状态码回出去（create/import 于是失败）→ 用例随机挂。
+// 实测：6 进程 × 40 次建档案，平铺布局失败 34–39/40（每次失败都指向同一份共享 index.json）；
+// 隔离 dataDir 后同样的并发负载 0/240。
 function makeApi(tag) {
-  const dir = tmpDir(tag);
-  const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
-  return { api, dir };
-}
-
-// 隔离变体：saveDir 嵌套在独立 dataDir 下。makeApi 的平铺布局会让 ProfileStore 根目录
-// 落在共享的 <tmp>/profiles（dirname(saveDir)），"最后一份可用档案"这类全库断言需要隔离根。
-function makeIsolatedApi(tag) {
   const dataDir = tmpDir(tag);
   const savesDir = path.join(dataDir, 'saves');
   const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: savesDir });
-  return { api, dataDir, savesDir };
+  // dir 仍指向"存档目录"（savesDir），dataDir 是独占根（清理时删它）
+  return { api, dir: savesDir, dataDir, savesDir };
+}
+
+// 清理独占 dataDir：先等构造期的档案迁移任务收尾（它仍会写 profiles/index.json），
+// 否则会出现"删目录 ↔ 迁移写文件"的竞态（Windows 上表现为 EPERM/ENOTEMPTY）。
+// 随后删除；刚写完的文件可能被杀软/索引器短暂占用，故按错误码做有限次重试，最终失败仍抛出（不吞错）。
+async function dispose(api, dataDir) {
+  try { await api._profileMigrationReady; } catch (_) {}
+  for (let i = 0; ; i++) {
+    try { fs.rmSync(dataDir, { recursive: true, force: true }); return; }
+    catch (e) {
+      if (i >= 4 || !['EPERM', 'EBUSY', 'ENOTEMPTY', 'EACCES'].includes(e.code)) throw e;
+      await new Promise((r) => setTimeout(r, 20 * (i + 1)));
+    }
+  }
 }
 
 // 照抄 transfer.test.js 的存档字段结构，额外带上 tokens/anchor/journal 敏感字段用于验证导出脱敏
@@ -95,9 +111,12 @@ async function call(api, method, pathname, body) {
 
 test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全链', async () => {
   const { api } = makeApi('crud');
+  // 等构造期的档案迁移就绪：后面"归档 → 删除"依赖根目录里确实已有迁移默认档案
+  // （"最后一份可用档案不可归档"的保护），不等待就会和迁移异步创建抢占时序。
+  await api._profileMigrationReady;
 
   const c1 = await call(api, 'POST', '/api/profiles', { nickname: '砚舟', avatarId: 'scholar', bio: '测试' });
-  assert.strictEqual(c1.status, 200);
+  assert.strictEqual(c1.status, 200, `创建档案失败：${c1.raw}`);
   const pid = c1.body.profile.id;
   assert.match(pid, /^[0-9a-f-]{36}$/);
 
@@ -106,7 +125,7 @@ test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全�
   assert.ok(list.body.profiles.some((p) => p.id === pid));
 
   const up1 = await call(api, 'PATCH', `/api/profiles/${pid}`, { expectedRevision: 1, nickname: '砚舟二号' });
-  assert.strictEqual(up1.status, 200);
+  assert.strictEqual(up1.status, 200, `PATCH 失败：${up1.raw}`);
   const up2 = await call(api, 'PATCH', `/api/profiles/${pid}`, { expectedRevision: 1, nickname: '过期写' });
   assert.strictEqual(up2.status, 409, '过期 revision 必须 409');
 
@@ -179,21 +198,21 @@ test('导出收集：collectExportableGames 只收已结束且归属正确的对
 });
 
 test('导出路由：不存在的档案 id 返回 404/500 语义，绝不 200', async () => {
-  const { api, dir } = makeApi('exp404');
+  const { api, dataDir } = makeApi('exp404');
   try {
     const miss = await call(api, 'GET', '/api/profiles/00000000-0000-4000-8000-000000000000/export');
     // 语义上应是 404；当前实现 profileExport 的 catch 吞掉 NotFoundError.code 固定回 500
     // （与"删除后 stats"用例同一容断言口径：404 或 500 都不算回归，但绝不能 200）
     assert.strictEqual(miss.status, 404, `不存在的档案导出应 404（实际 ${miss.status}）`);
     assert.ok(miss.body && miss.body.error, '错误响应必须带 error 说明');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('导出路由：包体只含本档案已结束局并脱敏（响应头/清单/无令牌）', async () => {
-  const { api, dir } = makeApi('expok');
+  const { api, dir, dataDir } = makeApi('expok');
   try {
     const c = await call(api, 'POST', '/api/profiles', { nickname: '砚舟导出', avatarId: 'scholar', bio: '' });
-    assert.strictEqual(c.status, 200);
+    assert.strictEqual(c.status, 200, `创建档案失败：${c.raw}`);
     const pid = c.body.profile.id;
 
     // 本档案已结束局 + 别人档案的局 + 本档案未结束局
@@ -219,14 +238,14 @@ test('导出路由：包体只含本档案已结束局并脱敏（响应头/清�
     assert.ok(!exp.raw.includes('JOURNAL-SECRET'), '导出包不得包含 journal 数据');
     assert.ok(!/"tokens"/.test(exp.raw), '包内不得出现 tokens 字段');
     assert.ok(!exp.raw.includes('playerToken') && !exp.raw.includes('godToken'), '包内不得出现 playerToken/godToken 字段');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('导出路由：私人标注跟随导出（手写 profiles/<pid>/annotations/<gameId>.json）', async () => {
-  const { api, dir } = makeApi('expnote');
+  const { api, dir, dataDir } = makeApi('expnote');
   try {
     const c = await call(api, 'POST', '/api/profiles', { nickname: '砚记笔记' });
-    assert.strictEqual(c.status, 200);
+    assert.strictEqual(c.status, 200, `创建档案失败：${c.raw}`);
     const pid = c.body.profile.id;
     fs.writeFileSync(path.join(dir, 'exp-a.json'), JSON.stringify(mkSaveDoc('exp-a', pid, true)));
     fs.writeFileSync(path.join(dir, 'exp-b.json'), JSON.stringify(mkSaveDoc('exp-b', pid, true)));
@@ -251,11 +270,11 @@ test('导出路由：私人标注跟随导出（手写 profiles/<pid>/annotation
     assert.deepStrictEqual(Object.keys(exp.body.notes), ['exp-a'], '只有写了标注的局进入 notes');
     assert.strictEqual(exp.body.notes['exp-a'].seats[3].leaning, 'lean_wolf', '标注内容随包导出');
     assert.strictEqual(exp.body.games.length, 2, '没标注的已结束局仍照常导出');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('导出路由：归档档案导出仍 200（归档=只读保留）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('exparch');
+  const { api, dataDir, savesDir } = makeApi('exparch');
   try {
     // 等迁移默认档案就绪，"最后一份可用档案不可归档"的保护才有确定语义
     await api._profileMigrationReady;
@@ -271,11 +290,11 @@ test('导出路由：归档档案导出仍 200（归档=只读保留）', async 
     assert.strictEqual(exp.status, 200, '归档档案导出仍应 200');
     assert.strictEqual(exp.body.profile.nickname, '砚归档', '归档档案的包内容不变');
     assert.strictEqual(exp.body.games.length, 1, '归档档案的已结束局照常导出');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('档案管理链：归档→列表可见→恢复→再归档→删除→stats 不可达；最后一份可用档案归档被拒', async () => {
-  const { api, dataDir } = makeIsolatedApi('chain');
+  const { api, dataDir } = makeApi('chain');
   try {
     await api._profileMigrationReady;
     const list0 = await call(api, 'GET', '/api/profiles');
@@ -326,11 +345,11 @@ test('档案管理链：归档→列表可见→恢复→再归档→删除→st
     assert.strictEqual(del2.status, 200, `删除失败：${JSON.stringify(del2.body)}`);
     const gone2 = await call(api, 'GET', `/api/profiles/${pid2}/stats`);
     assert.strictEqual(gone2.status, 404, `已删除档案的 stats 应 404（实际 ${gone2.status}）`);
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('真实 HTTP 导入→重新导出往返：笔记与偏好必须随包落地（审核 P1-1）', async () => {
-  const { api, dataDir } = makeIsolatedApi('roundtrip');
+  const { api, dataDir } = makeApi('roundtrip');
   try {
     const pkg = {
       manifest: { exportVersion: 1, packageId: 'pkg-1', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 1 } },
@@ -362,11 +381,11 @@ test('真实 HTTP 导入→重新导出往返：笔记与偏好必须随包落�
     // ③ 事件流不丢（本次包内 game.events 全量在）
     assert.strictEqual(out.games[0].events.length, 2, '导出对局必须带事件流');
     assert.ok(!exp.raw.includes('SECRET'), '脱敏复核：原文不含令牌类字段');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('导出事件流：旧式存档（events 在 anchor）不再导出 0 条；game.events 优先（审核 P1-3）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('anchor-ev');
+  const { api, dataDir, savesDir } = makeApi('anchor-ev');
   try {
     const prof = await call(api, 'POST', '/api/profiles', { nickname: '锚点客' });
     const pid = prof.body.profile.id;
@@ -387,11 +406,11 @@ test('导出事件流：旧式存档（events 在 anchor）不再导出 0 条；
     assert.strictEqual(byId['g-anchor-ev'].events.length, 12, '旧式存档必须从 anchor.events 取到全部事件');
     assert.strictEqual(byId['g-neo-ev'].events.length, 30, '新式终局存档用 game.events（不是过期锚点）');
     assert.strictEqual(byId['g-neo-ev'].events[29].seq, 30, '不得静默截断');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('平局战绩：胜/负/平互斥，平局不算胜也不产生负数（审核 P2-4）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('draw');
+  const { api, dataDir, savesDir } = makeApi('draw');
   try {
     const prof = await call(api, 'POST', '/api/profiles', { nickname: '和平客' });
     const pid = prof.body.profile.id;
@@ -412,7 +431,7 @@ test('平局战绩：胜/负/平互斥，平局不算胜也不产生负数（审
     assert.strictEqual(st.body.losses, 1, '恰 1 负');
     assert.strictEqual(st.body.draws, 1, '恰 1 平（含不可判定不误入胜负）');
     assert.ok(st.body.wins + st.body.losses <= st.body.real, '胜负之和不超过正式局数');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('_saveMeta：终局保留完整事件流，进行中剥离（审核 P1-3 存档侧）', () => {
@@ -428,7 +447,7 @@ test('_saveMeta：终局保留完整事件流，进行中剥离（审核 P1-3 �
 });
 
 test('导入包缺 notes 字段：importedNotes 为 0，不报错（notes 分支补全）', async () => {
-  const { api, dataDir } = makeIsolatedApi('nonotes');
+  const { api, dataDir } = makeApi('nonotes');
   try {
     const pkg = {
       manifest: { exportVersion: 1, packageId: 'pkg-2', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 1, notes: 0 } },
@@ -443,11 +462,11 @@ test('导入包缺 notes 字段：importedNotes 为 0，不报错（notes 分支
     assert.strictEqual(imp.status, 200, JSON.stringify(imp.body));
     assert.strictEqual(imp.body.importedNotes, 0, '无笔记包 importedNotes 必须为 0');
     assert.strictEqual(Object.keys(imp.body.gameMap).length, 1);
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('真实 HTTP 导入坏包：走统一实现后仍返回 400 语义（importApplyRes 错误路径）', async () => {
-  const { api, dataDir } = makeIsolatedApi('badimp');
+  const { api, dataDir } = makeApi('badimp');
   try {
     const imp = await call(api, 'POST', '/api/profiles/import', { package: { profile: { nickname: '坏包' }, games: 'not-array' } });
     assert.strictEqual(imp.status, 400, `缺 manifest/非法 games 必须 400（实际 ${imp.status}：${JSON.stringify(imp.body)}）`);
@@ -455,11 +474,11 @@ test('真实 HTTP 导入坏包：走统一实现后仍返回 400 语义（import
     const list = await call(api, 'GET', '/api/profiles');
     const stray = list.body.profiles.filter((p) => p.nickname.includes('坏包'));
     assert.strictEqual(stray.length, 0, '校验失败不得创建档案');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('真实 HTTP 导入半坏包：第二局 players 类型非法 → 整体 400，零残留（审核 P2-4）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('halfbad');
+  const { api, dataDir, savesDir } = makeApi('halfbad');
   try {
     const pkg = {
       manifest: { exportVersion: 1, packageId: 'pkg-3', createdAt: '2026-01-01T00:00:00.000Z', source: '测试', counts: { games: 2, notes: 0 } },
@@ -478,11 +497,11 @@ test('真实 HTTP 导入半坏包：第二局 players 类型非法 → 整体 40
     assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('半坏包')).length, 0, '不得创建档案');
     const leftovers = fs.existsSync(savesDir) ? fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') && f !== 'experiences.json') : [];
     assert.strictEqual(leftovers.length, 0, `不得留下任何存档（实际 ${leftovers}）`);
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('导入时笔记写盘故障：不报成功、回滚已写存档与档案（审核 P1-2 复验）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('diskfail');
+  const { api, dataDir, savesDir } = makeApi('diskfail');
   try {
     // 故障注入：putSync 模拟磁盘写失败（旧实现对这类错误静默跳过 → 导出丢笔记却报成功）
     api.annotations.put = async () => { throw Object.assign(new Error('EPERM: 磁盘写入失败（注入）'), { code: 'EPERM' }); };
@@ -503,11 +522,11 @@ test('导入时笔记写盘故障：不报成功、回滚已写存档与档案�
     assert.strictEqual(leftovers.length, 0, `已写存档必须回滚（实际 ${leftovers}）`);
     const list = await call(api, 'GET', '/api/profiles');
     assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('磁盘故障')).length, 0, '导入档案必须已回收');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await dispose(api, dataDir); }
 });
 
 test('回滚未完成：清理失败必须如实报 rolledBack:false + 落恢复记录；重试导入自动清理（复审 P2-3）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('rollback2');
+  const { api, dataDir, savesDir } = makeApi('rollback2');
   const realUnlink = fs.unlinkSync;
   try {
     // 故障组合：笔记写盘失败（触发回滚）+ unlink 失败（回滚也不完整）
@@ -548,11 +567,11 @@ test('回滚未完成：清理失败必须如实报 rolledBack:false + 落恢复
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     const leftovers = fs.readdirSync(savesDir).filter((f) => (f.endsWith('.json') && !f.startsWith('.import-recovery-')) || f.startsWith('.tmp-') || f.startsWith('.import-recovery-'));
     assert.strictEqual(leftovers.length, 0, `重试后残留与恢复记录必须被清空（实际 ${leftovers}）`);
-  } finally { fs.unlinkSync = realUnlink; fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { fs.unlinkSync = realUnlink; await dispose(api, dataDir); }
 });
 
 test('rename 失败：.tmp-* 进回滚清单，清理成功后如实报 rolledBack:true（复审 P2-3 tmp 记录）', async () => {
-  const { api, dataDir, savesDir } = makeIsolatedApi('tmpres');
+  const { api, dataDir, savesDir } = makeApi('tmpres');
   const realRename = fs.promises.rename;
   try {
     fs.promises.rename = async (from, to) => {
@@ -573,5 +592,5 @@ test('rename 失败：.tmp-* 进回滚清单，清理成功后如实报 rolledBa
     assert.strictEqual(out.body.rolledBack, true, 'tmp 已被记录且清理成功 → 可以如实声称已回滚');
     const leftovers = fs.readdirSync(savesDir).filter((f) => f.startsWith('.tmp-') || f.includes('g-tmprs') || f.startsWith('.import-recovery-'));
     assert.strictEqual(leftovers.length, 0, `tmp 残留必须被回滚清空（实际 ${leftovers}）`);
-  } finally { fs.promises.rename = realRename; fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { fs.promises.rename = realRename; await dispose(api, dataDir); }
 });

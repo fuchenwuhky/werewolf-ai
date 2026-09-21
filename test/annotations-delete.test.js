@@ -36,9 +36,15 @@ async function call(api, method, pathname, body, host) {
 }
 
 test('DELETE annotations：清除座位→revision 前进→409 并发→权限矩阵与坏参数', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'anno-del-'));
+  // 独占 dataDir：saveDir 嵌在 <dataDir>/saves 下。平铺布局（saveDir 直接落在 os.tmpdir()）会让
+  // api.js 用 dirname(saveDir) 推出**全机共享**的 <tmp>/profiles 与 <tmp>/migrations；node --test
+  // 并行跑测试文件时，多个进程同时把 profiles/index.json.tmp-* rename 成 index.json，Windows 会
+  // 间歇性 EPERM —— 本用例的 POST /api/profiles 于是直接失败（详见 profiles-api.test.js 的说明）。
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anno-del-'));
+  const dir = path.join(dataDir, 'saves');
+  let api;
   try {
-    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+    api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
     // 建档案 + Mock 内存局
     const prof = (await call(api, 'POST', '/api/profiles', { nickname: '撤销客' })).body.profile;
     const g = new Game({ id: 'del-g1', board: { wolf: 1, villager: 4 }, players: [{ name: 'P1', isHuman: true }, { name: 'P2' }, { name: 'P3' }, { name: 'P4' }, { name: 'P5' }], stepPauseMs: 1, logger: silentLogger });
@@ -82,5 +88,10 @@ test('DELETE annotations：清除座位→revision 前进→409 并发→权限�
     // 管理会话（本机可信 Host）无令牌可用：与 PUT 同一访问矩阵（放最后避免干扰 revision 断言）
     const mgmt = await call(api, 'DELETE', '/api/games/del-g1/annotations?seat=2');
     assert.ok([200, 404].includes(mgmt.status), '管理会话绕过令牌与 PUT 同矩阵（实际 ' + mgmt.status + '）');
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    // 先等构造期的档案迁移收尾（它还会写 <dataDir>/profiles/index.json），再删独占根，
+    // 否则会出现"删目录 ↔ 迁移写文件"的竞态（Windows 上是 EPERM/ENOTEMPTY）。
+    if (api) { try { await api._profileMigrationReady; } catch (_) { /* 迁移失败不影响清理 */ } }
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });

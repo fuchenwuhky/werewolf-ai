@@ -81,7 +81,12 @@ test('导入：校验拒绝坏包（未结束局/缺昵称/坏 id），合法包
 });
 
 test('导入 API：preview 不写盘、apply 落地为新档案（含 profileId 归属）', async () => {
-  const dir = tmpDir('imp-api');
+  // 独占 dataDir：saveDir = <dataDir>/saves。若 saveDir 直接落在 os.tmpdir()，api.js 会用
+  // dirname(saveDir) 推出**全机共享**的 <tmp>/profiles 与 <tmp>/migrations；node --test 并行跑
+  // 测试文件时多进程争抢同一份 profiles/index.json 的 rename，Windows 会间歇性 EPERM ——
+  // 本用例的 apply（importApplyRes → store.create）会真的以 'EPERM' !== 200 失败（实测 2/4 次全量）。
+  const dataDir = tmpDir('imp-api');
+  const dir = path.join(dataDir, 'saves');
   fs.mkdirSync(dir, { recursive: true });
   const { Api } = require('../src/api');
   const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
@@ -91,15 +96,21 @@ test('导入 API：preview 不写盘、apply 落地为新档案（含 profileId 
     games: [{ id: 'g-old', day: 5, finished: true, winner: 'wolf', mock: false,
       players: [{ seat: 1, isHuman: false }], events: [], board: { wolf: 3 }, rules: {} }],
   };
-  const pv = await api.importPreviewRes(good);
-  assert.strictEqual(pv.status, 200);
-  const ap = await api.importApplyRes(good);
-  assert.strictEqual(ap.status, 200, 'apply 状态码');
-  assert.ok(ap.body.profileId, '导入必须返回新档案 id');
-  const newGameId = ap.body.gameMap['g-old'];
-  const listed = JSON.parse(fs.readFileSync(path.join(dir, newGameId + '.json'), 'utf8'));
-  assert.strictEqual(listed.ownerProfileId, ap.body.profileId, '导入局归属导入档案');
-  assert.strictEqual(listed.game.id, newGameId, 'gameId 必须重映射');
+  try {
+    const pv = await api.importPreviewRes(good);
+    assert.strictEqual(pv.status, 200);
+    const ap = await api.importApplyRes(good);
+    assert.strictEqual(ap.status, 200, 'apply 状态码');
+    assert.ok(ap.body.profileId, '导入必须返回新档案 id');
+    const newGameId = ap.body.gameMap['g-old'];
+    const listed = JSON.parse(fs.readFileSync(path.join(dir, newGameId + '.json'), 'utf8'));
+    assert.strictEqual(listed.ownerProfileId, ap.body.profileId, '导入局归属导入档案');
+    assert.strictEqual(listed.game.id, newGameId, 'gameId 必须重映射');
+  } finally {
+    // 先等迁移收尾（它写 <dataDir>/profiles/index.json）再删独占根，避免"删目录 ↔ 迁移写文件"竞态
+    try { await api._profileMigrationReady; } catch (_) { /* 迁移失败不影响清理 */ }
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 test('导入校验 400 语义：缺 manifest/exportVersion 缺失或错误/未结束局/非法 id 一律 code 400', () => {
