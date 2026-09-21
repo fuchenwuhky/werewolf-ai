@@ -16,9 +16,10 @@ const os = require('os');
 const path = require('path');
 
 const { ProfileStore } = require('../src/profiles/store');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
-const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `trashsafe-${tag}-`));
+const tmpDir = (tag, t) => cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), `trashsafe-${tag}-`)));
 
 /** 建一个"已归档、可删除"的档案（多建一份保底档案，避免触发"最后一份可用档案不可归档"） */
 async function makeArchived(store, nickname = 'A') {
@@ -34,8 +35,8 @@ const trashDirsWithData = (dir) => {
   return fs.readdirSync(trash).filter((n) => fs.existsSync(path.join(trash, n, 'profile-dir')));
 };
 
-test('删除：rename 失败时档案与索引都完好，且不留半个回收区', async () => {
-  const dir = tmpDir('rename');
+test('删除：rename 失败时档案与索引都完好，且不留半个回收区', async (t) => {
+  const dir = tmpDir('rename', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await makeArchived(store);
   const orig = fs.renameSync;
@@ -49,8 +50,8 @@ test('删除：rename 失败时档案与索引都完好，且不留半个回收�
   assert.deepStrictEqual(trashDirsWithData(dir), [], '不该留下半个回收区');
 });
 
-test('删除：索引写失败 → 回滚，档案照旧可用', async () => {
-  const dir = tmpDir('idx');
+test('删除：索引写失败 → 回滚，档案照旧可用', async (t) => {
+  const dir = tmpDir('idx', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await makeArchived(store);
   const origWrite = store._writeIndex.bind(store);
@@ -64,8 +65,8 @@ test('删除：索引写失败 → 回滚，档案照旧可用', async () => {
   assert.deepStrictEqual(trashDirsWithData(dir), [], '回滚后不该留下 profile-dir');
 });
 
-test('删除：索引写失败且回滚也失败 → 标 failed，下次启动自动搬回', async () => {
-  const dir = tmpDir('failed');
+test('删除：索引写失败且回滚也失败 → 标 failed，下次启动自动搬回', async (t) => {
+  const dir = tmpDir('failed', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await makeArchived(store);
   const origWrite = store._writeIndex.bind(store);
@@ -89,8 +90,8 @@ test('删除：索引写失败且回滚也失败 → 标 failed，下次启动�
   assert.ok(store2.list().some((p) => p.id === a.id), '索引必须重新列上它');
 });
 
-test('启动对账：搬到一半被杀（无 restore.json）→ 自动把删除补完且数据可恢复', async () => {
-  const dir = tmpDir('crash');
+test('启动对账：搬到一半被杀（无 restore.json）→ 自动把删除补完且数据可恢复', async (t) => {
+  const dir = tmpDir('crash', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await makeArchived(store);
   const trash = path.join(dir, 'profiles', 'trash');
@@ -110,8 +111,8 @@ test('启动对账：搬到一半被杀（无 restore.json）→ 自动把删除
   assert.ok(has(store2, a.id));
 });
 
-test('正常回收区不被启动对账误动；恢复是搬移，二次恢复报 404', async () => {
-  const dir = tmpDir('normal');
+test('正常回收区不被启动对账误动；恢复是搬移，二次恢复报 404', async (t) => {
+  const dir = tmpDir('normal', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await makeArchived(store);
   await store.trash(a.id);

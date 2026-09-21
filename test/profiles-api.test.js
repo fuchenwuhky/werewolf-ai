@@ -12,6 +12,7 @@ const events = require('events');
 
 const { Api } = require('../src/api');
 const { Game } = require('../src/engine/game');
+const { cleanupAfter, terminateAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `papi-${tag}-`));
@@ -109,8 +110,9 @@ async function call(api, method, pathname, body) {
   return { status: box.code, headers, raw: box.raw != null ? String(box.raw) : null, body: box.raw ? JSON.parse(box.raw) : null };
 }
 
-test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全链', async () => {
-  const { api } = makeApi('crud');
+test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全链', async (t) => {
+  const { api, dataDir } = makeApi('crud');
+  terminateAfter(t, api, dataDir); // 用例级清理（失败路径同样生效）
   // 等构造期的档案迁移就绪：后面"归档 → 删除"依赖根目录里确实已有迁移默认档案
   // （"最后一份可用档案不可归档"的保护），不等待就会和迁移异步创建抢占时序。
   await api._profileMigrationReady;
@@ -162,8 +164,9 @@ test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全�
   assert.strictEqual(gone.status, 404, `已删除档案的 stats 应 404（实际 ${gone.status}）`);
 });
 
-test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply 落地档案与对局', async () => {
-  const { api } = makeApi('imp');
+test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply 落地档案与对局', async (t) => {
+  const { api, dataDir } = makeApi('imp');
+  terminateAfter(t, api, dataDir); // 用例级清理（失败路径同样生效）
   const bad = await call(api, 'POST', '/api/profiles/import/preview', { package: { profile: {}, games: 'not-array' } });
   assert.strictEqual(bad.status, 400);
 
@@ -184,9 +187,9 @@ test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply �
   assert.ok(Array.isArray(games.body.rows));
 });
 
-test('导出收集：collectExportableGames 只收已结束且归属正确的对局', async () => {
+test('导出收集：collectExportableGames 只收已结束且归属正确的对局', async (t) => {
   const transfer = require('../src/profiles/transfer');
-  const dir = tmpDir('exp2');
+  const dir = cleanupAfter(t, tmpDir('exp2'));
   const pid = '99999999-8888-7777-6666-555555555555';
   fs.mkdirSync(dir, { recursive: true });
   const mk = (id, owner, finished) => ({ schemaVersion: 2, tokens: {}, mock: true, ownerProfileId: owner, game: { id, players: [], started: true, finished } });
@@ -434,8 +437,9 @@ test('平局战绩：胜/负/平互斥，平局不算胜也不产生负数（审
   } finally { await dispose(api, dataDir); }
 });
 
-test('_saveMeta：终局保留完整事件流，进行中剥离（审核 P1-3 存档侧）', () => {
-  const { api } = makeApi('savemeta');
+test('_saveMeta：终局保留完整事件流，进行中剥离（审核 P1-3 存档侧）', (t) => {
+  const { api, dataDir } = makeApi('savemeta');
+  terminateAfter(t, api, dataDir); // 用例级清理（失败路径同样生效）
   const fake = (finished) => ({
     finished,
     toJSON: () => ({ id: 'g1', day: 3, events: [{ seq: 1, type: 'x' }], players: [] }),

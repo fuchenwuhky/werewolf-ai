@@ -10,6 +10,7 @@ const os = require('os');
 const path = require('path');
 
 const { AnnotationStore, normalizeSeatAnnotation } = require('../src/annotations/store');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
 const PID = '11111111-2222-3333-4444-555555555555';
@@ -44,8 +45,8 @@ test('清洗：leaning 白名单、候选截断 3 个、note 截断 200、非法
   assert.deepStrictEqual(bad.candidateRoleIds, []);
 });
 
-test('持久化：保存→重读一致；revision 递增；409 冲突', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ann-'));
+test('持久化：保存→重读一致；revision 递增；409 冲突', async (t) => {
+  const dir = cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ann-')));
   const store = makeStore(dir);
   const r1 = await store.put({ profileId: PID, gameId: GID, expectedRevision: 0, seats: { 7: { leaning: 'lean_wolf', note: '带节奏', day: 1, phase: 'speech' } } });
   assert.strictEqual(r1.revision, 1);
@@ -68,8 +69,8 @@ test('持久化：保存→重读一致；revision 递增；409 冲突', async (
   assert.strictEqual(got2.seats[7].note, '改主意');
 });
 
-test('多座位隔离与清除：seat 互不影响', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ann2-'));
+test('多座位隔离与清除：seat 互不影响', async (t) => {
+  const dir = cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ann2-')));
   const store = makeStore(dir);
   await store.put({ profileId: PID, gameId: 'gm', seats: { 3: { leaning: 'lean_good' }, 5: { leaning: 'lean_wolf' } } });
   const d1 = store.get(PID, 'gm');
@@ -81,8 +82,8 @@ test('多座位隔离与清除：seat 互不影响', async () => {
   assert.strictEqual(d2.seats[5].leaning, 'lean_wolf');
 });
 
-test('归属与路径安全：非法 profileId/gameId 拒绝拼接', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ann3-'));
+test('归属与路径安全：非法 profileId/gameId 拒绝拼接', (t) => {
+  const dir = cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ann3-')));
   const store = makeStore(dir);
   assert.throws(() => store.file('../../etc', 'x'), Error, 'profileId 路径穿越必须拒绝');
   assert.throws(() => store.file(PID, '../..'), Error, 'gameId 路径穿越必须拒绝');

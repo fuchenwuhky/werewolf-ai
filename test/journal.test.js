@@ -21,9 +21,10 @@ const { Agent } = require('../src/ai/agent');
 const { DecisionJournal, keyOf, PROMPT_VERSION } = require('../src/ai/journal');
 const { makeRng } = require('../src/engine/rng');
 const { makeMockAgentFactory } = require('../scripts/mock-agent');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {} };
-const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'ww-journal-'));
+const tmpdir = (t) => cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ww-journal-')));
 
 const BASE_KEY = { gameId: 'g1', day: 1, phase: 'day', seq: 10, seat: 3, task: 'speech', variant: '' };
 
@@ -51,8 +52,8 @@ test('key：PROMPT_VERSION 参与哈希（模板结构性变更后可整体失�
 });
 
 // ---------- 存取 ----------
-test('存取：跨进程重启仍能命中（重新 new 一个实例直接从文件加载）', () => {
-  const dir = tmpdir();
+test('存取：跨进程重启仍能命中（重新 new 一个实例直接从文件加载）', (t) => {
+  const dir = tmpdir(t);
   const j1 = new DecisionJournal(dir, { enabled: true });
   j1.record('g1', 'abc', { payload: { text: '你好' }, usage: { promptTokens: 100, completionTokens: 20 }, promptHash: 'h1' });
   assert.strictEqual(j1.stats.records, 1);
@@ -68,8 +69,8 @@ test('存取：跨进程重启仍能命中（重新 new 一个实例直接从文
   assert.strictEqual(j2.stats.misses, 1);
 });
 
-test('存取：对局之间互不串味（不同 gameId 各自独立）', () => {
-  const dir = tmpdir();
+test('存取：对局之间互不串味（不同 gameId 各自独立）', (t) => {
+  const dir = tmpdir(t);
   const j = new DecisionJournal(dir, { enabled: true });
   j.record('gA', 'k', { payload: { text: 'A' } });
   j.record('gB', 'k', { payload: { text: 'B' } });
@@ -77,8 +78,8 @@ test('存取：对局之间互不串味（不同 gameId 各自独立）', () => 
   assert.deepStrictEqual(j.lookup('gB', 'k').payload, { text: 'B' });
 });
 
-test('存取：崩溃留下的半行 JSON 不影响其余记录', () => {
-  const dir = tmpdir();
+test('存取：崩溃留下的半行 JSON 不影响其余记录', (t) => {
+  const dir = tmpdir(t);
   const j1 = new DecisionJournal(dir, { enabled: true });
   j1.record('g1', 'k1', { payload: { text: 'ok' } });
   fs.appendFileSync(path.join(dir, 'g1.jsonl'), '{"k":"k2","payl'); // 写到一半被杀
@@ -87,8 +88,8 @@ test('存取：崩溃留下的半行 JSON 不影响其余记录', () => {
   assert.strictEqual(j2.lookup('g1', 'k2'), null);
 });
 
-test('提示词漂移：key 命中但 prompt 哈希不同要计数（能发现"改了模板没升版本号"）', () => {
-  const dir = tmpdir();
+test('提示词漂移：key 命中但 prompt 哈希不同要计数（能发现"改了模板没升版本号"）', (t) => {
+  const dir = tmpdir(t);
   const j = new DecisionJournal(dir, { enabled: true });
   j.record('g1', 'k', { payload: { text: 'x' }, promptHash: 'old' });
   const hit = j.lookup('g1', 'k', 'new');
@@ -96,16 +97,16 @@ test('提示词漂移：key 命中但 prompt 哈希不同要计数（能发现"�
   assert.strictEqual(j.stats.drift, 1, '漂移必须被计数，否则模板改了没人知道');
 });
 
-test('开关：enabled=false 时既不写也不命中（便于对照实验）', () => {
-  const dir = tmpdir();
+test('开关：enabled=false 时既不写也不命中（便于对照实验）', (t) => {
+  const dir = tmpdir(t);
   const j = new DecisionJournal(dir, { enabled: false });
   j.record('g1', 'k', { payload: { text: 'x' } });
   assert.strictEqual(j.lookup('g1', 'k'), null);
   assert.strictEqual(fs.existsSync(path.join(dir, 'g1.jsonl')), false, '关闭时不应产生文件');
 });
 
-test('清理：按数量与天数双重上限删除（journal 只是缓存）', () => {
-  const dir = tmpdir();
+test('清理：按数量与天数双重上限删除（journal 只是缓存）', (t) => {
+  const dir = tmpdir(t);
   const j = new DecisionJournal(dir, { enabled: true });
   for (let i = 0; i < 5; i++) j.record('g' + i, 'k', { payload: { text: String(i) } });
   // 把其中两个的 mtime 改老
@@ -179,8 +180,8 @@ function makeHarness(journal, seed) {
   return { calls, agentFactory, newGame, restore: () => { llm.chatCompletion = origFetch; } };
 }
 
-test('验收：从锚点恢复重放整个阶段，重复 LLM 调用 = 0、token 增量 = 0', async () => {
-  const dir = tmpdir();
+test('验收：从锚点恢复重放整个阶段，重复 LLM 调用 = 0、token 增量 = 0', async (t) => {
+  const dir = tmpdir(t);
   const journal = new DecisionJournal(dir, { enabled: true });
   const h = makeHarness(journal, 1234);
   try {
@@ -241,8 +242,8 @@ test('回归：锚点必须是"时间点快照"，不能与活状态共享引用
   assert.notStrictEqual(anchor.night, g.night, '锚点里的 night 必须是独立副本');
 });
 
-test('回归：从 night 锚点恢复必须重放首夜后的警长竞选（否则事件流从此刻分叉）', async () => {
-  const dir = tmpdir();
+test('回归：从 night 锚点恢复必须重放首夜后的警长竞选（否则事件流从此刻分叉）', async (t) => {
+  const dir = tmpdir(t);
   const journal = new DecisionJournal(dir, { enabled: true });
   const h = makeHarness(journal, 4242);
   try {
@@ -265,8 +266,8 @@ test('回归：从 night 锚点恢复必须重放首夜后的警长竞选（否�
   }
 });
 
-test('回归：恢复重放必须逐字复现原局事件流（无重复 seq、无分叉、同样胜负）', async () => {
-  const dir = tmpdir();
+test('回归：恢复重放必须逐字复现原局事件流（无重复 seq、无分叉、同样胜负）', async (t) => {
+  const dir = tmpdir(t);
   const journal = new DecisionJournal(dir, { enabled: true });
   const h = makeHarness(journal, 1234);
   try {
@@ -296,8 +297,8 @@ test('回归：恢复重放必须逐字复现原局事件流（无重复 seq、�
   }
 });
 
-test('验收：恢复的对局要能拿回 AI 记忆（纪要/怀疑度/已读游标不能静默丢失）', async () => {
-  const dir = tmpdir();
+test('验收：恢复的对局要能拿回 AI 记忆（纪要/怀疑度/已读游标不能静默丢失）', async (t) => {
+  const dir = tmpdir(t);
   const journal = new DecisionJournal(dir, { enabled: true });
   const h = makeHarness(journal, 77);
   try {

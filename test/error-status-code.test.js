@@ -22,6 +22,7 @@ const events = require('events');
 
 const { Api } = require('../src/api');
 const transfer = require('../src/profiles/transfer');
+const { terminateAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {}, query() { return []; } };
 const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `perrcode-${tag}-`));
@@ -204,8 +205,9 @@ test('状态码取值规则：100–599 的整数照用，越界/非数字一律
   }
 });
 
-test('chokepoint：json() 自身也不接受非法状态码（唯一写响应出口的兜底）', async () => {
+test('chokepoint：json() 自身也不接受非法状态码（唯一写响应出口的兜底）', async (t) => {
   const { api, dataDir } = makeIsolatedApi('json');
+  terminateAfter(t, api, dataDir); // 用例级清理（失败路径同样生效）
   try {
     assert.strictEqual(api.statusOf({ code: 'EPERM' }), 500);
     assert.strictEqual(api.statusOf({ code: 'EPERM' }, 400), 500, '有非数字码时不得用调用点的 400 兜底');

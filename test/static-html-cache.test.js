@@ -10,9 +10,10 @@ const path = require('node:path');
 const os = require('node:os');
 
 const { etagOf, serveStatic, _resetHtmlCache } = require('../src/static');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
-function makeWeb() {
-  const web = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-static-fin01-'));
+function makeWeb(t) {
+  const web = cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ww-static-fin01-')));
   fs.mkdirSync(path.join(web, 'm'), { recursive: true });
   fs.mkdirSync(path.join(web, 'assets'), { recursive: true });
   fs.writeFileSync(path.join(web, 'app.js'), 'console.log("app v1");\n');
@@ -52,8 +53,8 @@ async function withServer(web, fn) {
 
 const statEtagOf = (file) => etagOf(fs.statSync(file));
 
-test('C01 旧 stat-ETag 请求新服务：必须 200 + 版本化引用 + 新 ETag（不再 304 旧表示）', async () => {
-  const web = makeWeb();
+test('C01 旧 stat-ETag 请求新服务：必须 200 + 版本化引用 + 新 ETag（不再 304 旧表示）', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     const oldEtag = statEtagOf(path.join(web, 'index.html'));
     assert.match(oldEtag, /W\/"[0-9a-f]+-[0-9a-f]+"/, '旧 ETag 形态 = stat 式');
@@ -67,8 +68,8 @@ test('C01 旧 stat-ETag 请求新服务：必须 200 + 版本化引用 + 新 ETa
   });
 });
 
-test('C02 同内容 ETag 稳定：清缓存重算后仍一致（不得用永久随机掩盖）', async () => {
-  const web = makeWeb();
+test('C02 同内容 ETag 稳定：清缓存重算后仍一致（不得用永久随机掩盖）', async (t) => {
+  const web = makeWeb(t);
   const etags = new Set();
   for (let i = 0; i < 2; i++) {
     await withServer(web, async ({ get }) => {
@@ -82,8 +83,8 @@ test('C02 同内容 ETag 稳定：清缓存重算后仍一致（不得用永久�
   assert.strictEqual(etags.size, 1, '跨进程重建的 ETag 必须确定性一致');
 });
 
-test('C03 仅改一个本地 JS：URL 哈希变、HTML ETag 变、旧 ETag 请求 200（同进程与重置缓存两态）', async () => {
-  const web = makeWeb();
+test('C03 仅改一个本地 JS：URL 哈希变、HTML ETag 变、旧 ETag 请求 200（同进程与重置缓存两态）', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     const first = await get('/');
     const oldEtag = first.headers.get('etag');
@@ -109,8 +110,8 @@ test('C03 仅改一个本地 JS：URL 哈希变、HTML ETag 变、旧 ETag 请�
   });
 });
 
-test('C05 /m/ 相对与父级引用都指向正确文件，哈希可复算', async () => {
-  const web = makeWeb();
+test('C05 /m/ 相对与父级引用都指向正确文件，哈希可复算', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     const r = await get('/m/');
     assert.strictEqual(r.status, 200);
@@ -124,8 +125,8 @@ test('C05 /m/ 相对与父级引用都指向正确文件，哈希可复算', asy
   });
 });
 
-test('C07 表示稳定且引用完整：反复请求同值，版本化引用的文件全部真实存在', async () => {
-  const web = makeWeb();
+test('C07 表示稳定且引用完整：反复请求同值，版本化引用的文件全部真实存在', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     const eTags = [];
     for (let i = 0; i < 3; i++) {
@@ -142,8 +143,8 @@ test('C07 表示稳定且引用完整：反复请求同值，版本化引用的�
   });
 });
 
-test('C08 非脚本资源（品牌 SVG）不走 HTML 改写、靠缓存策略失效（版本化范围如实）', async () => {
-  const web = makeWeb();
+test('C08 非脚本资源（品牌 SVG）不走 HTML 改写、靠缓存策略失效（版本化范围如实）', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     const svg = await get('/assets/wolf-emblem.svg');
     assert.strictEqual(svg.status, 200);
@@ -155,8 +156,8 @@ test('C08 非脚本资源（品牌 SVG）不走 HTML 改写、靠缓存策略失
   });
 });
 
-test('C06 服务端半程：升级后带任何旧缓存头导航，服务器总是给最新表示（浏览器侧由 ui:check/真机补证）', async () => {
-  const web = makeWeb();
+test('C06 服务端半程：升级后带任何旧缓存头导航，服务器总是给最新表示（浏览器侧由 ui:check/真机补证）', async (t) => {
+  const web = makeWeb(t);
   await withServer(web, async ({ get }) => {
     // 模拟"旧 HTML 的 HTTP 缓存 + 旧 ETag + 旧 SW"最不利组合下发起的导航
     const r = await get('/', {

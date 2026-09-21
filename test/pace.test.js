@@ -13,8 +13,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { DEFAULT_CONFIG, PACES, PACE_KEYS, applyPace, detectPace, migrateConfig, createConfig } = require('../src/config');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
-const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ww-pace-')), 'config.json');
+const tmpFile = (t) => path.join(cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ww-pace-'))), 'config.json');
 
 test('节奏档位：standard 必须恒等于出厂默认（否则"标准局"不再是"什么都不改"）', () => {
   const diff = PACE_KEYS.filter((k) => PACES.standard.values[k] !== DEFAULT_CONFIG[k]);
@@ -61,8 +62,8 @@ test('节奏档位：detectPace 只在完全一致时报档位名，否则一律
   assert.strictEqual(detectPace(almost), 'custom', '只差一项也必须报 custom');
 });
 
-test('节奏档位：save({pace}) 展开档位并落盘；只改其他字段不得动档位参数', () => {
-  const file = tmpFile();
+test('节奏档位：save({pace}) 展开档位并落盘；只改其他字段不得动档位参数', (t) => {
+  const file = tmpFile(t);
   const cfg = createConfig(file);
   cfg.load();
   // ① 带 pace：整档展开

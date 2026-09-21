@@ -12,12 +12,13 @@ const path = require('path');
 
 const transfer = require('../src/profiles/transfer');
 const { ProfileStore } = require('../src/profiles/store');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
-const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `tr-${tag}-`));
+const tmpDir = (tag, t) => cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), `tr-${tag}-`)));
 
-test('导出：已结束局收集 + 包内无敏感字段（无令牌/锚点/journal）', async () => {
-  const dir = tmpDir('exp');
+test('导出：已结束局收集 + 包内无敏感字段（无令牌/锚点/journal）', async (t) => {
+  const dir = tmpDir('exp', t);
   const savesDir = path.join(dir, 'saves');
   fs.mkdirSync(savesDir, { recursive: true });
   const pid = '11111111-2222-3333-4444-555555555555';
@@ -42,8 +43,8 @@ test('导出：已结束局收集 + 包内无敏感字段（无令牌/锚点/jou
   assert.strictEqual(pkg.manifest.counts.games, 1);
 });
 
-test('导入：校验拒绝坏包（未结束局/缺昵称/坏 id），合法包落地为新档案+重映射 id', async () => {
-  const dir = tmpDir('imp');
+test('导入：校验拒绝坏包（未结束局/缺昵称/坏 id），合法包落地为新档案+重映射 id', async (t) => {
+  const dir = tmpDir('imp', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
 
   // ① 未结束局拒绝
@@ -80,12 +81,12 @@ test('导入：校验拒绝坏包（未结束局/缺昵称/坏 id），合法包
   assert.notStrictEqual(reread.game.id, 'old-g1', 'gameId 必须重映射避免冲突');
 });
 
-test('导入 API：preview 不写盘、apply 落地为新档案（含 profileId 归属）', async () => {
+test('导入 API：preview 不写盘、apply 落地为新档案（含 profileId 归属）', async (t) => {
   // 独占 dataDir：saveDir = <dataDir>/saves。若 saveDir 直接落在 os.tmpdir()，api.js 会用
   // dirname(saveDir) 推出**全机共享**的 <tmp>/profiles 与 <tmp>/migrations；node --test 并行跑
   // 测试文件时多进程争抢同一份 profiles/index.json 的 rename，Windows 会间歇性 EPERM ——
   // 本用例的 apply（importApplyRes → store.create）会真的以 'EPERM' !== 200 失败（实测 2/4 次全量）。
-  const dataDir = tmpDir('imp-api');
+  const dataDir = tmpDir('imp-api', t);
   const dir = path.join(dataDir, 'saves');
   fs.mkdirSync(dir, { recursive: true });
   const { Api } = require('../src/api');

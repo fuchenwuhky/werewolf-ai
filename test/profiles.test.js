@@ -11,12 +11,13 @@ const path = require('path');
 
 const { ProfileStore, NotFoundError, ValidationError } = require('../src/profiles/store');
 const { ProfileMigration } = require('../src/profiles/migration');
+const { cleanupAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
-const tmpDir = (tag) => fs.mkdtempSync(path.join(os.tmpdir(), `prof-${tag}-`));
+const tmpDir = (tag, t) => cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), `prof-${tag}-`)));
 
-test('档案创建：昵称清洗/头像白名单/UUID/revision', async () => {
-  const store = new ProfileStore({ dataDir: tmpDir('create'), logger: silentLogger });
+test('档案创建：昵称清洗/头像白名单/UUID/revision', async (t) => {
+  const store = new ProfileStore({ dataDir: tmpDir('create', t), logger: silentLogger });
   const p = await store.create({ nickname: '  砚舟  ', avatarId: 'scholar', bio: ' hi ' });
   assert.match(p.id, /^[0-9a-f-]{36}$/);
   assert.strictEqual(p.nickname, '砚舟');
@@ -28,8 +29,8 @@ test('档案创建：昵称清洗/头像白名单/UUID/revision', async () => {
   await assert.rejects(() => store.create({ nickname: 'a', avatarId: 'nope' }), ValidationError);
 });
 
-test('档案更新：expectedRevision 乐观并发（409）+ 归档/恢复 + 最后档案保护', async () => {
-  const store = new ProfileStore({ dataDir: tmpDir('update'), logger: silentLogger });
+test('档案更新：expectedRevision 乐观并发（409）+ 归档/恢复 + 最后档案保护', async (t) => {
+  const store = new ProfileStore({ dataDir: tmpDir('update', t), logger: silentLogger });
   const a = await store.create({ nickname: 'A' });
   const b = await store.create({ nickname: 'B' });
 
@@ -53,8 +54,8 @@ test('档案更新：expectedRevision 乐观并发（409）+ 归档/恢复 + 最
   await assert.rejects(() => store.update(a.id, { nickname: 'Z' }), ValidationError);
 });
 
-test('档案删除：仅归档态可移入回收区，可恢复', async () => {
-  const dir = tmpDir('trash');
+test('档案删除：仅归档态可移入回收区，可恢复', async (t) => {
+  const dir = tmpDir('trash', t);
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });
   const a = await store.create({ nickname: 'A' });
   const b = await store.create({ nickname: 'B' });
@@ -72,8 +73,8 @@ test('档案删除：仅归档态可移入回收区，可恢复', async () => {
   assert.ok(store.get(a.id));
 });
 
-test('DATA-02：迁移幂等——默认档案唯一、存档打标一次、游标可重入', async () => {
-  const dir = tmpDir('mig');
+test('DATA-02：迁移幂等——默认档案唯一、存档打标一次、游标可重入', async (t) => {
+  const dir = tmpDir('mig', t);
   const savesDir = path.join(dir, 'saves');
   fs.mkdirSync(savesDir, { recursive: true });
   // 两份旧存档（无归属）
@@ -100,8 +101,8 @@ test('DATA-02：迁移幂等——默认档案唯一、存档打标一次、游�
   assert.strictEqual(doc.profileSchemaVersion, 1);
 });
 
-test('DATA-02：迁移中的备份目录真实存在（可回滚）', async () => {
-  const dir = tmpDir('bk');
+test('DATA-02：迁移中的备份目录真实存在（可回滚）', async (t) => {
+  const dir = tmpDir('bk', t);
   fs.mkdirSync(path.join(dir, 'saves'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'saves', 'bk-a.json'), JSON.stringify({ game: { id: 'bk-a', players: [] } }));
   const store = new ProfileStore({ dataDir: dir, logger: silentLogger });

@@ -77,10 +77,48 @@ async function dispose(dataDir) {
   }
 }
 
+/**
+ * 用例级清理：把 dir 的删除挂到**这一个用例**的 t.after（node:test）。
+ *   - 断言失败 / 抛异常 / 超时都会执行（node:test 保证 after 钩子必跑），红用例不留目录；
+ *   - 删除失败**只告警不抛错**：清理问题必须可见，但不得把原本通过的用例改判为失败
+ *     （取舍见报告"诚实边界"；套件级兜底 = 隔离 TEMP 沙箱跑全量后残留必须为 0）。
+ * 用法：用例回调签名加 t，再 cleanupAfter(t, fs.mkdtempSync(...))。
+ * 刻意不用 process.on('exit')：那种"进程退出统一删"既掩盖单个用例的清理缺失，
+ * 又在进程被杀时完全失效。
+ */
+function cleanupAfter(t, dir) {
+  if (!t || typeof t.after !== 'function') {
+    throw new TypeError('cleanupAfter 需要 node:test 的 TestContext：请把用例回调改成 (t) => {}');
+  }
+  t.after(async () => { await removeQuietly(dir); });
+  return dir;
+}
+
+/**
+ * Api 版用例级清理：先等档案迁移收尾（它仍会写 <dataDir>/profiles/index.json）再删，
+ * 否则会落到"删目录 ↔ 迁移写文件"竞态（Windows 上 EPERM/ENOTEMPTY）。语义同 dispose。
+ */
+function terminateAfter(t, api, dataDir) {
+  if (!t || typeof t.after !== 'function') {
+    throw new TypeError('terminateAfter 需要 node:test 的 TestContext：请把用例回调改成 (t) => {}');
+  }
+  t.after(async () => { await settleApi(api); await removeQuietly(dataDir); });
+  return dataDir;
+}
+
+/** 删除失败不抛错：留一条醒目告警（清理问题可见，但不改变用例的通过 / 失败结论） */
+async function removeQuietly(dir) {
+  if (!dir) return;
+  try { await dispose(dir); }
+  catch (e) {
+    console.error(`[TMP-LEAK] 临时目录清理失败，用例结果不受影响，请人工清理：${dir} — ${(e && e.code) || e}`);
+  }
+}
+
 /** 收尾一步到位：settleApi(api) → dispose(dataDir)（api/dataDir 可能因构造前抛错而为 undefined） */
 async function terminateApi(api, dataDir) {
   await settleApi(api);
   await dispose(dataDir);
 }
 
-module.exports = { makeDataDir, savesOf, makeApiIn, settleApi, dispose, terminateApi };
+module.exports = { makeDataDir, savesOf, makeApiIn, settleApi, dispose, terminateApi, cleanupAfter, terminateAfter };
