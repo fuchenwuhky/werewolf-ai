@@ -893,6 +893,11 @@ class Api {
           const body = await this.readBody(req);
           const live = this.games.get(id);
           if (live) {
+            // NEW-11：授权先于状态。旧顺序把「对局仍在运行中」的 409 排在令牌检查之前
+            // （令牌检查在 resumePaused 里），未授权调用者据此可判定"该局是否还活在内存里"。
+            if (body.token !== live.tokens.player && body.token !== live.tokens.god) {
+              return this.json(res, 403, { error: 'token 无效' });
+            }
             if (!live.game.paused) return this.json(res, 409, { error: '对局仍在运行中，直接打开即可' });
             return this.resumePaused(res, live, body);
           }
@@ -1044,14 +1049,16 @@ class Api {
   startGame(res, entry, body) {
     // 整改 REL-02 + 审核 P2-8：完整状态守卫——running/finished/started/paused/error 都不许
     // 重复驱动。暂停局必须走 /resume（恢复锚点），直接 /start 会跳过锚点重放。
+    // NEW-11：这组**状态守卫之前**必须先过授权 —— 旧顺序把它们排在 token 检查前面，
+    // 未授权调用者于是能用 409 的具体文案（对局已开始/已结束/暂停/异常终止）反推对局状态。
+    if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
+      return this.json(res, 403, { error: 'token 无效' });
+    }
     if (entry.running) return this.json(res, 409, { error: '对局已开始' });
     if (entry.game.finished) return this.json(res, 409, { error: '对局已结束，不能重新开始' });
     if (entry.game.paused) return this.json(res, 409, { error: '对局处于暂停态，请走断点恢复（resume）' });
     if (entry.error) return this.json(res, 409, { error: '对局上次异常终止，请从存档恢复' });
     if (entry.game.started) return this.json(res, 409, { error: '对局已开始' });
-    if (body.token !== entry.tokens.player && body.token !== entry.tokens.god) {
-      return this.json(res, 403, { error: 'token 无效' });
-    }
     entry.running = true;
     this._drive(entry);
     return this.json(res, 200, { ok: true });
@@ -1551,8 +1558,14 @@ class Api {
 
   action(res, entry, body) {
     const { game } = entry;
-    if (!game.pending) return this.json(res, 409, { error: '当前没有等待中的操作' });
+    // NEW-11：**授权先于状态**。token 检查必须在 pending 之前（旧顺序先查 pending）：
+    // 否则未配对/未授权的调用者只要知道 gameId，就能靠「409 当前没有等待中的操作」与
+    // 「403 token 无效」的差异判定"该局此刻是否在等待人类操作"（1 bit 状态泄露），
+    // 并读到只该给合法玩家的业务提示串。
+    // ⚠ 顺序约束：带**正确玩家令牌**时的行为必须逐字不变 —— pending 为空仍必须是
+    // 409「当前没有等待中的操作」（那是给正常用户的提示，不是安全边界）。
     if (body.token !== entry.tokens.player) return this.json(res, 403, { error: 'token 无效' });
+    if (!game.pending) return this.json(res, 409, { error: '当前没有等待中的操作' });
     const result = game.resolveHuman(body.payload || {});
     return this.json(res, result.ok ? 200 : 400, result);
   }
@@ -2063,16 +2076,18 @@ class Api {
   }
 
   gameAnnotationsGet(res, entry, query, req) {
+    // NEW-11：授权先于状态。旧顺序先查 ownerProfileId，未授权调用者于是能用
+    // 404「该对局没有归属档案」与 403「token 无效」的差异判定该局的归属形态。
+    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
     const pid = entry.ownerProfileId;
     if (!pid) return this.json(res, 404, { error: '该对局没有归属档案（旧局/观战局）' });
-    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
     return this.json(res, 200, { annotations: this.annotations.get(pid, entry.game.id), revision: this.annotations.get(pid, entry.game.id).revision });
   }
 
   async gameAnnotationsPut(res, entry, req, body) {
+    if (!this._annotationAccess(req, entry, { get: () => body.token })) return this.json(res, 403, { error: 'token 无效' });
     const pid = entry.ownerProfileId;
     if (!pid) return this.json(res, 404, { error: '该对局没有归属档案' });
-    if (!this._annotationAccess(req, entry, { get: () => body.token })) return this.json(res, 403, { error: 'token 无效' });
     // AC-01：必须走与 DELETE/clearSeat 同一条每文件串行队列——
     // 旧实现 putSync() 在队列外同步执行，与入队的 clearSeat 并发时双方都 200、PUT 内容丢失
     try {
@@ -2087,9 +2102,10 @@ class Api {
 
   /** 清除单个座位笔记（撤销语义的存储端原语）：权限矩阵同 PUT，expectedRevision 乐观并发 */
   async gameAnnotationDelete(res, entry, req, query) {
+    // NEW-11：同 GET/PUT —— 授权先于归属状态
+    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
     const pid = entry.ownerProfileId;
     if (!pid) return this.json(res, 404, { error: '该对局没有归属档案' });
-    if (!this._annotationAccess(req, entry, query)) return this.json(res, 403, { error: 'token 无效' });
     const seat = query.get('seat');
     if (!/^[0-9]{1,3}$/.test(String(seat || ''))) return this.json(res, 400, { error: 'seat 必须是数字座位号' });
     const rev = query.get('expectedRevision');

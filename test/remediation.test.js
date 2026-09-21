@@ -567,21 +567,29 @@ test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支
     const st = await call('/api/stats');
     assert.strictEqual(st.code, 200);
 
-    // action 的两条守卫是**先后**关系（src/api.js：`if (!game.pending) return 409` 在
-    // `if (body.token !== entry.tokens.player) return 403` 之前），所以「无 pending」与「token 错」
-    // 是两个局面下的两个确定结果，**不是**同一次调用可能给出的两种码。
-    // 原写法 `a1.code === 409 || a1.code === 403` 把这两种局面混成一次调用，实际两条守卫都没被钉住：
-    // 新建局没开局，game.pending 恒为 null（Game 构造器置 null），403 那一半永远走不到。
+    // action 的两条守卫是**先后**关系，而 NEW-11 定的顺序是「token（授权）在 pending（状态）之前」。
+    // 所以「无 pending」与「token 错」是两个局面下的两个确定结果，**不是**同一次调用可能给出的两种码。
+    // ⚠ 本次改写（NEW-11）：原来 a1/a1b 都用**错令牌** ptok，靠旧顺序（先查 pending）才能拿到 409；
+    // 统一守卫顺序后，错令牌的正确结果是 403 —— 要触发"无 pending → 409"这条**给合法玩家的提示**，
+    // 必须改用**正确的玩家令牌**，否则断言钉的就不再是"无等待操作"这条守卫了。
     const entry = api.games.get(gameId);
-    const a1 = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
-    assert.strictEqual(a1.code, 409, `未开局（pending 为空）action 必须 409，实际 ${a1.code}`);
-    assert.match(a1.body.error, /没有等待中的操作/, '必须命中"无等待操作"这条守卫，而不是 token 校验');
-    // token 错 → 403：置一个 pending 桩把另一个局面也钉住，避免依赖 Mock 驱动时序（用完立刻复位）
-    entry.game.pending = { seat: 1, request: { task: 'speech' }, resolve() {}, reject() {} };
+    const a1 = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: ok1.body.playerToken, payload: {} } });
+    assert.strictEqual(a1.code, 409, `已授权 + 未开局（pending 为空）action 必须 409，实际 ${a1.code}`);
+    assert.match(a1.body.error, /没有等待中的操作/, '已授权调用者必须仍命中"无等待操作"这条守卫，文案不许变');
+    // NEW-11 核心：pending 为空时，错令牌/无令牌都必须是 403 —— 旧顺序在这里回 409，
+    // 于是未授权调用者能用 409 vs 403 判定"该局此刻是否在等待人类操作"。
     const a1b = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
-    entry.game.pending = null;
-    assert.strictEqual(a1b.code, 403, `pending 存在但 token 不匹配必须 403，实际 ${a1b.code}`);
+    assert.strictEqual(a1b.code, 403, `pending 为空时错令牌必须 403（不得用 409 泄露 pending 状态），实际 ${a1b.code}`);
     assert.match(a1b.body.error, /token 无效/);
+    const a1c = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { payload: {} } });
+    assert.strictEqual(a1c.code, 403, `pending 为空时无令牌必须 403，实际 ${a1c.code}`);
+    assert.match(a1c.body.error, /token 无效/);
+    // token 错 → 403（置一个 pending 桩把"有 pending"的局面也钉住，避免依赖 Mock 驱动时序；用完立刻复位）
+    entry.game.pending = { seat: 1, request: { task: 'speech' }, resolve() {}, reject() {} };
+    const a1d = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
+    entry.game.pending = null;
+    assert.strictEqual(a1d.code, 403, `pending 存在但 token 不匹配必须 403，实际 ${a1d.code}`);
+    assert.match(a1d.body.error, /token 无效/);
     // review：GET（无复盘）返回 null review（带上帝令牌；无令牌本来就会 403——见 UX-01）
     const rv = await call(`/api/games/${gameId}/review?token=${encodeURIComponent(ok1.body.godToken)}`);
     assert.strictEqual(rv.code, 200);
@@ -1465,3 +1473,173 @@ test('四轮 P1：saveActive 循环收割三条链式补写（固定轮数会漏
     await terminateApi(api, dataDir);
     }
 });
+
+// ---------- NEW-11：写接口的守卫顺序（授权一律先于状态/身份）----------
+
+/**
+ * 信息泄露面（低危，但必须堵）：未配对/未授权的调用者只要知道 gameId，就能直接请求
+ * `/api/games/:id/<sub>` 这些写接口 —— 它们不吃 Cookie，配对门禁也管不到它们。
+ *
+ * 旧实现里 `action()`（先查 pending）、`startGame()`（先查 running/finished/paused/error）、
+ * `/resume`（先查 `!live.game.paused`）、标注三兄弟（先查 ownerProfileId）把**状态/身份**守卫
+ * 排在了 token 之前，于是
+ *      「409 <业务串>」  vs  「403 token 无效」
+ * 的差异本身就是一枚 **1 bit 探针**：能判定该局此刻是否在等待人类操作、是否已结束/暂停/异常终止、
+ * 是否有归属档案。攻击者改不了状态、也读不到别的数据，所以这不是功能缺陷，是**应统一加固项**。
+ *
+ * 本用例的牙齿（三点，缺一不可）：
+ *   ① 每一种"对局局面"下，无令牌与错令牌都必须 **403**，绝不允许 409；
+ *   ② 理由必须是**授权拒绝**串，且**不得**出现任何业务语义串（只钉状态码会漏掉"403 + 业务文案"）；
+ *   ③ 同一个接口在「无等待」与「正在等待」两个局面下的未授权响应必须**逐字一致**
+ *      —— 差异本身就是探针，这一条才真正钉住"1 bit 不泄露"。
+ * 同时反向钉住：**已授权调用者**看到的业务状态码与文案逐字不变（改安全不许改 UX）。
+ */
+test('NEW-11：未授权调用写接口一律 403（不随对局局面变成 409 / 不漏业务串）', async () => {
+  const { api, dataDir } = makeApiIn(makeDataDir('new11'), { config: { get: () => ({ apiKey: '', journal: false }), save() {} } });
+  const { Game } = require('../src/engine/game');
+  const ATTACKER_HOST = 'attacker.example'; // 不可信 Host ⇒ isManagement=false（= 未配对远端）
+  const ATTACKER_REMOTE = '192.168.1.5';
+  try {
+    const call = (pathnameWithQuery, { method = 'GET', body = null, host = 'localhost:3210', remote = '127.0.0.1' } = {}) => {
+      const [p, q] = pathnameWithQuery.split('?');
+      const box = stubRes();
+      return api.handle(stubReq({ method, remote, headers: { host }, body }), box.res, p, new URLSearchParams(q)).then(() => box);
+    };
+
+    // 前置钉：这个 Host 确实被当成"未配对/无管理会话"（否则下面的 403 可能是别的原因给的，用例会空转）
+    const unpaired = await call('/api/config', { method: 'PUT', host: ATTACKER_HOST, remote: ATTACKER_REMOTE, body: { journal: false } });
+    assert.strictEqual(unpaired.code, 401, `attacker.example 必须被判为无管理会话，实际 ${unpaired.code}`);
+
+    // 真实建一局（管理会话），拿到真实令牌；再手工把它推进到各种局面
+    const ok1 = await call('/api/games', {
+      method: 'POST',
+      body: {
+        board: { wolf: 1, seer: 1, witch: 1, villager: 2 },
+        players: [{ isHuman: true }, { isHuman: false }, { isHuman: false }, { isHuman: false }, { isHuman: false }],
+        mock: true,
+      },
+    });
+    assert.strictEqual(ok1.code, 200, JSON.stringify(ok1.body));
+    const gid = ok1.body.gameId;
+    const playerToken = ok1.body.playerToken;
+    const entry = api.games.get(gid);
+    entry.game.deal();
+    entry.game.started = true;
+    entry.game.phase = 'speech';
+    const me = entry.game.players.find((p) => p.isHuman);
+    me.role = 'wolf';
+    me.alive = true;
+
+    // 未授权的两种身份：完全不带令牌 / 带一个错令牌
+    const identities = [['无令牌', null], ['错令牌', 'not-the-real-token']];
+    const AUTH_REASON = /token 无效|仅玩家本人可/;
+    // 只该出现在"已授权"通道里的业务语义串（泄露判据）
+    const BUSINESS = /没有等待中的操作|对局已结束|你已出局|只有骑士|身份不能自爆|当前不在狼队讨论阶段|对局仍在运行中|对局还没结束|该对局没有归属档案|轮到你/;
+
+    /** 一个写接口 × 两种未授权身份各打一次，返回 [{ who, code, error }] */
+    const probe = async (path, method = 'POST', body = {}) => {
+      const seen = [];
+      for (const [who, token] of identities) {
+        const payload = token === null ? { ...body } : { ...body, token };
+        const box = await call(path, { method, body: payload, host: ATTACKER_HOST, remote: ATTACKER_REMOTE });
+        seen.push({ who, code: box.code, error: box.body && box.body.error });
+      }
+      return seen;
+    };
+    /** 同时钉「状态码」与「理由」：必须 403 + 授权串，且不得出现业务串 */
+    const denied = async (label, path, method = 'POST', body = {}) => {
+      const seen = await probe(path, method, body);
+      for (const s of seen) {
+        assert.strictEqual(s.code, 403, `${label} · ${s.who} 必须 403（不得用 409 泄露局面），实际 ${s.code}`);
+        assert.match(s.error, AUTH_REASON, `${label} · ${s.who} 的理由必须是授权拒绝，实际「${s.error}」`);
+        assert.doesNotMatch(s.error, BUSINESS, `${label} · ${s.who} 不得回业务语义串，实际「${s.error}」`);
+      }
+      return seen;
+    };
+
+    // ---- 局面①（无等待）与局面②（正在等待）：未授权响应必须逐字一致 —— 差异即 1 bit 探针
+    assert.strictEqual(entry.game.pending, null, '前提：此局面 pending 为空');
+    const noPending = await denied('pending 为空 · action', `/api/games/${gid}/action`, 'POST', { payload: {} });
+    entry.game.pending = { seat: me.seat, request: { task: 'speech' }, resolve() {}, reject() {} };
+    const waiting = await denied('正在等待人类操作 · action', `/api/games/${gid}/action`, 'POST', { payload: {} });
+    entry.game.pending = null;
+    assert.deepStrictEqual(waiting, noPending, '同一接口在"无等待/正在等待"下的未授权响应必须逐字一致（否则状态码差异本身就是探针）');
+
+    // ---- 局面③：已结束 —— action/explode/duel/start/review/resume 一律只回 403
+    entry.game.finished = true;
+    await denied('已结束 · action', `/api/games/${gid}/action`, 'POST', { payload: {} });
+    await denied('已结束 · explode', `/api/games/${gid}/explode`);
+    await denied('已结束 · duel', `/api/games/${gid}/duel`, 'POST', { target: 2 });
+    await denied('已结束 · start', `/api/games/${gid}/start`);
+    await denied('已结束 · review', `/api/games/${gid}/review`, 'POST', {});
+    await denied('内存中且未暂停 · resume', `/api/games/${gid}/resume`);
+    entry.game.finished = false;
+
+    // ---- 局面④：已出局 / 身份不符 / 不在狼队讨论阶段
+    me.alive = false;
+    await denied('已出局 · explode', `/api/games/${gid}/explode`);
+    await denied('已出局 · duel', `/api/games/${gid}/duel`, 'POST', { target: 2 });
+    me.alive = true;
+    me.role = 'villager';
+    await denied('身份不符（非骑士）· duel', `/api/games/${gid}/duel`, 'POST', { target: 2 });
+    me.role = 'wolf';
+    await denied('不在狼队讨论阶段 · wolftalk', `/api/games/${gid}/wolftalk`, 'POST', { kind: 'end' });
+
+    // ---- 局面⑤：暂停态（未授权不得用 409「对局未处于暂停状态」反推暂停与否）
+    entry.game.paused = { kind: 'quota', code: '1302', message: '配额暂停' };
+    await denied('暂停态 · start', `/api/games/${gid}/start`);
+    await denied('暂停态 · resume', `/api/games/${gid}/resume`);
+    entry.game.paused = null;
+
+    // ---- 局面⑥：异常终止
+    entry.error = 'boom';
+    await denied('异常终止 · start', `/api/games/${gid}/start`);
+    entry.error = null;
+
+    // ---- 局面⑦：没有归属档案的对局（旧实现标注接口在这里先回 404「该对局没有归属档案」）
+    const orphan = new Game({
+      id: 'new11-orphan',
+      board: { wolf: 1, seer: 1, witch: 1, villager: 2 },
+      players: [{ name: 'P1', isHuman: true }, { name: 'P2' }, { name: 'P3' }, { name: 'P4' }, { name: 'P5' }],
+      stepPauseMs: 1, logger: silentLogger,
+    });
+    orphan.deal();
+    orphan.started = true;
+    api.games.set(orphan.id, {
+      game: orphan, running: false, error: null, mock: true,
+      tokens: { player: 'pt-orphan', god: 'gt-orphan' }, createdAt: Date.now(), lastAccess: Date.now(), review: null,
+    });
+    await denied('无归属档案 · annotations PUT', `/api/games/${orphan.id}/annotations`, 'PUT', { expectedRevision: 0, seats: {} });
+    await denied('无归属档案 · annotations DELETE', `/api/games/${orphan.id}/annotations?seat=2`, 'DELETE', {});
+    for (const [who, q] of [['无令牌', ''], ['错令牌', '?token=nope']]) {
+      const box = await call(`/api/games/${orphan.id}/annotations${q}`, { host: ATTACKER_HOST, remote: ATTACKER_REMOTE });
+      assert.strictEqual(box.code, 403, `无归属档案 · annotations GET · ${who} 必须 403，实际 ${box.code}`);
+      assert.match(box.body.error, AUTH_REASON, `无归属档案 · annotations GET · ${who} 的理由必须是授权拒绝，实际「${box.body.error}」`);
+      assert.doesNotMatch(box.body.error, BUSINESS, `无归属档案 · annotations GET · ${who} 不得回业务语义串，实际「${box.body.error}」`);
+    }
+    // 反向钉：**持有该局正确令牌**时「没有归属档案」这条 404 必须原样保留（授权后才允许说）
+    const orphanAuthed = await call(`/api/games/${orphan.id}/annotations?token=pt-orphan`, { host: ATTACKER_HOST, remote: ATTACKER_REMOTE });
+    assert.strictEqual(orphanAuthed.code, 404, `已授权 + 无归属档案仍必须 404，实际 ${orphanAuthed.code}`);
+    assert.match(orphanAuthed.body.error, /没有归属档案/);
+
+    // ---- 反向钉：已授权调用者的行为**逐字不变**（安全加固不许顺手改正常用户的提示）
+    const authNoPending = await call(`/api/games/${gid}/action`, { method: 'POST', body: { token: playerToken, payload: {} } });
+    assert.strictEqual(authNoPending.code, 409, `已授权 + pending 为空仍必须 409，实际 ${authNoPending.code}`);
+    assert.match(authNoPending.body.error, /^当前没有等待中的操作$/, `正常用户看到的文案不许变，实际「${authNoPending.body.error}」`);
+    entry.game.finished = true;
+    const authExplodeFinished = await call(`/api/games/${gid}/explode`, { method: 'POST', body: { token: playerToken } });
+    assert.strictEqual(authExplodeFinished.code, 409, `已授权 + 已结束自爆仍必须 409，实际 ${authExplodeFinished.code}`);
+    assert.match(authExplodeFinished.body.error, /^对局已结束$/, `实际「${authExplodeFinished.body.error}」`);
+    const authStartFinished = await call(`/api/games/${gid}/start`, { method: 'POST', body: { token: playerToken } });
+    assert.strictEqual(authStartFinished.code, 409, `已授权 + 已结束 /start 仍必须 409，实际 ${authStartFinished.code}`);
+    assert.match(authStartFinished.body.error, /^对局已结束，不能重新开始$/, `实际「${authStartFinished.body.error}」`);
+    const authResumeRunning = await call(`/api/games/${gid}/resume`, { method: 'POST', body: { token: playerToken } });
+    assert.strictEqual(authResumeRunning.code, 409, `已授权 + 内存中未暂停 resume 仍必须 409，实际 ${authResumeRunning.code}`);
+    assert.match(authResumeRunning.body.error, /^对局仍在运行中，直接打开即可$/, `实际「${authResumeRunning.body.error}」`);
+    entry.game.finished = false;
+    api.games.clear();
+  } finally {
+    await terminateApi(api, dataDir);
+  }
+});
+
