@@ -113,25 +113,10 @@ class AnnotationStore {
     }
   }
 
-  /** 同步保存（API 处理器用）：整体带 revision 校验；覆盖式更新指定座位 */
-  putSync({ profileId, gameId, expectedRevision, seats }) {
-    const doc = this._read(profileId, gameId);
-    if (Number.isInteger(expectedRevision) && expectedRevision !== doc.revision) {
-      throw Object.assign(new Error('另一窗口更新了笔记，请刷新后合并'), { code: 409 });
-    }
-    for (const seat of Object.keys(seats || {})) {
-      if (!/^[0-9]{1,3}$/.test(seat)) continue;
-      const norm = normalizeSeatAnnotation(seats[seat]);
-      if (norm) doc.seats[seat] = norm;
-    }
-    doc.revision += 1;
-    const file = this.file(profileId, gameId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-    fs.writeFileSync(tmp, JSON.stringify(doc, null, 2), 'utf8');
-    fs.renameSync(tmp, file);
-    return doc;
-  }
+  // FIX-14：这里曾有 putSync()——它在「每文件串行队列」之外同步完成读-校验-写，与入队的
+  // put()/clearSeat() 并发时双方都 200、后写整份覆盖先写（审核 P2-6 同型竞态）。生产代码已无
+  // 调用者（PUT 路由在 FIN-07 收口时改为 await put()），故整体删除：**写路径有且只有入队的
+  // put()/clearSeat()**。防回归：test/annotations-store-contract.test.js 把"入口不存在"钉成契约。
 
   /** 清除某座位标注（撤销/清除当前标注） */
   async clearSeat({ profileId, gameId, seat, expectedRevision }) {

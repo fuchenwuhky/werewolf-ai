@@ -55,9 +55,10 @@ test('持久化：保存→重读一致；revision 递增；409 冲突', async (
   assert.strictEqual(got.profileId, PID);
   assert.strictEqual(got.gameId, GID);
 
-  // 409：过期 revision（当前 revision=1，拿 0 来写必须拒）
-  assert.throws(
-    () => store.putSync({ profileId: PID, gameId: GID, expectedRevision: 0, seats: { 7: { leaning: 'neutral' } } }),
+  // 409：过期 revision（当前 revision=1，拿 0 来写必须拒）。
+  // FIX-14：写入入口只有入队的 put()（putSync 已删除，见 annotations-store-contract.test.js）。
+  await assert.rejects(
+    () => store.put({ profileId: PID, gameId: GID, expectedRevision: 0, seats: { 7: { leaning: 'neutral' } } }),
     (e) => e.code === 409,
   );
   // 正确 revision → 更新
