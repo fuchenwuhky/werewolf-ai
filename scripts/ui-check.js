@@ -177,6 +177,7 @@ const PLANNED_SECTIONS = [
   'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
   '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
+  '触点几何门禁（真实渲染高度，计划书 §3）',
   '浏览器控制台',
 ];
 
@@ -707,6 +708,25 @@ class Browser {
       const dNick = await b.probe('#home-nick');
       checkGeometry('第 83 行 1440×900：当前档案昵称可见、中心点未被遮挡', dNick, { minW: 24, minH: 12 });
       await b.shot(path.join(SHOTS, '18-1440x900-desktop-profile.png'));
+
+      // §3 触点门禁（桌面端）：阈值与手机端**不同** —— 桌面常规 ≥40、主要操作 ≥44（计划书 §3）。
+      // 位置同样必须在这里：这是"开局前唯一可见窗口"，稍后 #screen-setup 会被异步自动进局整个隐藏。
+      // 只判高度：桌面首屏也在 1440×900 之外有内容，用 checkGeometry 默认参数会产生假红（手机端踩过一次）。
+      const hOf = (pr) => (pr && pr.found && typeof pr.h === 'number' ? Math.round(pr.h) : -1);
+      const dStart = await b.probe('#btn-start', { scroll: true });
+      check('§3 触点门禁（桌面）：开始游戏主操作实测高度 ≥44', hOf(dStart) >= 44, `实测 h=${hOf(dStart)}（w=${dStart.w}）`);
+      const dProfEntry = await b.probe('#btn-profiles-entry', { scroll: true });
+      check('§3 触点门禁（桌面）：档案入口实测高度 ≥40', hOf(dProfEntry) >= 40, `实测 h=${hOf(dProfEntry)}（w=${dProfEntry.w}）`);
+      const dDiscard = await b.probe('#btn-discard', { scroll: true });
+      if (dDiscard.found && hOf(dDiscard) > 0) {
+        check('§3 触点门禁（桌面）：丢弃草稿实测高度 ≥40', hOf(dDiscard) >= 40, `实测 h=${hOf(dDiscard)}（w=${dDiscard.w}）`);
+      } else {
+        // 实测事实：开局前这一刻 #btn-discard 不在场（它只在存在草稿时出现，实测 h=0）⇒ 这里量不到。
+        // 恒真断言不写进断言集合（计划书第 52 行），用 log 如实记录覆盖缺口。
+        log(`· §3 触点门禁（桌面）：丢弃草稿此刻不在场（实测 h=${hOf(dDiscard)}；该按钮只在有草稿时出现）—— 属已知覆盖缺口`);
+      }
+      // 桌面端弹窗（#modal）内的按钮：#modal 的内容由 openModal 动态生成，开局前不一定存在；
+      // 不在这里用"存在性检查"冒充覆盖 —— 由 ② 的桌面实测探针与 test/css.test.js 的守卫表负责。
     }
 
     // 设置页下半（板子编辑器 / 玩家昵称 / 底部操作条）在 1440×900 里落在首屏之外，
@@ -2422,6 +2442,22 @@ class Browser {
       checkGeometry('第 83 行 320×568：手机端局中本体可见、非零尺寸、与视口相交', game320, { minW: 300, minH: 480, requireCenter: false, requireHitSelf: false });
       const sw320 = await b.eval('document.documentElement.scrollWidth');
       check('第 83 行 320×568：局中在 320 宽下没有横向溢出', sw320 <= 321, `scrollWidth=${sw320}`);
+      // §3 触点门禁（局中部分）：趁手机端还停在局中屏量真实渲染高度 —— 比另开一局便宜得多。
+      // 注意这里量到的是**更窄的 320 视口**，触点高度不应因此变小（§3 第 76 行：为紧凑缩字号时不得缩触点）。
+      // 只判高度：局中屏是可滚动的，按钮常在首屏之外，用 checkGeometry 默认参数会产生假红。
+      const hOf = (pr) => (pr && pr.found && typeof pr.h === 'number' ? Math.round(pr.h) : -1);
+      const tabBtn = await b.probe('#m-game .m-tabs .m-tab-btn');
+      check('§3 触点门禁：局中页签按钮实测高度 ≥48（320 窄屏下同样不得缩）', hOf(tabBtn) >= 48, `实测 h=${hOf(tabBtn)}（w=${tabBtn.w}）`);
+      const keyBtn = await b.probe('#m-game .m-keys .key');
+      if (keyBtn.found) {
+        check('§3 触点门禁：局中技能键实测高度 ≥48', hOf(keyBtn) >= 48, `实测 h=${hOf(keyBtn)}（w=${keyBtn.w}）`);
+        const confirmKey = await b.probe('#m-game .m-keys .key[data-confirm]');
+        if (confirmKey.found) check('§3 触点门禁：局中主确认键实测高度 ≥52（§3 主操作档）', hOf(confirmKey) >= 52, `实测 h=${hOf(confirmKey)}（w=${confirmKey.w}）`);
+      } else {
+        // 恒真断言不写进断言集合（计划书第 52 行）：这一段跑在终局之后，动作键可能已经收走 ——
+        // "量不到"是事实，用 log 记录，不用 check(…, true, …) 冒充一条通过。
+        log('· §3 触点门禁：局中此刻已收走动作键（该阶段量测不适用，如实记录）');
+      }
       await b.shot(path.join(SHOTS, '14-320x568-mobile-game.png'));
 
       await b.setViewport(1280, 900, false);
@@ -2462,6 +2498,84 @@ class Browser {
         `(() => { const panel = document.querySelector('#m-sheet .m-sheet'); const r = panel ? panel.getBoundingClientRect() : null; return { ok: !!r && r.width > 200 && r.height > 100, panelW: r ? Math.round(r.width) : -1 }; })()`), { timeout: 5000, interval: 100 });
       await b.shot(path.join(SHOTS, '17-390x844-mobile-profile.png'));
 
+    }
+
+    // ---- 计划书 §3 + §11.3：触点几何门禁（只认真实渲染高度，不看 CSS 数值）----
+    // 为什么必须实测：静态读 m.css 的 min-height 会得出错误结论 —— `#m-app .btn`（:26，特异性 (1,1,0)）
+    // 是全局兜底，盖住了一批 .m-* 的收小声明（`.m-keys .btn` 38、`.key` 38、`.key.seat` 36、
+    // `.m-profile-row .btn` 40 都是**死规则**）；而 `#m-modal` / `#m-sheet` 在 `#m-app` **之外**
+    // （见 m.css:618-620 自己的注释），不受兜底约束，那里的 44/42px 是**真生效**的。
+    // 所以本段一律用 probe() 的实测值判定，阈值取 §3：手机触点 ≥48。
+    // 注：局中屏的 `.m-keys .key` / `.m-keys .key[data-confirm]` / `.m-tabs .m-tab-btn`
+    // 在上面的截图矩阵段落里（手机端仍在局中那一刻）另行断言，避免这里为了量它们再开一局。
+    log('\n=== 触点几何门禁（真实渲染高度，计划书 §3）===');
+    {
+      await b.goto(base + '/m/', 0);
+      await b.setViewport(390, 844, true);
+      await waitExpr('触点门禁：手机端首页已渲染（量测前置条件）', `(() => { const s = document.getElementById('m-boards'); const c = document.getElementById('m-profile-chip'); const rc = c ? c.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!rc && rc.height > 0, chipH: rc ? Math.round(rc.height) : -1 }; })()`, { timeout: 15000, interval: 150 });
+
+      // 首页的次级入口（.btn.small ⇒ 走 #m-app .btn.small 的兜底）
+      // 判据只认**高度**：这里量的是"触点够不够大"，不是"此刻在不在视口里"——首屏之下的按钮
+      // 用 checkGeometry 的默认参数会被判成"中心点不在视口"，那是**假红**（我踩过一次）。
+      const hOnly = (pr) => (pr && pr.found && typeof pr.h === 'number' ? Math.round(pr.h) : -1);
+      const chip = await b.probe('#m-profile-chip');
+      check('§3 触点门禁：首页「当前档案」chip 实测高度 ≥48', hOnly(chip) >= 48, `实测 h=${hOnly(chip)}（w=${chip.w}）`);
+      const setBtn = await b.probe('#m-settings-btn');
+      check('§3 触点门禁：首页「设置」入口实测高度 ≥48', hOnly(setBtn) >= 48, `实测 h=${hOnly(setBtn)}（w=${setBtn.w}）`);
+      const cdxBtn = await b.probe('#m-codex-btn');
+      check('§3 触点门禁：首页「角色图鉴」入口实测高度 ≥48', hOnly(cdxBtn) >= 48, `实测 h=${hOnly(cdxBtn)}（w=${cdxBtn.w}）`);
+
+      // 底部弹层（#m-sheet 在 #m-app **之外**，不受全局兜底！这正是 44px 真生效的地方）
+      await b.realClick('#m-profile-chip');
+      await waitExpr('触点门禁：档案弹层已展开（量测前置条件）', `(() => { const root = document.getElementById('m-sheet'); const panel = root ? root.querySelector('.m-sheet') : null; const r = panel ? panel.getBoundingClientRect() : null; return { ok: !!panel && r.width > 200 && r.height > 100, panelH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const sheetFoot = await b.probe('#m-sheet .m-sheet-foot .btn');
+      check('§3 触点门禁：档案弹层底部按钮实测高度 ≥48（#m-sheet 在 #m-app 之外，不受兜底）', hOnly(sheetFoot) >= 48, `实测 h=${hOnly(sheetFoot)}（w=${sheetFoot.w}）`);
+      const sheetOps = await b.probe('#m-sheet .pm-ops .btn');
+      check('§3 触点门禁：档案弹层档案操作按钮实测高度 ≥48', hOnly(sheetOps) >= 48, `实测 h=${hOnly(sheetOps)}（w=${sheetOps.w}）`);
+      // 弹层内的删除类入口（危险操作，必须可点且够大）
+      const sheetTrash = await b.probe('#m-sheet .pm-trash-entry');
+      check('§3 触点门禁：档案弹层回收区入口实测高度 ≥48', hOnly(sheetTrash) >= 48, `实测 h=${hOnly(sheetTrash)}（w=${sheetTrash.w}）`);
+
+      // 资料页翻页键（`.cdx-pager button`，m.css:517 是**元素**选择器 (0,1,1)：若按钮不带 .btn 就不吃兜底，
+      // 44px 会真生效）。进入方式与真实用户一致：先把入口滚进视口，再真实点击（#m-codex-btn → openCodex）。
+      await b.eval(`(() => { const el = document.getElementById('m-codex-btn'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
+      await new Promise((r) => setTimeout(r, 250));
+      await b.realClick('#m-codex-btn');
+      await waitExpr('触点门禁：手机端资料页已打开（量测前置条件）', `(() => { const s = document.getElementById('m-codex'); const p = document.querySelector('#m-codex .cdx-pager button'); const r = p ? p.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!r && r.height > 0, pagerH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const pagerBtn = await b.probe('#m-codex .cdx-pager button');
+      if (pagerBtn.found) {
+        check('§3 触点门禁：资料页翻页按钮实测高度 ≥48', hOnly(pagerBtn) >= 48, `实测 h=${hOnly(pagerBtn)}（w=${pagerBtn.w}）`);
+      } else {
+        // 实测事实：资料页**首层**不渲染翻页条（.cdx-pager 只在多页条目里出现）⇒ 这里量不到。
+        // 用 log 如实记录覆盖缺口，**不写成 check(…, true, …)** —— 参照计划书第 52 行
+        // 「恒真和宽容断言清理后只能收缩基线」：恒真断言会污染断言集合，等于假覆盖。
+        log('· §3 触点门禁：资料页首层无翻页键（该状态量测不适用）—— 属已知覆盖缺口');
+      }
+      // 中部弹窗（#m-modal 同样在 #m-app **之外**，index.html:211）—— 经由首页设置入口 openModal 打开。
+      // 这是 ② 报告的 §6.2 发现处：这里的 .btnrow .btn 实测 40、.btn.primary 实测 44，都低于 §3。
+      await b.eval(`(() => { const el = document.getElementById('m-codex-back'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
+      await new Promise((r) => setTimeout(r, 200));
+      const backBtn = await b.probe('#m-codex-back');
+      if (backBtn.found) { await b.realClick('#m-codex-back'); await new Promise((r) => setTimeout(r, 300)); }
+      await b.eval(`(() => { const el = document.getElementById('m-settings-btn'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
+      await new Promise((r) => setTimeout(r, 250));
+      await b.realClick('#m-settings-btn');
+      await waitExpr('触点门禁：手机端设置弹窗已打开（量测前置条件）', `(() => { const m = document.querySelector('#m-modal .modal-mask'); const b2 = document.querySelector('#m-modal .modal .btnrow .btn'); const r = b2 ? b2.getBoundingClientRect() : null; return { ok: !!m && !!r && r.height > 0, btnH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const modalBtn = await b.probe('#m-modal .modal .btnrow .btn');
+      if (modalBtn.found) {
+        check('§3 触点门禁：中部弹窗按钮实测高度 ≥48（#m-modal 在 #m-app 之外）', hOnly(modalBtn) >= 48, `实测 h=${hOnly(modalBtn)}（w=${modalBtn.w}）`);
+        const modalPrimary = await b.probe('#m-modal .modal .btnrow .btn.primary');
+        if (modalPrimary.found) check('§3 触点门禁：中部弹窗主确认键实测高度 ≥52（§3 主操作档）', hOnly(modalPrimary) >= 52, `实测 h=${hOnly(modalPrimary)}（w=${modalPrimary.w}）`);
+      } else {
+        // 恒真断言不写进断言集合（计划书第 52 行）：此处只记录"这一状态量不到"，用 log。
+        log('· §3 触点门禁：中部弹窗此刻无 .btnrow 按钮（该状态量测不适用）—— 属已知覆盖缺口；'
+          + '该族按钮由 ② 的探针与 test/css.test.js 守卫表负责');
+      }
+      // 覆盖缺口（如实记录，不假装覆盖）：`#m-flip-done`（翻牌页主确认，44）只在牌面揭示那一刻出现，
+      // 时序不可控，本段不冒充已覆盖；由 ② 的探针与 test/css.test.js 的守卫表负责。
+      // 未在此量测的两处（如实记录，不假装覆盖）：`.m-dialog .btnrow .btn`（在 #m-modal 内，需要真实触发一次
+      // 确认弹窗才能量）与 `.m-to-bottom`（需先把局中信息流滚到底部才可见）。它们由 ② 的交付报告与台账负责，
+      // 不在这里用"存在性检查"冒充 —— §11.3 明确禁止只有"存在 + 文字"型的弱检查。
     }
 
     // ---- 8. 控制台必须干净 ----
