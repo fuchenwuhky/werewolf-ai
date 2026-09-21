@@ -48,9 +48,9 @@ const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require(
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
 const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
-const { ProfileStore } = require('./profiles/store');
+const { ProfileStore, isValidId } = require('./profiles/store');
 const { AnnotationStore, hasMeaningfulAnnotations } = require('./annotations/store');
-const { ProfileMigration } = require('./profiles/migration');
+const { ProfileMigration, readLegacyExperienceOwner } = require('./profiles/migration');
 const transfer = require('./profiles/transfer');
 const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('./tmp-files');
 
@@ -123,12 +123,16 @@ class Api {
     this.profiles = new ProfileStore({ dataDir: path.dirname(this.saveDir), logger });
     this.annotations = new AnnotationStore({ profilesRoot: this.profiles.root, logger });
     this.defaultProfileId = null;
+    // 旧经验池归属（UUID；undefined = 还没解析，null = 无主）。由迁移钉死后取回，
+    // 迁移未就绪/失败的路径在首次使用时直接读磁盘（见 legacyExperienceOwnerId）。
+    this._legacyExpOwnerId = undefined;
     // DATA-02：迁移必须 await —— 修复前 run() 未 await 导致 defaultProfileId 竞态为 null
     this._profileMigrationReady = (async () => {
       try {
         this.profileMigration = new ProfileMigration({ dataDir: path.dirname(this.saveDir), profilesStore: this.profiles, logger });
         const mig = await this.profileMigration.run();
         this.defaultProfileId = mig.defaultId;
+        this._legacyExpOwnerId = mig.legacyExpOwnerId;
         if (mig.executed.length) {
           this.logger.info('api', `档案迁移完成：${mig.executed.join('/')}，默认档案 ${mig.defaultId}，存档打标 ${mig.tagged} 局`);
         }
@@ -199,9 +203,40 @@ class Api {
     }
   }
 
-  /** 按对局归属解析经验池（方案 PROF-03）：默认档案 → 旧池；其他档案 → 各自档案池 */
+  /**
+   * 旧经验池（saves/experiences.json）归谁：**钉死在原 UUID 上**，与"当前默认档案"无关。
+   *
+   * 迁移把答案写进 `migrations/legacy-experience-owner`（见 ProfileMigration.pinLegacyExperienceOwner）。
+   * 迁移还没就绪（或迁移失败降级）时直接读磁盘：即使降级运行，也不会因为
+   * `defaultProfileId` 变成另一份档案（或重建出的新默认档案）就把旧池交出去。
+   */
+  legacyExperienceOwnerId() {
+    if (this._legacyExpOwnerId !== undefined) return this._legacyExpOwnerId;
+    return (this._legacyExpOwnerId = readLegacyExperienceOwner(path.dirname(this.saveDir)));
+  }
+
+  /**
+   * 按对局归属解析经验池（方案 PROF-03 + M0 数据归属硬要求
+   * docs/next-stage-implementation-plan.md:56）。
+   *
+   * **归属键只有 UUID**：旧池（saves/experiences.json）属于
+   * `migrations/legacy-experience-owner` 记下的那个 profileId；其余档案各自持有
+   * `profiles/<id>/experiences.json`。
+   *
+   * 为什么不能按"当前默认档案"判定（缺陷根因，本条要求存在的理由）：
+   * 旧实现是 `ownerProfileId === this.defaultProfileId` 就返回旧池。于是默认档案一归档/
+   * 一删除/一切换，内存里的 defaultProfileId 立刻改指另一份档案，**同一份旧池的读路径当场
+   * 换主**：原档案的教训在新档案开局时被注入（继承），原档案自己反而读到空池（丢失）。
+   * 现在归属只由"创建对局时固化在存档里的 ownerProfileId"决定，切默认/归档/删除/重建默认
+   * 都不参与判定，故不存在继承路径。
+   *
+   * 边界（刻意保留的兼容行为）：无归属或非 UUID 的 owner（迁移失败降级模式、旧客户端）
+   * 仍走旧池 —— 这类对局没有档案可归属，与"档案甲继承档案乙"不是一回事；详见本文件所在
+   * 改动的报告"诚实边界"。
+   */
   experienceFor(ownerProfileId) {
-    if (!ownerProfileId || ownerProfileId === this.defaultProfileId) return this.experience;
+    if (!isValidId(ownerProfileId)) return this.experience;           // 无归属/非法 id：兼容旧池
+    if (ownerProfileId === this.legacyExperienceOwnerId()) return this.experience;
     if (!this._experienceByOwner) this._experienceByOwner = new Map();
     if (!this._experienceByOwner.has(ownerProfileId)) {
       this._experienceByOwner.set(ownerProfileId, new ExperienceStore(path.join(this.profiles.root, ownerProfileId), this.logger));

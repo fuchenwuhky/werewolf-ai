@@ -7,16 +7,42 @@
  *   2 default  创建「默认玩家」档案（UUID），重复运行不产生第二个默认档案
  *   3 own-tag  为无归属存档打 ownerProfileId/ownerNicknameSnapshot（默认档案）
  *   4 exp      旧经验池 saves/experiences.json 归属默认档案（零拷贝：默认档案经验池指向原路径）
+ *   4b exp-owner 把「旧经验池归谁」**钉死到一个 UUID**（migrations/legacy-experience-owner）
  *   5 done     写完成标记
  *
  * 失败语义：任何一步抛错都保留现场，重跑从游标继续；不删除源文件。
+ *
+ * exp-owner（M0 数据归属硬要求，docs/next-stage-implementation-plan.md:56）：
+ *   旧池在 saves/experiences.json（零拷贝，没有搬进 profiles/<id>/），"它归谁"必须有一个
+ *   与「当前默认档案」无关的持久化答案——否则默认一换，旧池就跟着默认标记跑到别人名下。
+ *   故把归属写成一份**只在首次**落盘的归属标记（UUID），此后任何切换/归档/删除/重建都不动它：
+ *   · 幂等：已有可解析标记 → 原样返回，绝不改写（重跑/重启/换默认都不改）；
+ *   · 原子写：临时文件 + rename（命名走 src/tmp-files.js，与仓库其余原子写一致）；
+ *   · 校验：写完读回比对，不一致以磁盘为准并告警；
+ *   · 失败关闭：标记存在但损坏、或游标说已钉过而标记丢了 → **不猜**（返回 null，旧池暂时无主），
+ *     宁可旧池暂时不注入，也不把它交给某个档案继承。
  */
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const { tmpPathFor } = require('../tmp-files');
+const { isValidId } = require('./store');
 
 const CURSOR = 'profiles-v1.json';
+/** 旧经验池归属标记（内容 = 拥有 saves/experiences.json 的 profileId，UUID） */
+const LEGACY_EXP_OWNER = 'legacy-experience-owner';
+
+/**
+ * 读旧经验池归属标记（唯一读点，Api 层与迁移层共用）。只认 UUID。
+ * @param {string} dataDir WW_DATA_DIR
+ * @returns {string|null} 拥有旧池的 profileId；缺失/损坏/非法一律 null（= 无主，失败关闭）
+ */
+function readLegacyExperienceOwner(dataDir) {
+  try {
+    const raw = fs.readFileSync(path.join(dataDir, 'migrations', LEGACY_EXP_OWNER), 'utf8').trim();
+    return isValidId(raw) ? raw : null;
+  } catch (_) { return null; }
+}
 
 class ProfileMigration {
   /** @param {{dataDir, profilesStore, logger}} opts */
@@ -90,6 +116,53 @@ class ProfileMigration {
   _clearDefaultId() {
     this.defaultId = null;
     this._persistDefaultId();
+  }
+
+  /** 旧经验池归属标记的磁盘路径 */
+  legacyExperienceOwnerFile() { return path.join(this.dir, LEGACY_EXP_OWNER); }
+
+  /** 旧经验池归谁（UUID）。没有答案时返回 null（= 无主，绝不用"当前默认"顶替） */
+  legacyExperienceOwnerId() {
+    if (this._legacyExpOwner !== undefined) return this._legacyExpOwner;
+    this._legacyExpOwner = readLegacyExperienceOwner(this.dataDir);
+    return this._legacyExpOwner;
+  }
+
+  /**
+   * 把旧经验池钉死到原 UUID（幂等：只在**首次**落盘，之后任何调用都不改写）。
+   *
+   * 为什么不能"每次启动同步成当前默认"：那样默认一换，旧池的归属就跟着换 —— 正是要禁止的继承。
+   * 所以只有"从未钉过"（游标里没有 exp-owner）时才写入；写过一次之后：
+   *   · 标记文件丢了 → 告警 + 返回 null（旧池无主：宁可暂时不注入，也不交给别人继承）；
+   *   · 标记文件损坏 → 同上（失败关闭，不猜）。
+   * 「游标 + 标记文件」双记录：单份损坏不会变成一次静默的归属转移。
+   * @param {string} id 候选归属（迁移/启动时的默认档案 UUID）
+   * @returns {string|null} 钉住后的归属 UUID
+   */
+  pinLegacyExperienceOwner(id) {
+    const existing = readLegacyExperienceOwner(this.dataDir);
+    if (existing) { this._legacyExpOwner = existing; return existing; } // 幂等：钉过就不动
+    const file = this.legacyExperienceOwnerFile();
+    if (fs.existsSync(file)) {
+      this._legacyExpOwner = null; // 失败关闭：损坏的标记不猜
+      this._log(`旧经验池归属标记不可解析（${file}）：旧池暂时无主，不会被任何档案继承`);
+      return null;
+    }
+    if (this.done.has('exp-owner')) {
+      this._legacyExpOwner = null; // 曾钉过而标记丢失：同样不猜
+      this._log(`旧经验池归属标记缺失（${file}）但游标记录已钉过：旧池暂时无主，不重新指定归属`);
+      return null;
+    }
+    if (!isValidId(id)) return null; // 没有可钉的 UUID（迁移失败降级）→ 下次启动再试
+    fs.mkdirSync(this.dir, { recursive: true });
+    const tmp = tmpPathFor(file);
+    fs.writeFileSync(tmp, String(id));
+    fs.renameSync(tmp, file);
+    const back = readLegacyExperienceOwner(this.dataDir); // 校验：以磁盘为准
+    if (back !== id) this._log(`旧经验池归属标记写后校验不一致（期望 ${id}，读回 ${back}），以磁盘为准`);
+    this._legacyExpOwner = back;
+    if (back) this._log(`旧经验池 saves/experiences.json 归属钉死到档案 ${back}`);
+    return back;
   }
 
   /**
@@ -180,9 +253,16 @@ class ProfileMigration {
       executed.push('exp');
     }
 
+    // exp-owner：把「旧池归谁」钉死到 UUID（幂等：首次写入后永不改写；不搬动任何经验数据）
+    const legacyExpOwnerId = this.pinLegacyExperienceOwner(defaultId);
+    if (legacyExpOwnerId && !this.done.has('exp-owner')) {
+      this._mark('exp-owner');
+      executed.push('exp-owner');
+    }
+
     if (!this.done.has('done')) { this._mark('done'); executed.push('done'); }
-    return { executed, defaultId, tagged };
+    return { executed, defaultId, tagged, legacyExpOwnerId };
   }
 }
 
-module.exports = { ProfileMigration };
+module.exports = { ProfileMigration, readLegacyExperienceOwner, LEGACY_EXP_OWNER };
