@@ -99,8 +99,10 @@ class AnnotationStore {
       doc.revision += 1;
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-      await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
-      await fs.promises.rename(tmp, file);
+      try {
+        await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
+        await fs.promises.rename(tmp, file);
+      } finally { await fs.promises.unlink(tmp).catch(() => {}); }
       return doc;
     });
     this._queues.set(file, job);
@@ -145,8 +147,10 @@ class AnnotationStore {
       doc.revision += 1;
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-      await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
-      await fs.promises.rename(tmp, file);
+      try {
+        await fs.promises.writeFile(tmp, JSON.stringify(doc, null, 2), 'utf8');
+        await fs.promises.rename(tmp, file);
+      } finally { await fs.promises.unlink(tmp).catch(() => {}); }
       return doc;
     });
     this._queues.set(file, job);

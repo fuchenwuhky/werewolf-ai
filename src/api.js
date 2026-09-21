@@ -789,6 +789,25 @@ class Api {
       if (gameMatch) {
         const id = gameMatch[1];
         const sub = gameMatch[2] || '';
+        // 恢复前的只读会话摘要：磁盘局也可读取，不能借此把对局提前放回运行内存。
+        if ((sub === '/session' || sub === '/tokens') && method === 'GET') {
+          const live = this.games.get(id);
+          const doc = live || this.loadSaveDoc(id);
+          if (!doc || !doc.game) return this.json(res, 404, { error: '对局不存在' });
+          if (sub === '/tokens') {
+            if (!mgmt) return this._denyManagement(res);
+            return this.json(res, 200, doc.tokens || {});
+          }
+          const token = query.get('token');
+          const tokenValid = !!token && !!doc.tokens && (token === doc.tokens.player || token === doc.tokens.god);
+          if (!mgmt && !tokenValid) return this.json(res, 403, { error: 'token 无效' });
+          const gm = doc.game;
+          const human = (gm.players || []).find((p) => p.isHuman);
+          return this.json(res, 200, { gameId: id, tokenValid, inMemory: !!live, started: !!gm.started, finished: !!gm.finished,
+            ownerProfileId: doc.ownerProfileId || null, ownerNickname: doc.ownerNicknameSnapshot || null,
+            mock: !!doc.mock, day: gm.day, phase: gm.phase, paused: gm.paused || null,
+            me: human ? { seat: human.seat } : null });
+        }
         // 断点恢复：① 内存中因配额/套餐暂停的对局 → 从内存锚点续跑
         //           ② 服务重启后已不在内存的对局 → 从存档锚点续跑
         if (sub === '/resume' && method === 'POST') {
@@ -808,11 +827,6 @@ class Api {
         if (sub === '/terminate' && method === 'POST') return this.terminateGame(res, entry, await this.readBody(req));
         if (sub === '/view' && method === 'GET') return this.view(res, entry, query);
         if (sub === '/stream' && method === 'GET') return this.stream(req, res, entry, query);
-        if (sub === '/tokens' && method === 'GET') {
-          // 整改 SEC-01：一局的完整令牌（玩家+上帝）属于管理信息，不允许仅凭"知道 gameId"获取
-          if (!mgmt) return this._denyManagement(res);
-          return this.tokens(res, entry);
-        }
         if (sub === '/action' && method === 'POST') return this.action(res, entry, await this.readBody(req));
         if (sub === '/review' && method === 'POST') return this.startReview(res, entry, await this.readBody(req));
         if (sub === '/review' && method === 'GET') return this.getReview(res, entry, query);
@@ -877,6 +891,7 @@ class Api {
       ownerNicknameSnapshot = prof.nickname;
     } else {
       this.logger.warn('api', `请求未携带 profileId，归入默认档案（兼容期，新客户端应显式携带）`);
+      if (ownerProfileId) ownerNicknameSnapshot = this.profiles.get(ownerProfileId).nickname;
     }
     const humanSeat = (players || []).find((p) => p.isHuman);
     ownerHumanSeat = humanSeat ? humanSeat.seat : null;
@@ -1158,6 +1173,7 @@ class Api {
       // AC-04：本局实际归属快照（顶栏/恢复守卫用；客户端当前浏览档案 ≠ 本局 owner）
       ownerProfileId: entry.ownerProfileId || null,
       ownerNickname: entry.ownerNicknameSnapshot || null,
+      mock: !!entry.mock,
       // 终局评分（MVP 体系）：对局结束后计算并缓存
       score: game.finished ? (entry.score || (entry.score = computeScores(game))) : undefined,
       // 局后 AI 教练（P2-4）：状态与文本随视图下发，SSE 会把它推给前端（无需额外轮询）
@@ -1826,9 +1842,13 @@ class Api {
         const doc = this._readJson(path.join(this.saveDir, f), null);
         if (!doc || doc.ownerProfileId !== pid) continue;
         const gm = doc.game || {};
-        rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock, savedAt: doc.savedAt || null });
+        rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock,
+          started: !!gm.started, inMemory: this.games.has(gm.id),
+          resumable: !!(doc.anchor && gm.started && !gm.finished),
+          ownerProfileId: doc.ownerProfileId, ownerNickname: doc.ownerNicknameSnapshot || prof.nickname,
+          savedAt: doc.savedAt || fs.statSync(path.join(this.saveDir, f)).mtime.toISOString() });
       }
-      return this.json(res, 200, { rows });
+      return this.json(res, 200, { rows: rows.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt))) });
     } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
   }
 
@@ -1911,7 +1931,8 @@ class Api {
       return this.json(res, 200, { annotations: doc, revision: doc.revision });
     } catch (e) {
       if (e.name === 'AnnotationConflict' || e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
-      return this.json(res, e.code && Number.isInteger(Number(e.code)) ? Number(e.code) : 400, { error: e.message });
+      const code = Number(e.code);
+      return this.json(res, Number.isInteger(code) && code >= 400 && code < 500 ? code : 500, { error: e.message });
     }
   }
 
@@ -1926,6 +1947,7 @@ class Api {
             id: g.id, day: g.day, phase: g.phase, finished: g.finished, started: !!g.started, inMemory: this.games.has(g.id),
             winner: g.winner, winReason: g.winReason,
             paused: g.paused || null,
+            ownerProfileId: j.ownerProfileId || null, ownerNickname: j.ownerNicknameSnapshot || null,
             mock: !!j.mock, // 让界面能标出"试玩局"，也便于排查"恢复后是否还走 Mock"
             // 服务重启后（不在内存）或内存中处于暂停态的对局，都可以从锚点续跑
             resumable: !!(j.anchor && g.started && !g.finished && (!this.games.has(g.id) || !!g.paused)),

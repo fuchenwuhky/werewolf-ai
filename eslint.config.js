@@ -51,6 +51,7 @@ const browserGlobals = {
   setTimeout: 'readonly', clearTimeout: 'readonly', setInterval: 'readonly', clearInterval: 'readonly',
   requestAnimationFrame: 'readonly', cancelAnimationFrame: 'readonly', alert: 'readonly', confirm: 'readonly',
   URL: 'readonly', URLSearchParams: 'readonly', EventSource: 'readonly', CustomEvent: 'readonly',
+  Event: 'readonly', MutationObserver: 'readonly',
   ResizeObserver: 'readonly', IntersectionObserver: 'readonly', matchMedia: 'readonly', getComputedStyle: 'readonly',
   structuredClone: 'readonly', TextDecoder: 'readonly', TextEncoder: 'readonly', AbortController: 'readonly',
   Blob: 'readonly', FileReader: 'readonly', Image: 'readonly', Audio: 'readonly', WebSocket: 'readonly',

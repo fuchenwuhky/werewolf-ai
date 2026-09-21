@@ -80,6 +80,20 @@ async function main() {
     return r.result && r.result.value;
   };
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const realTap = async (selector) => {
+    const point = await evalJs(`(() => {
+      const el = document.querySelector(${JSON.stringify(selector)});
+      if (!el || el.disabled) return null;
+      el.scrollIntoView({block:'center'});
+      const r = el.getBoundingClientRect();
+      const x = r.left + r.width / 2, y = r.top + r.height / 2;
+      if (!r.width || !r.height || !el.contains(document.elementFromPoint(x, y))) return null;
+      return {x,y};
+    })()`);
+    if (!point) throw new Error(`控件不可见/被遮挡/禁用：${selector}`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
 
   if (cmd === 'eval') {
     console.log(JSON.stringify(await evalJs(rest.join(' '))));
@@ -157,39 +171,30 @@ async function main() {
       const p = (state.view.players || []).find((x) => x.alive && !x.revealed && x.seat !== me);
       return p ? p.seat : 0;
     })()`);
-    await step(`标注 ${seat} 号`, `(async () => {
-      const AM = () => window.WWAnnotationsModel;
-      const entry = AM().normalizeSeatAnnotation({ leaning: 'lean_wolf', candidateRoleIds: [], note: '设备e2e标注' });
-      await saveAnnotations(${seat}, entry);
-      return state.anno.seats[${seat}] ? 'saved' : 'missing';
-    })()`, 1800);
+    await realTap('#m-tabbtn-notes');
+    await realTap(`#m-notes-list .m-note-row[data-seat="${seat}"]`);
+    await realTap('#m-sheet textarea');
+    await cdp.send('Input.insertText', { text: '设备e2e标注' });
+    await realTap('#m-sheet .m-sheet-foot .btn.primary');
+    await sleep(1800);
     ok(await evalJs(`!!(state.anno.seats[${seat}] && state.anno.seats[${seat}].note === '设备e2e标注')`), '标注已保存');
     ok(await evalJs(`!!(state.annoUndo && state.annoUndo.seat === ${seat})`), '撤销快照已记录');
-    await step('执行撤销', `(async () => {
-      document.querySelector('#m-tabbtn-notes').click();
-      await new Promise((r) => setTimeout(r, 400));
-      const b = [...document.querySelectorAll('#m-notes-list button')].find((x) => x.textContent.includes('撤销'));
-      if (!b) return 'no-undo-button';
-      const r = b.getBoundingClientRect();
-      if (!(r.width > 0 && r.height > 0)) return 'undo-button-invisible'; // 隐藏按钮不得点击（AC-12）
-      b.click();
-      await new Promise((r) => setTimeout(r, 1200));
-      return 'undone';
-    })()`, 2400);
+    await realTap('#m-notes-list .m-note-undo button');
+    await sleep(1200);
     ok(await evalJs(`!state.anno.seats[${seat}] || !state.anno.seats[${seat}].note`), '撤销后标注已回退');
     await shot('device-notes-after-undo');
 
     console.log('== 4. 软键盘 ==');
     const kb = await evalJs(`(() => {
-      const ta = document.querySelector('#m-flow textarea, #m-keys input[type=text]');
-      if (ta) { ta.focus(); return 'focused'; }
+      const ta = document.querySelector('#m-dialog textarea, #m-keys input[type=text]');
+      if (ta && ta.getBoundingClientRect().height > 0) { ta.focus(); return 'focused'; }
       return 'no-input-yet';
     })()`);
     console.log('  输入框:', kb, '（软键盘弹出为系统行为，由截图/真机确认）');
     await sleep(1200);
     await shot('device-keyboard-state');
-    if (kb === 'focused') ok(true, '输入框聚焦（软键盘由截图确认）');
-    else skip('软键盘遮挡验证', '当前阶段没有可见输入框');
+    if (kb === 'focused') ok(true, '输入框聚焦（不等于软键盘遮挡已验证）');
+    skip('软键盘遮挡验证', kb === 'focused' ? '需要物理设备确认键盘与保存按钮不重叠' : '当前阶段没有可见输入框');
 
     console.log('== 5. 完成 ==');
     const fails = results.filter((r) => !r.pass && !r.skipped);

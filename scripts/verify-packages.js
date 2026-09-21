@@ -28,6 +28,8 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 const crypto = require('crypto');
+const os = require('os');
+const { execFileSync } = require('child_process');
 const brand = require('./brand-v2-lib.js');
 
 const ROOT = path.join(__dirname, '..');
@@ -360,23 +362,36 @@ function verifyWin(dir) {
   return { ...tree, exeInfo, problems };
 }
 
-/** DESKTOP：Electron portable 单文件 EXE（NSIS 壳）。
- *  壳内 payload 是 NSIS 压缩（零依赖无法解包），但 NSIS 打包的输入
- *  desktop/dist/win-unpacked/resources/** 与壳内内容一致（electron-builder 先组目录再压缩）。
- *  AC-05：对 win-unpacked 的 server 载荷做与目录包同级的**内容核对**（web/src/server.js），
- *  并解析 app.asar 校验 main.js；再核对外壳图标与版本资源。 */
+/** DESKTOP：解出实际 NSIS EXE 内的 app-64.7z，再校验服务器树和 app.asar/main.js。
+ *  解包器来自已有桌面构建依赖，不增加产品运行时依赖；缺失时明确失败。
+ *  win-unpacked 无论存在、缺失、还是来自另一构建，都不参与验收判断。 */
 function verifyDesktop(exePath) {
+  // 验证分发文件本身，不信任可能来自另一次构建的 win-unpacked 目录。
+  const sevenZip = process.env.WW_7ZIP || path.join(ROOT, 'desktop', 'node_modules', 'electron-winstaller', 'vendor', '7z.exe');
+  if (!fs.existsSync(sevenZip)) throw new Error('缺少 EXE 解包工具；安装 desktop 开发依赖或设置 WW_7ZIP，不能降级为只校验旁边目录');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-package-verify-'));
+  try {
+    const run = (args) => execFileSync(sevenZip, args, { windowsHide: true, timeout: 120000, stdio: 'pipe' });
+    run(['e', path.resolve(exePath), '$PLUGINSDIR/app-64.7z', `-o${dir}`, '-y']);
+    const archive = path.join(dir, 'app-64.7z');
+    if (!fs.existsSync(archive)) throw new Error('EXE 中缺少 app-64.7z，无法验证实际 payload');
+    run(['x', archive, 'resources/server/*', 'resources/app.asar', `-o${dir}`, '-y']);
+    return verifyDesktopPayload(exePath, path.join(dir, 'resources'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true }); // 仅删除本函数 mkdtemp 返回的隔离解包目录
+  }
+}
+
+function verifyDesktopPayload(exePath, resDir) {
   const problems = [];
   const buf = fs.readFileSync(exePath);
   const exeInfo = checkExeBrandIcon('DESKTOP', exePath, problems);
   checkExeVersion('DESKTOP', exePath, readVersion(), problems);
 
   // ---- Electron payload 内容核对（win-unpacked = NSIS 打包输入）----
-  const unpacked = path.join(path.dirname(exePath), '..', 'desktop', 'dist', 'win-unpacked');
-  const resDir = path.join(unpacked, 'resources');
   let checked = 0;
   if (!fs.existsSync(resDir)) {
-    problems.push('DESKTOP: 找不到 win-unpacked/resources（portable 的打包输入不存在，无法核对 payload）');
+    problems.push('DESKTOP: EXE 解包后缺少 resources');
     return { checked: 0, binary: 1, files: 1, bytes: buf.length, hash: sha256(buf), exeInfo, problems };
   }
   // a) asar 内 main.js：零依赖解析 asar 头，提取 main.js 与源码 desktop/main.js 比对
@@ -389,7 +404,7 @@ function verifyDesktop(exePath) {
       else if (!got.equals(want)) problems.push('DESKTOP: app.asar 内 main.js 与源码不一致（包里是旧版本）');
       checked++;
     } catch (e) { problems.push('DESKTOP: app.asar 解析失败 ' + e.message); }
-  }
+  } else problems.push('DESKTOP: EXE 内缺少 app.asar');
   // b) extraResources：server/web、server/src、server.js 与源码全量比对（extraResources 原样拷贝）
   const map = new Map();
   const walk = (dir, prefix) => {
@@ -405,7 +420,7 @@ function verifyDesktop(exePath) {
     // 以 server/ 为根整树映射 → 键名与 sourceFiles() 的仓内相对名（web/…、src/…、server.js）一致
     walk(serverDir, '');
     const r = compareTree('DESKTOP-payload', map, problems);
-    checked = r.checked;
+    checked = r.checked + 1;
   } else {
     problems.push('DESKTOP: payload 缺少 server/（extraResources 未随包？）');
   }
@@ -464,9 +479,7 @@ function report(label, target, r) {
   }
   if (r.exeInfo === null && label !== 'DESKTOP') lines.push('EXE 图标资源段：未检（EXE 缺失）');
   for (const l of lines) console.log(`    · ${l}`);
-  if (label !== 'DESKTOP') {
-    console.log(`    · 与当前源码一致（比对 ${r.checked} 个文本/二进制文件，全部内容比对，0 个只查存在）`);
-  }
+  console.log(`    · ${label === 'DESKTOP' ? '从 EXE 内实际解包，' : ''}与当前源码一致（比对 ${r.checked} 个文本/二进制文件，全部内容比对，0 个只查存在）`);
   return true;
 }
 

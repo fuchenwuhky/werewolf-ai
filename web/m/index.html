@@ -76,10 +76,10 @@
       <!-- AC-11/§4：模式选择改单选卡（红开关形似扣费主行动按钮——审查项） -->
       <div class="m-mode-cards" role="radiogroup" aria-label="对局模式">
         <button class="m-mode-card sel" id="m-mock-btn" type="button" role="radio" aria-checked="true" data-mode="mock">
-          <b>🧪 试玩</b><span>不调用 API · 不花钱</span>
+          <b>免费试玩</b><span>不调用 API · 不花钱</span>
         </button>
         <button class="m-mode-card" id="m-real-btn" type="button" role="radio" aria-checked="false" data-mode="real">
-          <b>💳 真实对局</b><span>调用 API · 按用量计费</span>
+          <b>真实对局</b><span>调用 API · 按用量计费</span>
         </button>
       </div>
 
@@ -164,6 +164,7 @@
         <b id="m-day"></b>
         <span id="m-phase" class="m-phase-chip"></span>
         <span id="m-memory" class="m-phase-chip hidden"></span>
+        <span id="m-owner" class="m-owner"></span>
       </div>
       <button class="m-bar-btn" id="m-rulebook-btn" title="规则书" aria-label="规则书" data-i18n-title="game.rulebookTitle">📖</button>
     </header>
@@ -232,6 +233,7 @@
 <script src="../pwa.js"></script>
 <script src="../ai-cast.js"></script>
 <script src="../shared/annotations-model.js"></script>
+<script src="../shared/session-model.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

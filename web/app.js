@@ -258,7 +258,7 @@ async function initSetup() {
           const row = el('div', 'pm-row');
           const main = el('div', 'pm-main');
           main.appendChild(elText('div', 'pm-name', it.file));
-          main.appendChild(el('div', 'hint', `残留 ${(it.residue || []).length} 项 · ${it.error || it.reason || ''}`));
+          main.appendChild(elText('div', 'hint', `残留 ${(it.residue || []).length} 项 · ${it.error || it.reason || ''}`));
           row.appendChild(main);
           const ops = el('div', 'pm-ops');
           const retry = el('button', 'btn ghost small', '重试清理');
@@ -267,8 +267,9 @@ async function initSetup() {
             try {
               const rr = await api('POST', '/api/import/recoveries/retry');
               status.textContent = `已清理 ${rr.cleaned} 条，剩余 ${rr.remaining} 条`;
-              row.remove();
               if (!rr.remaining) { status.textContent = '没有待清理的恢复记录 ✓'; list.style.display = 'none'; }
+              else rcBtn.click(); // 重新读真实剩余清单，失败项不能从界面消失。
+              retry.disabled = false;
             } catch (e) { retry.disabled = false; status.textContent = `重试失败：${e.message}`; }
           });
           ops.appendChild(retry);
@@ -284,23 +285,8 @@ async function initSetup() {
   });
   // 用户手改过昵称后就不再用档案昵称覆盖
   $('#my-name').addEventListener('input', () => { $('#my-name').dataset.touched = '1'; });
-  loadProfiles();
-  $('#btn-resume').addEventListener('click', async () => {
-    // AC-04：恢复前归属守卫（与 boot 自动恢复同一套确认）
-    try {
-      const g = JSON.parse(localStorage.getItem('ww_current') || 'null');
-      if (g && (!g.ownerProfileId || !state.profileId || g.ownerProfileId !== state.profileId)) {
-        const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-        if (v && v.ownerProfileId && state.profileId && v.ownerProfileId !== state.profileId) {
-          const proceed = await confirmForeignOwner(v, g);
-          if (!proceed) return;
-          return; // confirmForeignOwner 内部已 enterGameScreen
-        }
-      }
-    } catch (_) { /* 守卫失败不阻断原恢复路径 */ }
-    if (localStorage.getItem('ww_resumable')) resumeFromAnchor();
-    else resumeGame();
-  });
+  await loadProfiles();
+  $('#btn-resume').addEventListener('click', resumeGame);
   await checkResume();
   // 到这里才有 meta/config、事件也才绑上。此前点击按钮什么都不会发生 ——
   // 冷启动较慢时用户会以为"点了没反应"。所以：开始按钮在 HTML 里就是 disabled，
@@ -735,28 +721,29 @@ function openStartConfirm() {
   const boardName = tpl ? tpl.name : '自定义板子';
   const hasKey = !!(state.cfg && state.cfg.hasKey);
   const wolves = Object.entries(state.setup.boardCounts || {}).filter(([r]) => state.meta.roles[r] && state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
-  const row = (k, v, warn) => `<div class="setinfo-row" style="display:flex;justify-content:space-between;gap:12px;padding:4px 0"><span style="color:var(--muted)">${k}</span><b style="color:${warn ? 'var(--err)' : 'var(--text)'}">${v}</b></div>`;
+  const row = (k, v, warn) => `<div class="start-review-row${warn ? ' needs-config' : ''}"><span>${k}</span><b>${v}</b></div>`;
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>开局确认</h2>');
-  const body = el('div', 'mbody');
+  const head = el('div', 'mhead', '<h2>入席之前</h2>');
+  const body = el('div', 'mbody start-review');
   body.innerHTML = [
-    row('档案', owner ? `${AVATAR_EMOJI[owner.avatarId] || '👤'} ${escapeHtml(owner.nickname)}` : '默认档案'),
+    row('本局归属', owner ? escapeHtml(owner.nickname) : '默认档案'),
     row('板子', `${escapeHtml(boardName)} · ${total} 人局 · 狼 ${wolves}/好 ${total - wolves}`),
     row('我的座位', seatChoice === '0' ? '观战' : seatChoice === 'random' ? '随机' : seatChoice + ' 号'),
-    row('模式', useMock ? '🧪 Mock 试玩（不调用 API）' : '💳 真实对局（按用量计费）', !useMock && !hasKey),
+    row('模式', useMock ? '免费试玩 · 不调用 API' : '真实对局 · 按模型用量计费', !useMock && !hasKey),
     row('模型', hasKey ? `${escapeHtml(String(state.cfg.model || ''))} · 已配置` : '未配置 API Key', !hasKey && !useMock),
   ].join('');
   body.appendChild(el('p', 'hint', useMock ? 'Mock 局不调用 API、完全免费。' : (hasKey ? '真实对局将按模型用量计费。' : '⚠ 真实模式需要先保存 API Key——当前尚未配置。')));
   const br = el('div', 'btnrow');
   const back = el('button', 'btn ghost', '← 返回调整');
-  back.addEventListener('click', () => closeModal());
-  const go = el('button', 'btn primary', useMock ? '🎮 开始 Mock 对局' : '🎮 开始真实对局');
+  back.addEventListener('click', () => { closeModal(); $('#setup-section').hidden = false; $('#setup-section').scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+  const go = el('button', 'btn primary', useMock ? '开始免费试玩' : '确认并开始真实对局');
+  go.disabled = !useMock && !hasKey;
   go.addEventListener('click', () => { closeModal(); startGame(); });
   br.append(back, go);
   body.appendChild(br);
   // 无 Key：一步 Mock 入口（门禁仍在服务端：真实模式没 Key 依旧被拒）
   if (!hasKey && !useMock) {
-    const mockNow = el('button', 'btn primary', '🧪 改用 Mock 开局（免费）');
+    const mockNow = el('button', 'btn primary', '改用免费试玩');
     mockNow.addEventListener('click', () => {
       const cb = document.querySelector('#use-mock');
       if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
@@ -835,42 +822,38 @@ function savedSeatChoice() {
 
 /** 恢复/找回进行中的对局：优先用本地令牌；令牌丢失则从最近未结束存档找回 */
 async function checkResume() {
+  state.resume = null;
+  $('#resume-box').classList.add('hidden');
   const saved = localStorage.getItem('ww_current');
   if (saved) {
     try {
       const g = JSON.parse(saved);
-      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+      const v = await api('GET', `/api/games/${g.gameId}/session?token=${g.playerToken || g.godToken}`);
       // 注意：判断"能否继续"必须用 inMemory（对局是否还在服务端内存里）。
       // 曾经这里用的是 v.live —— 那是流式直播缓冲，没人在打字时就是 null，
       // 于是刷新页面会被误判成"不可恢复"，紧接着把用户令牌删掉（丢档）。
-      if (v && !v.finished && v.started && v.inMemory) {
-        showResumeCard('发现进行中的对局（继续上次的局）', await resumeDetail(g.gameId, v));
+      if (v && !v.finished && v.started) {
+        state.resume = window.SessionModel.withView(g, v);
+        showResumeCard(v.inMemory ? '继续上局' : '从存档恢复', `${v.ownerNickname || '原档案'} · ${await resumeDetail(g.gameId, v)}`);
         return;
       }
       localStorage.removeItem('ww_current'); // 已结束/从未开局（设置页放弃的创建残留）→ 不恢复
-    } catch (_) { localStorage.removeItem('ww_current'); }
+    } catch (_) { /* 网络/权限失败不删除凭证 */ }
   }
   // 令牌丢失（如清了浏览器缓存/误点清除）：从最近未结束的对局找回令牌
   try {
     const { rows } = await api('GET', '/api/games');
-    const unfinished = rows.find((r) => !r.finished && r.started && r.inMemory); // 未开局或已随服务器重启失活的对局不可恢复
+    const unfinished = window.SessionModel.findOwned(rows, state.profileId);
     if (unfinished) {
       const tokens = await api('GET', `/api/games/${unfinished.id}/tokens`);
-      const g = { gameId: unfinished.id, playerToken: tokens.player, godToken: tokens.god };
-      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
+      const g = { gameId: unfinished.id, playerToken: tokens.player, godToken: tokens.god, mock: !!unfinished.mock };
+      const v = await api('GET', `/api/games/${g.gameId}/session?token=${g.playerToken || g.godToken}`);
       if (v && !v.finished) {
         localStorage.setItem('ww_current', JSON.stringify(g));
-        showResumeCard('发现进行中的对局（已自动找回会话）', await resumeDetail(g.gameId, v));
+        state.resume = window.SessionModel.withView(g, v);
+        showResumeCard(v.inMemory ? '继续上局' : '从存档恢复', `${v.ownerNickname || '原档案'} · ${await resumeDetail(g.gameId, v)}`);
         return;
       }
-    }
-    // 服务重启后内存丢失的对局：有断点锚点，可从存档恢复续跑
-    const resumable = rows.find((r) => r.resumable);
-    if (resumable) {
-      localStorage.setItem('ww_resumable', JSON.stringify({ gameId: resumable.id, day: resumable.day }));
-      $('#btn-resume').textContent = '从断点恢复对局';
-      showResumeCard('发现中断的对局（服务重启过）', await resumeDetail(resumable.id, resumable));
-      return;
     }
   } catch (_) { /* 无可恢复对局 */ }
   // 无可恢复局：给明确空态（FIN-04 §8.1），而不是悄悄什么都不显示
@@ -916,20 +899,20 @@ async function resumeDetail(gameId, v) {
   return parts.join(' · ');
 }
 
-async function resumeFromAnchor() {
+async function resumeGame() {
+  if (state.resuming) return;
+  state.resuming = true;
   try {
-    const info = JSON.parse(localStorage.getItem('ww_resumable') || 'null');
-    if (!info) return;
-    const r = await api('POST', `/api/games/${info.gameId}/resume`, {});
+    const handle = state.resume || JSON.parse(localStorage.getItem('ww_current') || 'null');
+    if (!handle) return;
+    const next = await window.SessionModel.prepare(api, handle, state.profileId, confirmForeignOwner);
+    if (!next) return;
+    state.game = next;
+    localStorage.setItem('ww_current', JSON.stringify(next));
     localStorage.removeItem('ww_resumable');
-    localStorage.setItem('ww_current', JSON.stringify({ gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken }));
-    state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
     enterGameScreen();
   } catch (e) { alert(`恢复失败：${e.message}`); }
-}
-
-function resumeGame() {
-  try { state.game = JSON.parse(localStorage.getItem('ww_current')); enterGameScreen(); } catch (_) {}
+  finally { state.resuming = false; }
 }
 
 // ---------------- 玩家档案（PROF-01/04，方案 §3） ----------------
@@ -957,11 +940,10 @@ async function loadProfiles() {
  * AC-04：恢复前的归属守卫。本局 owner ≠ 当前浏览档案时弹三选：
  * ① 切回原档案并恢复（推荐）② 仍以当前档案身份进入（顶栏如实标注本局归属）③ 取消留在首页
  */
-async function confirmForeignOwner(v, handle) {
+async function confirmForeignOwner(v) {
   const ownerName = v.ownerNickname || '原档案';
   const cur = (state.profiles || []).find((x) => x.id === state.profileId);
   const curName = cur ? cur.nickname : '当前档案';
-  const withOwner = { ...handle, ownerProfileId: v.ownerProfileId || null, ownerNickname: v.ownerNickname || null };
   return new Promise((resolve) => {
     const wrap = el('div');
     const head = el('div', 'mhead', '<h2>⚠ 对局归属确认</h2>');
@@ -969,27 +951,24 @@ async function confirmForeignOwner(v, handle) {
     body.appendChild(elText('p', null, `这局对局属于档案「${ownerName}」，而当前浏览的是「${curName}」。笔记与战绩始终记入本局归属档案。`));
     const br = el('div', 'btnrow');
     const sw = el('button', 'btn', `切回「${ownerName}」并恢复`);
+    sw.disabled = !(state.profiles || []).some((p) => p.id === v.ownerProfileId && !p.archivedAt);
     sw.addEventListener('click', () => {
       const op = (state.profiles || []).find((x) => x.id === v.ownerProfileId);
       if (op) { onSelectProfile(op.id); }
-      state.game = withOwner;
-      $('#modal-root').innerHTML = '';
-      enterGameScreen();
+      closeModal();
       resolve(true);
     });
-    const keep = el('button', 'btn ghost', `仍以「${curName}」身份进入`);
+    const keep = el('button', 'btn ghost', '保持当前档案，进入原档案对局');
     keep.addEventListener('click', () => {
-      state.game = withOwner; // 不改写归属：handle 保留 owner 快照，顶栏如实显示
-      $('#modal-root').innerHTML = '';
-      enterGameScreen();
+      closeModal();
       resolve(true);
     });
     const cancel = el('button', 'btn ghost', '暂不恢复');
-    cancel.addEventListener('click', () => { $('#modal-root').innerHTML = ''; resolve(false); });
+    cancel.addEventListener('click', () => { closeModal(); resolve(false); });
     br.append(sw, keep, cancel);
     body.appendChild(br);
     wrap.append(head, body);
-    openModal(wrap);
+    openModal(wrap, { onDismiss: () => { closeModal(); resolve(false); } });
   });
 }
 
@@ -1085,7 +1064,7 @@ function renderTopbarIdentity() {
   const owner = state.game && state.game.ownerNickname ? { nickname: state.game.ownerNickname } : null;
   const p = owner || (state.profiles || []).find((x) => x.id === state.profileId);
   const foreign = owner && state.profileId && state.game.ownerProfileId !== state.profileId;
-  node.textContent = p ? `${AVATAR_EMOJI[p.avatarId] || '👤'} ${p.nickname}` : '';
+  node.textContent = p ? `${owner ? '本局归属 · ' : ''}${p.nickname}` : '未关联档案';
   node.title = owner ? (foreign ? '本局归属该档案（非当前浏览档案）：笔记/战绩仍记入本局 owner' : '本局归属档案') : '';
 }
 
@@ -1114,6 +1093,7 @@ function onSelectProfile(pid) {
   applyProfilePrefs(currentProfilePrefs()); // 切档 → 外观偏好跟着档案走
   renderHomeProfile();
   renderTopbarIdentity();
+  if (!state.game) checkResume();
   renderSetupDigest();
 }
 
@@ -1283,7 +1263,7 @@ function openProfileImport() {
       closeModal();
       renderProfileStrip();
       openProfileManager();
-      alert(`导入完成：${r.imported} 局已归入新档案`);
+      alert(`导入完成：${r.imported} 局已归入新档案${r.pendingRecoveries && r.pendingRecoveries.length ? '\n另有历史导入残留未清理，请到「设备与数据」检查恢复记录。' : ''}`);
     } catch (e) { alert(`导入失败：${e.message}`); }
   });
   inp.click();
@@ -1597,30 +1577,39 @@ function saveAnnotations(seat, entry) {
       if (e.status === 409) {
         // 并发冲突（方案 §4.5）：另一窗口改过。给出"载入最新并保留我这版"的人工合并路径，绝不静默覆盖。
         const keep = entry; // 本地编辑的这份
-        const box = el('div');
+        const box = el('div', 'annotation-conflict');
         box.appendChild(el('p', 'hint', '⚠ 另一个窗口更新了笔记（版本冲突）。可选择：载入最新笔记（保留你正在编辑的这一个座位的修改）或放弃本次修改。'));
         const br = el('div', 'btnrow');
         const merge = el('button', 'btn', '载入最新并保留我的修改');
         merge.addEventListener('click', async () => {
-          const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
-          state.anno.rev = r.revision;
-          state.anno.seats = r.annotations.seats || {};
-          closeModal();
+          merge.disabled = true;
           try {
-            await saveAnnotations(seat, keep); // 以最新 revision 重放这一座位的修改
-          } catch (_) { alert('合并保存仍失败，请稍后重试'); }
+            const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+            if (await saveAnnotations(seat, keep)) closeModal();
+          } catch (_) { alert('合并保存仍失败，草稿已保留，请稍后重试'); }
+          finally { merge.disabled = false; }
         });
         const discard = el('button', 'btn ghost', '放弃我的修改');
         discard.addEventListener('click', async () => {
-          const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
-          state.anno.rev = r.revision;
-          state.anno.seats = r.annotations.seats || {};
-          closeModal();
-          updateSeats(state.view);
+          try {
+            const r = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+            state.anno.rev = r.revision;
+            state.anno.seats = r.annotations.seats || {};
+            closeModal();
+            updateSeats(state.view);
+          } catch (_) { alert('无法载入最新笔记，草稿仍保留'); }
         });
         br.append(merge, discard);
         box.appendChild(br);
-        openModal(box);
+        const editor = document.querySelector('#modal-root .mbody');
+        if (editor) {
+          const previous = editor.querySelector('.annotation-conflict');
+          if (previous) previous.remove();
+          editor.appendChild(box); // 原输入框与草稿关闭守卫留在原位，不销毁再声称已保留。
+          box.scrollIntoView({ block: 'nearest' });
+        } else openModal(box, { onDismiss: () => { if (confirm('放弃尚未保存的笔记修改？')) closeModal(); } });
       } else {
         alert(`保存失败：${e.message}\n（草稿仍在输入框里，未丢失）`);
       }
@@ -1728,8 +1717,9 @@ function openTagModal(seat) {
   body.appendChild(el('h4', null, '自称身份（TA 声称的，不一定信）'));
   const claimSel = el('select');
   claimSel.appendChild(el('option', null, '（未声称）')).value = '';
-  for (const [rid, r] of Object.entries(state.meta.roles)) {
-    if (r.hidden) continue;
+  for (const rid of [...new Set([...Object.keys(v.board || {}).filter((id) => v.board[id] > 0), draft.claimedRoleId])]) {
+    const r = state.meta.roles[rid];
+    if (!r) continue;
     claimSel.appendChild(el('option', null, `${r.emoji} ${r.name}`)).value = rid;
   }
   claimSel.value = draft.claimedRoleId || '';
@@ -1742,6 +1732,7 @@ function openTagModal(seat) {
   noteI.maxLength = A_.MAX_NOTE;
   noteI.rows = 3;
   noteI.value = draft.note;
+  noteI.addEventListener('input', () => { draft.note = noteI.value; });
   noteI.placeholder = '例：跳预言家但查杀方向存疑，依据第 12 条发言';
   noteL.appendChild(noteI);
   body.appendChild(noteL);
@@ -1750,6 +1741,7 @@ function openTagModal(seat) {
   evI.type = 'number';
   evI.min = '1';
   evI.value = draft.evidenceSeq || '';
+  evI.addEventListener('input', () => { draft.evidenceSeq = evI.value ? Number(evI.value) : null; });
   evL.appendChild(evI);
   body.appendChild(evL);
 
@@ -1784,7 +1776,7 @@ function openTagModal(seat) {
   }
   body.append(br, err);
   wrap.append(head, body);
-  openModal(wrap);
+  openModal(wrap, { onDismiss: () => close.click() });
 }
 
 // ---------------- 笔记列表（NOTE-03）：抽屉/右栏共用同一份渲染 ----------------
@@ -2117,7 +2109,7 @@ async function resumePausedGame() {
   if (btn) { btn.disabled = true; btn.textContent = '恢复中…'; }
   try {
     const r = await api('POST', `/api/games/${g.gameId}/resume`, { token: g.playerToken || g.godToken });
-    state.game = { gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
+    state.game = { ...g, gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
     localStorage.setItem('ww_current', JSON.stringify(state.game));
     state.playerAfter = 0; state.godAfter = 0;
     state.playerView = null; state.godView = null; // 换了新对局，缓存帧作废
@@ -2643,6 +2635,8 @@ const PHASE_AMBIENT = {
 };
 
 function updateHeader(v) {
+  if (state.game) state.game = window.SessionModel.withView(state.game, v);
+  renderTopbarIdentity();
   $('#g-day').textContent = `第${v.day}天`;
   $('#g-phase').textContent = PHASE_LABEL[v.phase] || v.phase;
   document.body.dataset.phase = PHASE_AMBIENT[v.phase] || 'dusk';
@@ -3523,7 +3517,7 @@ function maybeShowRole(v) {
  * 关闭后焦点回到打开弹窗的来源元素。openModal/closeModal 成对使用，页面里
  * 不再直接 `modal-root.innerHTML = ''`（那会丢掉焦点归还）。
  */
-function openModal(inner) {
+function openModal(inner, { onDismiss } = {}) {
   const root = $('#modal-root');
   if (!state.modalReturnFocus && document.activeElement && document.activeElement !== document.body) {
     state.modalReturnFocus = document.activeElement;
@@ -3531,6 +3525,10 @@ function openModal(inner) {
   root.innerHTML = '';
   const mask = el('div', 'modal-mask');
   const modal = el('div', 'modal');
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.tabIndex = -1;
+  state.modalDismiss = onDismiss || closeModal;
   // ⚠ 与手机端同样的坑：把调用方的容器整包塞进来，会让 .mhead/.mbody 变成"孙子"，
   // flex 高度约束传不到正文，正文撑到真实高度后滚不动（规则书实测上万像素）。
   // 无类名的普通容器一律拆开挂到 .modal 下。
@@ -3540,10 +3538,12 @@ function openModal(inner) {
     modal.appendChild(inner);
   }
   mask.appendChild(modal);
-  mask.addEventListener('click', (e) => { if (e.target === mask) closeModal(); });
+  const title = modal.querySelector('h2, h3');
+  if (title) { title.id = 'active-modal-title'; modal.setAttribute('aria-labelledby', title.id); }
+  mask.addEventListener('click', (e) => { if (e.target === mask) state.modalDismiss(); });
   modal.addEventListener('keydown', (e) => {
     if (e.key !== 'Tab') return;
-    const focusables = modal.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])');
+    const focusables = [...modal.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])')].filter((x) => !x.disabled && x.getClientRects().length);
     if (!focusables.length) return;
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
@@ -3571,6 +3571,9 @@ new MutationObserver(() => {
 function closeModal() {
   const root = $('#modal-root');
   if (root) root.innerHTML = '';
+  state.modalDismiss = null;
+  const appEl = document.getElementById('app');
+  if (appEl) appEl.inert = false;
   const src = state.modalReturnFocus;
   state.modalReturnFocus = null;
   if (src && typeof src.focus === 'function') { try { src.focus({ preventScroll: true }); } catch (_) { try { src.focus(); } catch (_) { /* 来源已移除 */ } }
@@ -3582,10 +3585,8 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   const root = $('#modal-root');
   if (root && root.children.length) {
-    // AC-06：Esc 等价于点最上层弹窗自己的关闭键——编辑类弹窗的"未保存放弃"守卫在那里
-    const closeBtn = [...root.querySelectorAll('.modal button')].find((b) => b.offsetParent !== null && b.textContent.trim() === '✕');
-    if (closeBtn) { closeBtn.click(); return; }
-    closeModal();
+    e.preventDefault();
+    (state.modalDismiss || closeModal)();
     return;
   }
   const notes = $('#notes-drawer');
@@ -3924,23 +3925,18 @@ function ensureCardBacks() {
   }
 }
 ensureCardBacks();
+window.addEventListener('storage', async (e) => {
+  if (e.key !== 'ww_profile_id') return;
+  await loadProfiles();
+  if (!state.game) await checkResume();
+});
 initSetup().then(async () => {
-  await loadProfiles(); // AC-04：归属守卫需要当前档案 id，先确保档案列表就绪
   const saved = localStorage.getItem('ww_current');
   if (saved) {
     try {
       const g = JSON.parse(saved);
-      const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=0`);
-      if (v && !v.finished) {
-        // AC-04：本局 owner ≠ 当前浏览档案时不得静默进入——提示切回/明示进入/取消
-        const foreign = v.ownerProfileId && state.profileId && v.ownerProfileId !== state.profileId;
-        if (!foreign) {
-          state.game = { ...g, ownerProfileId: v.ownerProfileId || g.ownerProfileId || null, ownerNickname: v.ownerNickname || g.ownerNickname || null };
-          enterGameScreen();
-          return;
-        }
-        await confirmForeignOwner(v, g);
-      }
+      const v = await api('GET', `/api/games/${g.gameId}/session?token=${g.playerToken || g.godToken}`);
+      if (v && !v.finished && v.inMemory) await resumeGame();
     } catch (_) { /* noop */ }
   }
 }).catch((e) => {

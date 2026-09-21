@@ -1,5 +1,7 @@
 # 最终交付施工台账（FIN-00）
 
+> 2026-09-20 复验更新：下文的 bd99743 / 601 项 / AC 全关闭为历史施工记录，**不是当前验收结论**。286e20a 仍存在复现缺口，审核方已直接接手修复，详见 [返修复验与接手记录](acceptance-takeover-2026-09-20.md)。当前修改在本地工作区，未提交/推送；完整三步向导、物理真机、V11/V12 仍未关闭。
+
 计划书：`docs/final-delivery-construction-plan.md` V3.0（基线 74ca56a）
 最终构建：**bd99743** · productVersion 1.5.2 · androidVersionCode 9 · 2026-09-19
 最终自动化：`npm test` **601/601**；`npm run gate` 全链 EXIT=0；`ui:check --full --strict` EXIT=0；`brand:check` 62/62；`app:verify` 双端全内容比对通过

@@ -278,7 +278,10 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-dialog textarea {
   flex: 1 1 auto; width: 100%; min-height: 50px; max-height: 26vh; margin: 0; resize: none;
   font-size: var(--fs-base); line-height: 1.55;
+  background: var(--card); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: var(--sp-2);
 }
+.m-dialog textarea::placeholder { color: var(--muted); }
+.m-dialog textarea:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 /* 动作行：所有技能键居右紧凑排列。row-reverse + justify-content:flex-start
    ⇒ 主键（发送/确认）永远落在最右边（拇指位，也符合聊天软件的发送键习惯），
    次要键依次往左排；键多到一行放不下时自动换行，不会把谁挤变形。 */
@@ -816,3 +819,5 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-mode-card.sel { border-color: var(--gold); background: linear-gradient(180deg, rgba(216, 178, 95, .16), rgba(16, 26, 41, .6)); }
 .m-mode-card.sel b { color: var(--gold-bright); }
 .m-mode-card:not(.sel) b { color: var(--text-dim); }
+/* 归属独立成行，不挤占阶段和操作按钮；长昵称仍可通过 title 查看。 */
+.m-owner { flex-basis: 100%; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -312,6 +312,7 @@ class Browser {
     // 用户报的"点了勾不上"根因是 `background: linear-gradient(...)` 之后又写 `background-image: url(勾)`，
     // 前者被顶掉 → 底色透明 → 深色勾画在暗底上等于看不见（状态其实是翻转的，所以只测 checked 测不出来）。
     // 所以这里同时钉三件事：真实鼠标点击能翻转状态、勾选态**同时**有勾画与不透明底色、取消后回到暗底。
+    await b.realClick('#entry-settings'); // 先经可见入口展开，不能点击 hidden 表单。
     const cb = await b.eval(`(() => {
       const el = document.getElementById('cfg-cachecontrol');
       const read = () => { const s = getComputedStyle(el); return {
@@ -362,14 +363,15 @@ class Browser {
       await b.goto(base + '/m/', 2000);
       const mock = await b.eval(`(() => {
         const el = document.getElementById('m-mock-btn');
-        return el ? { text: el.textContent, danger: el.classList.contains('danger') } : null;
+        const real = document.getElementById('m-real-btn');
+        return el ? { text: el.textContent, checked: el.getAttribute('aria-checked'), realChecked: real?.getAttribute('aria-checked'), realText: real?.textContent, height: el.getBoundingClientRect().height } : null;
       })()`);
       check('手机端板子页有可见的试玩开关', !!mock, mock ? mock.text : 'NOT_FOUND');
-      check('试玩开关默认显示「真实对局（花钱）」警示', !!(mock && /花钱|真实/.test(mock.text) && mock.danger), mock ? mock.text : '');
-      await b.click('#m-mock-btn');
+      check('模式卡默认选中真实对局且说明按量计费，试玩标签保持独立', !!(mock && mock.realChecked === 'true' && mock.checked === 'false' && /按用量计费/.test(mock.realText) && /试玩/.test(mock.text) && mock.height >= 48), JSON.stringify(mock));
+      await b.realClick('#m-mock-btn');
       await sleep(400);
-      const after = await b.eval(`document.getElementById('m-mock-btn').textContent`);
-      check('点击后切换到试玩态（不花钱）', /不花钱|试玩/.test(after), after);
+      const after = await b.eval(`({mock:document.getElementById('m-mock-btn').getAttribute('aria-checked'),real:document.getElementById('m-real-btn').getAttribute('aria-checked')})`);
+      check('点击后仅试玩卡被选中', after.mock === 'true' && after.real === 'false', JSON.stringify(after));
       await b.goto(base + '/', 1500); // 回到桌面端，后续图鉴/对局断言都在桌面端进行
     }
 
@@ -590,11 +592,13 @@ class Browser {
       await b.eval(`localStorage.removeItem('ww_current'); localStorage.removeItem('ww_resumable');`);
       await b.goto(base + '/', 2000);
       for (let i = 0; i < 80; i++) { if (await b.eval(`(() => { const s=document.getElementById('btn-start'); return !!s && !s.disabled; })()`)) break; await sleep(250); }
-      await b.click('input[name=mode][value=watch]');
+      await b.realClick('#entry-settings');
+      await b.realClick('input[name=mode][value=watch]');
       await sleep(400);
       check('切换到纯观战', await b.eval(`document.querySelector('input[name=mode]:checked').value`) === 'watch');
       await b.click('#use-mock');
       await b.click('#btn-start');
+      await b.realClick('#modal-root .start-review .btn.primary:not(:disabled)');
       await sleep(2500);
       check('开局进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
       // 中局留一张：这一刻圆桌上有座位状态、发言卡、可能的投票角标 —— 终局那张反而看不出这些
@@ -632,10 +636,12 @@ class Browser {
       await b.eval(`localStorage.removeItem('ww_current'); localStorage.removeItem('ww_resumable');`);
       await b.goto(base + '/', 2000);
       for (let i = 0; i < 80; i++) { if (await b.eval(`(() => { const s=document.getElementById('btn-start'); return !!s && !s.disabled; })()`)) break; await sleep(250); }
-      await b.click('input[name=mode][value=play]');
+      await b.realClick('#entry-settings');
+      await b.realClick('input[name=mode][value=play]');
       await sleep(300);
       await b.click('#use-mock');
       await b.click('#btn-start');
+      await b.realClick('#modal-root .start-review .btn.primary:not(:disabled)');
       await sleep(2500);
       const flip = await b.eval(`(() => { const o=document.getElementById('role-overlay'); return { shown: !!o && !o.classList.contains('hidden'), caption: (document.getElementById('flip-caption')?.textContent||'').slice(0,20) }; })()`);
       check('玩家视角出现翻牌遮罩且给了提示', flip.shown && flip.caption.length > 0, JSON.stringify(flip));

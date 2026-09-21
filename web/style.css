@@ -16,7 +16,7 @@
    动效：只动 transform / opacity / box-shadow / background（不动布局属性），
         统一用 --dur-* / --ease-*；对 prefers-reduced-motion 全量降级（见文件末尾）。
    ============================================================ */
-@import url('https://fonts.googleapis.com/css2?family=Cinzel+Decorative:wght@700;900&family=UnifrakturMaguntia&family=Noto+Serif+SC:wght@600;900&display=swap');
+/* 本地应用采用下方系统字体栈；不发起被 CSP 阻止的第三方字体请求。 */
 
 /* ============================================================
    一、设计 token
@@ -1820,3 +1820,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
     scroll-behavior: auto !important;
   }
 }
+/* 入席确认：表格层级取代行内样式与重复图标，沿用月夜/旧金/骨白 token。 */
+.start-review-row { display: grid; grid-template-columns: 5.5em minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-3) 0; border-bottom: 1px solid var(--line); }
+.start-review-row > span { color: var(--muted); }
+.start-review-row > b { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
+.start-review-row.needs-config > b { color: var(--gold-bright); }
+.start-review .btnrow { margin-top: var(--sp-4); }

@@ -73,7 +73,7 @@ test('AC-01a 并发 PUT/PUT 同 revision：恰好一个 200 一个 409，成功�
 test('AC-01b 并发 PUT/DELETE 同 revision：恰好一个成功，PUT 成功时内容不丢', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac01b-'));
   try {
-    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: path.join(dir, 'saves') });
     const { gid } = await makeGame(api, dir);
     const seed = await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 0, seats: { 2: { leaning: 'lean_wolf', note: '将争夺的座位' }, 5: { leaning: 'neutral', note: '旁座' } } });
     assert.strictEqual(seed.status, 200);
@@ -98,7 +98,7 @@ test('AC-01b 并发 PUT/DELETE 同 revision：恰好一个成功，PUT 成功时
 test('AC-01c 并发 DELETE/DELETE 同 revision：一个 200 一个 409', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac01c-'));
   try {
-    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: path.join(dir, 'saves') });
     const { gid } = await makeGame(api, dir);
     await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 0, seats: { 4: { leaning: 'lean_wolf' } } });
     const [d1, d2] = await Promise.all([
@@ -113,7 +113,7 @@ test('AC-01c 并发 DELETE/DELETE 同 revision：一个 200 一个 409', async (
 test('AC-01d 队列内写失败不污染后续事务：tmp 不残留、下一个写入成功', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ac01d-'));
   try {
-    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: dir });
+    const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: path.join(dir, 'saves') });
     const { gid } = await makeGame(api, dir);
     await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 0, seats: { 1: { leaning: 'neutral' } } });
     // 故障注入：让队列事务内的 rename 失败一次
@@ -123,8 +123,9 @@ test('AC-01d 队列内写失败不污染后续事务：tmp 不残留、下一个
       if (String(from).includes('.tmp-') && t.includes('/profiles/')) throw Object.assign(new Error('注入 rename 失败'), { code: 'EACCES' });
       return realRename(from, to);
     };
-    const failed = await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 1, seats: { 2: { leaning: 'lean_wolf' } } });
-    fs.promises.rename = realRename;
+    let failed;
+    try { failed = await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 1, seats: { 2: { leaning: 'lean_wolf' } } }); }
+    finally { fs.promises.rename = realRename; }
     assert.strictEqual(failed.status, 500, '队列内写失败应 500');
     // 后续事务照常工作
     const ok = await call(api, 'PUT', `/api/games/${gid}/annotations`, { token: 'pt', expectedRevision: 1, seats: { 3: { leaning: 'lean_good', note: '故障后写入' } } });
