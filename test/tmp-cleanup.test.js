@@ -33,7 +33,7 @@ function makeApi(saves) {
   return new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: saves });
 }
 
-test('FIX-12：启动清理只删陈旧 tmp（三种历史命名），不动新鲜 tmp 与正常存档', async () => {
+test('FIX-12：启动清理只删陈旧 tmp（四种真实命名族），不动新鲜 tmp、正常存档与用户文件', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-tmpclean-'));
   const saves = path.join(dataDir, 'saves');
   fs.mkdirSync(saves, { recursive: true });
@@ -43,8 +43,10 @@ test('FIX-12：启动清理只删陈旧 tmp（三种历史命名），不动新�
     const real = path.join(saves, 'g-real.json');
     fs.writeFileSync(real, JSON.stringify({ schemaVersion: 2, game: { id: 'g-real', players: [] } }));
     backdate(real, 6 * HOUR);
-    // 陈旧 tmp：saveGame 后缀式 / 导入恢复前缀式 / 旧迁移遗留后缀式，三种命名都要被认出来
-    const stale = ['g-old.json.tmp', '.tmp-g-old.json-4242-1', 'legacy.migtmp'];
+    // 陈旧 tmp：saveGame 后缀式 / 导入恢复前缀式 / 旧迁移遗留后缀式 / 历史中缀式，四种命名都要被认出来。
+    // ⚠ B 族（`x.json.tmp`）是**已记录的取舍**：它与"恰好叫 x.json.tmp 的用户文件"同名同形、无法区分，
+    //   故一律按临时文件清理（判据注释里写明；别在受扫目录放以 .tmp 结尾的正式数据文件）。
+    const stale = ['g-old.json.tmp', '.tmp-g-old.json-4242-1', 'legacy.migtmp', 'g-old2.json.tmp-4242-3'];
     for (const n of stale) {
       fs.writeFileSync(path.join(saves, n), '{"half":');
       backdate(path.join(saves, n), HOUR); // 1 小时前 > STALE_TMP_MS(10min)
@@ -52,6 +54,13 @@ test('FIX-12：启动清理只删陈旧 tmp（三种历史命名），不动新�
     // 新鲜 tmp：可能是另一个进程**正在写**的文件，一概不动
     const fresh = ['g-live.json.tmp', '.tmp-g-live.json-999-2'];
     for (const n of fresh) fs.writeFileSync(path.join(saves, n), '{"half":');
+    // 用户文件哨兵：含 `.tmp-` 子串但**不是** `<目标>.tmp-<pid>-<时间戳>` 形态 ⇒ 必须保留。
+    // 这族曾被 `includes('.tmp-')` 的过宽判据命中过：启动时静默删用户文件，危害远大于漏清几个残渣。
+    const userFiles = ['report.tmp-final.txt', 'backup.tmp-2024.old', 'notes.tmp-archive'];
+    for (const n of userFiles) {
+      fs.writeFileSync(path.join(saves, n), '用户自己的文件');
+      backdate(path.join(saves, n), 6 * HOUR);
+    }
 
     api = makeApi(saves); // 构造函数内必须真的执行一次清理
 
@@ -60,6 +69,10 @@ test('FIX-12：启动清理只删陈旧 tmp（三种历史命名），不动新�
     }
     for (const n of fresh) {
       assert.strictEqual(fs.existsSync(path.join(saves, n)), true, `新鲜 tmp 不得删除（可能别的进程正在写）：${n}`);
+    }
+    for (const n of userFiles) {
+      assert.strictEqual(fs.existsSync(path.join(saves, n)), true, `含 .tmp- 子串但不是 <目标>.tmp-<pid>-<ts> 形态的用户文件必须保留：${n}`);
+      assert.strictEqual(fs.readFileSync(path.join(saves, n), 'utf8'), '用户自己的文件', `${n} 内容必须原样`);
     }
     assert.strictEqual(fs.existsSync(real), true, '正常存档不得被清理');
     assert.strictEqual(
