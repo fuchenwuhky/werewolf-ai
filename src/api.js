@@ -182,9 +182,35 @@ class Api {
     return !!c.keyBinding && c.keyBinding === keyBindingOf(c);
   }
 
+  /**
+   * 归一化 HTTP 状态码（验收 P2）。
+   *
+   * 业务语义错误（ValidationError 400 / NotFoundError 404 / ConflictError 409、readBody 的
+   * 400/413/415）的 `.code` 是数字，必须原样透传；而 Node 的 fs/系统错误 `.code` 是**字符串**
+   * （'EPERM' / 'EBUSY' / 'ENOENT' / 'ENOTEMPTY'…），直接喂给 `res.writeHead()` 会让响应状态
+   * 变成字符串——并发用例里客户端读到 `status === 'EPERM'`，排查成本极高。
+   *
+   * 规则（分两种情况，缺一不可）：
+   *  · 没有码（undefined/null/''/0 等 falsy）→ 沿用调用点自己的语义默认 fallback：
+   *    原来写 `e.code || 400` 的路径仍然 400，写 `e.code || 500` 的仍然 500，行为零漂移；
+   *  · **有码但不是 100–599 的整数** → 一律 500。这不是"客户端请求有问题"，而是服务端拿到了
+   *    一个根本不是状态码的东西（fs 的 'EPERM'、越界的 600…），绝不能回落成 400 去指责客户端。
+   *    纯数字字符串（'404'）按整数处理。
+   *
+   * 入参可以是错误对象（取 `.code`），也可以是裸状态码，便于 json() 做最后一道兜底。
+   */
+  statusOf(e, fallback = 500) {
+    const raw = e && typeof e === 'object' ? e.code : e;
+    if (!raw) return fallback; // 无码：按调用点的语义默认（与修复前一致）
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 100 && n <= 599 ? n : 500;
+  }
+
   json(res, code, data) {
     const body = JSON.stringify(data);
-    res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+    // 唯一写 JSON 响应的出口：再兜一次底，任何调用点（含未来新增的）都不可能把字符串码
+    // 写成 HTTP 状态（规则见 statusOf）。
+    res.writeHead(this.statusOf(code), { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(body);
   }
 
@@ -742,7 +768,7 @@ class Api {
           const pkg = transfer.validateImportPackage(body.package);
           return this.json(res, 200, { ok: true, preview: transfer.previewImport(pkg) });
         } catch (e) {
-          return this.json(res, e.code || 400, { error: e.message });
+          return this.json(res, this.statusOf(e, 400), { error: e.message });
         }
       }
       if (pathname === '/api/import/recoveries' && method === 'GET') {
@@ -869,9 +895,9 @@ class Api {
       return this.json(res, 404, { error: 'not found' });
     } catch (err) {
       this.logger.error('api', `接口异常 ${method} ${pathname}: ${err.message}`, { stack: err.stack });
-      // 整改 §1.4：携带语义状态码的错误（413/415/400）按码返回，其余 500
-      const code = err && err.code ? Number(err.code) : 500;
-      return this.json(res, Number.isInteger(code) && code >= 400 && code < 500 ? code : 500, { error: String(err.message || err) });
+      // 整改 §1.4：携带语义状态码的错误（413/415/400）按码返回，其余 500。
+      // statusOf 负责把 fs 的字符串码（'EPERM'…）归一成 500，绝不写进 res.writeHead。
+      return this.json(res, this.statusOf(err), { error: String(err.message || err) });
     }
   }
 
@@ -1609,8 +1635,9 @@ class Api {
       const prof = await this.profiles.update(pid, body);
       return this.json(res, 200, { profile: prof });
     } catch (e) {
-      const code = e.code || 400;
-      return this.json(res, code, { error: e.message, code: e.code });
+      // 状态码经 statusOf 归一：ValidationError 400 / NotFoundError 404 / ConflictError 409
+      // 原样透传，fs 的字符串码（'EPERM'…）回落 500
+      return this.json(res, this.statusOf(e, 400), { error: e.message, code: e.code });
     }
   }
 
@@ -1629,12 +1656,15 @@ class Api {
       const info = await this.profiles.trash(pid, { activeGames: active });
       return this.json(res, 200, { ok: true, archiveId: info.archiveId });
     } catch (e) {
-      return this.json(res, e.code || 400, { error: e.message });
+      return this.json(res, this.statusOf(e, 400), { error: e.message });
     }
   }
 
   /**
-   * 从回收区恢复档案（验收 P2）：把 trash/<archiveId>/ 里的档案目录搬回原位并补索引。
+   * 从回收区恢复档案（验收 P2）：把 trash/<archiveId>/ 里的档案目录搬回原位、补索引，并
+   * **顺带取消归档**——「恢复即可用」：store.restoreFromTrash 只搬目录 + 补索引，档案的
+   * archivedAt 原样保留（进回收区的前提就是归档态），于是恢复出来的档案 stats 仍 404、
+   * 也开不了局，要能用还得再 PATCH {restore:true}。这里一步做完。
    *  · archiveId 白名单与 store.restoreFromTrash 完全一致（/^[0-9A-Za-z-]+$/），路由层绝不放宽：
    *    路径穿越串（../etc、a/b）在到达文件系统之前就被拒成 400；
    *  · 写操作：必须在 store 的串行化入口 _serialize 内执行，与 PATCH/DELETE 的
@@ -1647,7 +1677,17 @@ class Api {
       if (!/^[0-9A-Za-z-]+$/.test(raw)) {
         return this.json(res, 400, { error: '非法 archiveId' });
       }
-      const prof = await this.profiles._serialize(() => this.profiles.restoreFromTrash(raw));
+      // 搬目录 + 取消归档必须在**同一个**串行化周期内完成，否则恢复出的中间态（归档态）会被
+      // 并发的 PATCH 观察到。
+      // ⚠ 这里调 store._updateInner（update 的无锁内核），不能调 store.update()：update() 会再次
+      //   进 _serialize，而互斥量此刻正被本周期占用 → 自等待死锁（store 不改，故走内核入口）。
+      const restored = await this.profiles._serialize(async () => {
+        const prof = this.profiles.restoreFromTrash(raw);
+        if (!prof || !prof.archivedAt) return { prof, unarchived: false }; // 已可用（如回收区记录被外部改过）就不动它
+        const live = await this.profiles._updateInner(prof.id, { restore: true });
+        return { prof: live, unarchived: true };
+      });
+      const prof = restored.prof;
       if (!prof) return this.json(res, 404, { error: '回收区数据已搬回，但档案文件缺失，无法恢复' });
       // 与 GET /api/profiles 的摘要字段保持一致（不把内部存储细节泄漏成新契约）
       const summary = {
@@ -1656,9 +1696,10 @@ class Api {
         createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
         archivedAt: prof.archivedAt || null, lastUsedAt: prof.lastUsedAt || prof.updatedAt,
       };
-      return this.json(res, 200, { ok: true, profile: summary });
+      // unarchived 只做加法：现有 { ok, profile } 契约不动
+      return this.json(res, 200, { ok: true, profile: summary, unarchived: restored.unarchived });
     } catch (e) {
-      return this.json(res, e.code || 400, { error: e.message });
+      return this.json(res, this.statusOf(e, 400), { error: e.message });
     }
   }
 
@@ -1666,7 +1707,7 @@ class Api {
     try {
       const checked = transfer.validateImportPackage(pkg);
       return Promise.resolve({ status: 200, body: { ok: true, preview: transfer.previewImport(checked) } });
-    } catch (e) { return Promise.resolve({ status: e.code || 400, body: { error: e.message } }); }
+    } catch (e) { return Promise.resolve({ status: this.statusOf(e, 400), body: { error: e.message } }); }
   }
 
   /** 重试清理历史导入残留（复审 P2-3；FIN-02 加固）：读取 saveDir 下的 .import-recovery-*.json，
@@ -1800,8 +1841,7 @@ class Api {
           }
         }
         // 只有数字语义码（4xx/5xx）才作为 HTTP 状态；真实 fs 错误的 code 是 EPERM 等字符串 → 500
-        const n = Number(writeErr.code);
-        const status = Number.isInteger(n) && n >= 400 && n < 600 ? n : 500;
+        const status = this.statusOf(writeErr, 500);
         if (cleanupComplete) {
           return { status, body: { error: `导入失败，已回滚本次写入：${writeErr.message}`, rolledBack: true, cleanupComplete: true } };
         }
@@ -1819,7 +1859,7 @@ class Api {
         if (recoveryPersisted) body.recoveryFile = recoveryFile;
         return { status, body };
       }
-    }).catch((e) => ({ status: e.code || 400, body: { error: e.message } }));
+    }).catch((e) => ({ status: this.statusOf(e, 400), body: { error: e.message } }));
   }
 
   /** 读取 JSON 文件（供 profileStats/profileGames 使用），失败返回 fallback */
@@ -1874,7 +1914,7 @@ class Api {
           terminated: rows.filter((r) => r.bucket === 'terminated').length,
         },
       });
-    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
+    } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
   }
 
   /** 档案对局列表（仅本档案，字段白名单） */
@@ -1895,7 +1935,7 @@ class Api {
           savedAt: doc.savedAt || fs.statSync(path.join(this.saveDir, f)).mtime.toISOString() });
       }
       return this.json(res, 200, { rows: rows.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt))) });
-    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
+    } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
   }
 
   /**
@@ -1925,7 +1965,7 @@ class Api {
         'Cache-Control': 'no-store',
       });
       return void res.end(body);
-    } catch (e) { return this.json(res, e.code || 500, { error: e.message }); }
+    } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
   }
 
   // ---------- 私人标注（NOTE-02）----------
@@ -1956,8 +1996,7 @@ class Api {
     } catch (e) {
       if (e.code === 409 || e.name === 'AnnotationConflict') return this.json(res, 409, { error: e.message, code: 409 });
       // 数值语义码（4xx）透传；真实 IO 故障（EACCES/ENOSPC 等字符串码）按服务端错误 500
-      const n = Number(e.code);
-      return this.json(res, Number.isInteger(n) && n >= 400 && n < 500 ? n : 500, { error: e.message });
+      return this.json(res, this.statusOf(e), { error: e.message });
     }
   }
 
@@ -1977,8 +2016,7 @@ class Api {
       return this.json(res, 200, { annotations: doc, revision: doc.revision });
     } catch (e) {
       if (e.name === 'AnnotationConflict' || e.code === 409) return this.json(res, 409, { error: e.message, code: 409 });
-      const code = Number(e.code);
-      return this.json(res, Number.isInteger(code) && code >= 400 && code < 500 ? code : 500, { error: e.message });
+      return this.json(res, this.statusOf(e), { error: e.message });
     }
   }
 

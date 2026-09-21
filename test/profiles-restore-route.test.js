@@ -6,6 +6,8 @@
  *   GET  /api/profiles/trash
  *   POST /api/profiles/trash/<archiveId>/restore
  * 含"路由顺序"回归：/api/profiles/trash 绝不能被任何 /api/profiles/<id> 兜底吃掉（trash 不是 UUID）。
+ * 另含「恢复即可用」回归（验收 P2）：POST restore 必须在同一次串行化周期内顺带取消归档，
+ * 恢复出来的档案 stats / 开局直接可用，不再需要补一次 PATCH {restore:true}。
  */
 'use strict';
 const test = require('node:test');
@@ -112,9 +114,11 @@ test('回收区路由：删除 → GET trash 可见且 restorable → POST resto
     assert.ok(rs.body.profile, '恢复必须返回档案摘要');
     assert.strictEqual(rs.body.profile.id, pid, '恢复后 id 必须不变');
     assert.strictEqual(rs.body.profile.nickname, '砚回收', '恢复后昵称必须不变');
-    // 如实断言 store 的语义：restoreFromTrash 只把目录搬回原位并补索引，档案的归档状态原样保留
-    // （删除前它就处于归档态）。要变成可用档案需再走一次 PATCH {restore:true} —— 下面验证这条路通。
-    assert.ok(rs.body.profile.archivedAt, '恢复自动画态必须保留（删除前就是归档态）');
+    // 「恢复即可用」（验收 P2）：store.restoreFromTrash 只搬目录 + 补索引，档案的归档状态原样保留
+    // （删除前它就处于归档态）。所以路由必须在同一次串行化周期内顺带取消归档 —— 恢复出来的
+    // 档案必须**已经是可用态**，不需要再补一次 PATCH {restore:true}。
+    assert.strictEqual(rs.body.profile.archivedAt, null, '恢复后必须已取消归档（archivedAt 清空）');
+    assert.strictEqual(rs.body.unarchived, true, '响应应标明本次恢复顺带取消了归档');
 
     // 回到档案列表
     const backList = await call(api, 'GET', '/api/profiles');
@@ -122,13 +126,27 @@ test('回收区路由：删除 → GET trash 可见且 restorable → POST resto
     const back = backList.body.profiles.find((p) => p.id === pid);
     assert.ok(back, '恢复后档案必须回到 GET /api/profiles');
     assert.strictEqual(back.nickname, '砚回收');
+    assert.strictEqual(back.archivedAt, null, '恢复后索引里的归档标记必须已清空');
 
-    // 恢复出来的档案必须完全可用：取消归档 → stats 可达
-    const unarchive = await call(api, 'PATCH', `/api/profiles/${pid}`, { restore: true });
-    assert.strictEqual(unarchive.status, 200, `恢复后取消归档应成功：${unarchive.raw}`);
-    assert.strictEqual(unarchive.body.profile.archivedAt, null);
+    // 恢复出来的档案必须完全可用：stats 直接可达（不再需要额外 PATCH {restore:true}）
     const st = await call(api, 'GET', `/api/profiles/${pid}/stats`);
-    assert.strictEqual(st.status, 200, `恢复出来的档案 stats 必须可达（实际 ${st.status}）`);
+    assert.strictEqual(st.status, 200, `恢复出来的档案 stats 必须直接可达（实际 ${st.status}）`);
+    assert.strictEqual(typeof st.body.total, 'number', 'stats 必须是结构化战绩体');
+
+    // 原步骤的强度不降级：此时再 PATCH {restore:true} 必须幂等成功（已可用态不会被改回归档）
+    const redo = await call(api, 'PATCH', `/api/profiles/${pid}`, { restore: true });
+    assert.strictEqual(redo.status, 200, `已恢复档案重复取消归档必须幂等成功：${redo.raw}`);
+    assert.strictEqual(redo.body.profile.archivedAt, null);
+    const st2 = await call(api, 'GET', `/api/profiles/${pid}/stats`);
+    assert.strictEqual(st2.status, 200, `幂等 PATCH 后 stats 仍须可达（实际 ${st2.status}）`);
+
+    // 「可开局」：归档档案会被 createGame 以 400「档案不存在或已归档」挡下，恢复后必须能开局。
+    // 只建 Mock 局（不 start），不开真实 LLM 出口。
+    const players = Array.from({ length: 12 }, (_, i) => ({ seat: i + 1, name: `P${i + 1}`, isHuman: i === 0 }));
+    const game = await call(api, 'POST', '/api/games', { boardId: 'std12', players, profileId: pid, mock: true });
+    assert.strictEqual(game.status, 200, `恢复出来的档案必须能开局（实际 ${game.status}：${game.raw}）`);
+    assert.ok(game.body.gameId, '开局必须返回 gameId');
+    assert.ok(game.body.playerToken, '开局必须返回玩家令牌');
 
     // 磁盘：目录回到原位且 profile.json 完整
     const restoredFile = path.join(api.profiles.root, pid, 'profile.json');
