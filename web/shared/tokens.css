@@ -1,0 +1,62 @@
+/* ============================================================
+   tokens.css — 计划书 §3「月夜集会」共享语义令牌层（第一步：六色语义）
+   ------------------------------------------------------------
+   本文件是**两端唯一的语义色来源**：桌面 web/index.html 与手机 web/m/index.html
+   都以 <link> 引入它（手机端 m.css 又 @import 了 style.css，链路是
+   tokens.css → style.css → m.css，因此每份令牌在两端都只定义一次）。
+   既有变量名（--bg/--card/--text/--gold/--moon/--accent）仍在 style.css 的 :root 里定义，
+   只是改为引用这里的语义值（下一步落地）；字号/触区/状态令牌也在后续步骤补。
+
+   纪律（§3 末条「不靠堆选择器和 !important 打补丁」）：
+     · 取值必须与计划书 §3 行 62-69 的表格**逐字一致**；
+     · 页面与样式表里不许再写同值字面量 —— 由 test/css.test.js 的用例钉住。
+   ============================================================ */
+:root {
+  /* ---- §3 行 62-69：六色语义（值逐字取自计划书表格） ---- */
+  --sem-bg: #06090f;       /* 页面背景 */
+  --sem-panel: #0f1626;    /* 内容面板 */
+  --sem-ink: #ebe4d7;      /* 正文骨白 */
+  --sem-gold: #d8b25f;     /* 主操作古金 */
+  --sem-moon: #dbe6ff;     /* 焦点/月光 */
+  --sem-danger: #b3323f;   /* 危险/狼性 */
+
+  /* 上面六色的 RGB 三元组：给 rgba() 当第一参数用（写成 `rgba(` + var(--sem-gold-rgb) + `, .12)`）。
+     var() 在计算值阶段做文本替换，所以 `rgba(216, 178, 95, .12)` 换成本形式后
+     **计算值完全相同** —— 半透明层因此也能走同一套令牌，
+     不再散着几十处硬编码金色（FIX-22 的"残留硬编码金色"正是从这里长出来的）。 */
+  --sem-bg-rgb: 6, 9, 15;
+  --sem-panel-rgb: 15, 22, 38;
+  --sem-ink-rgb: 235, 228, 215;
+  --sem-gold-rgb: 216, 178, 95;
+  --sem-moon-rgb: 219, 230, 255;
+  --sem-danger-rgb: 179, 50, 63;
+  /* 危险色的半透明层统一走 rgb(179, 50, 63)（旧代码里 9 处近色 #B32E3E 已并入）。 */
+
+  /* ---- §3 行 74：字号下限（两端共用同一组下限） ---- */
+  --fs-body-desktop: 14px;  /* 桌面正文默认 */
+  --fs-body-mobile: 16px;   /* 手机正文默认（m.css 的 #m-app 引它） */
+  --fs-aux-min: 12px;       /* 辅助文字下限 */
+  --fs-input-mobile: 16px;  /* 手机输入框下限（防 iOS 聚焦自动放大） */
+
+  /* ---- §3 行 75-76：触区下限 ----
+     「缩小字号或启用紧凑布局不得缩小最低触区」：html[data-pref-font]/[data-pref-layout]
+     只改 --fs-* / --sp-*（见 style.css 的偏好段），碰不到下面这四个值。 */
+  --h-ctl-min: 40px;        /* 桌面普通按钮/控件 */
+  --h-main-min: 44px;       /* 桌面主要按钮 */
+  --h-touch-min: 48px;      /* 手机常用触区 48×48 */
+  --h-touch-main: 52px;     /* 手机主要确认按钮 */
+
+  /* ---- §3 行 77：状态层（正常 / 悬停 / 键盘焦点 / 选中 / 禁用 / 加载 / 错误） ----
+     悬停 .10、选中 .14 就是原先散写的 rgba(216, 178, 95, .1) / .14，**计算值等值**；
+     键盘焦点沿用两端既有的 :focus-visible（金描边）与 --ring/--ring-soft；
+     危险操作不只靠红色表达：.danger 永远配可见文案（判据见 test/css.test.js）。 */
+  --state-hover: rgba(var(--sem-gold-rgb), .10);
+  --state-sel: rgba(var(--sem-gold-rgb), .14);
+  --state-loading-opacity: .72;   /* .m-busy / 提交中的按钮 */
+  --state-disabled-opacity: .38;  /* .btn.primary:disabled（其余控件各自档位保留原值） */
+  --state-error-text: #ff8f8f;    /* 错误提示文字（style.css 的 --err 引它） */
+
+  /* ---- §3 行 78：图标（统一 SVG） ----
+     下拉箭头原本在 style.css 与 m.css 各写了一份**完全相同**的 data-URI，这里收成一处。 */
+  --ico-chevron-gold: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23d8b25f' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}

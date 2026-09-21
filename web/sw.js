@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v14-note'; // 补齐预缓存清单（session-model）+ 离线兜底匹配（前代 ww-v13-note 只有网络优先资源策略）
+const VERSION = 'ww-v15-tokens'; // 预缓存清单加入共享语义令牌层 /shared/tokens.css（前代 ww-v14-note 补齐的是 session-model）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -30,6 +30,7 @@ const SHELL = [
   '/',
   '/index.html',
   '/style.css',
+  '/shared/tokens.css',
   '/i18n.js',
   '/card-frame.js',
   '/codex.js',

@@ -22,7 +22,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const CSS_FILES = ['web/style.css', 'web/m/m.css'];
+const CSS_FILES = ['web/shared/tokens.css', 'web/style.css', 'web/m/m.css'];
 const TEXT_EXT = new Set(['.js', '.json', '.css', '.html', '.md', '.webmanifest']);
 const SKIP_DIR = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist', 'coverage']);
 
@@ -163,4 +163,371 @@ test('样式表：background 简写不得顶掉 background-image（复选框填�
     }
   }
   assert.deepStrictEqual(problems, [], `简写/长写混用：\n${problems.join('\n')}`);
+});
+
+/* ============================================================
+   §3 视觉系统的防复发判据（M1 / FIX-22 收口）
+   ------------------------------------------------------------
+   上面三条守卫管的是"样式静默失效"；这一节管的是**计划书 §3 的硬要求不被悄悄改回去**：
+     · §3 行 62-69 六色语义：只能在 web/shared/tokens.css 定义一次，
+       各页面/样式表不得再写同值字面量（FIX-22 的"残留硬编码金色"就是这类字面量长出来的）；
+     · §3 行 74-76：字号下限（桌面正文 14 / 手机正文 16 / 辅助文字 ≥12 / 手机输入 ≥16）
+       与触区下限（桌面普通 ≥40、桌面主要 ≥44、手机常用 ≥48、手机确认 52）
+       —— 判据取**解析后的计算值**（var() 链展开），所以"把令牌调低"和"就地写小值"都会红；
+     · §3 行 78：下拉箭头这类共用图标只保留一份 data-URI；
+     · §3 行 77：危险操作不能只靠红色表达（两端"结束本局"类条目必须带可见文案）。
+   另有两条"接线"判据：任何引用了样式表的页面都必须能到达 tokens.css（直链或 @import 链）；
+   离线页的内联令牌镜像必须与正本逐项一致（test/pwa.test.js 不允许它外链，镜像只能内联）。
+   ============================================================ */
+const TOKENS_CSS = 'web/shared/tokens.css';
+
+/** §3 行 62-69 六色语义（规范化比较：十六进制大小写等价，见计划书写的是大写、样式表写小写） */
+const SEM_COLORS = [
+  ['--sem-bg', '#06090f', '页面背景'],
+  ['--sem-panel', '#0f1626', '内容面板'],
+  ['--sem-ink', '#ebe4d7', '正文骨白'],
+  ['--sem-gold', '#d8b25f', '主操作古金'],
+  ['--sem-moon', '#dbe6ff', '焦点/月光'],
+  ['--sem-danger', '#b3323f', '危险/狼性'],
+];
+/** §3 行 74-76 下限令牌 */
+const FLOOR_TOKENS = [
+  ['--fs-body-desktop', '14px'], ['--fs-body-mobile', '16px'],
+  ['--fs-aux-min', '12px'], ['--fs-input-mobile', '16px'],
+  ['--h-ctl-min', '40px'], ['--h-main-min', '44px'],
+  ['--h-touch-min', '48px'], ['--h-touch-main', '52px'],
+];
+/** 触区下限接线点：选择器 → { 文件, 令牌, 下限 }（判据取解析后的计算值） */
+const TOUCH_WIRING = [
+  ['web/style.css', '.btn', '--h-ctl-min', 40],
+  ['web/style.css', '.btn.primary', '--h-main-min', 44],
+  ['web/m/m.css', '#m-app .btn', '--h-touch-min', 48],
+  ['web/m/m.css', '#m-app .btn.primary, #m-app .btn.big', '--h-touch-main', 52],
+  ['web/m/m.css', '.m-keys .key', '--h-touch-min', 48],
+  ['web/m/m.css', '.m-keys .key[data-confirm]', '--h-touch-main', 52],
+];
+
+/** 取某个选择器的规则体（行首 `sel {` 起、按大括号配对收；允许缩进，@media 里的规则也能取到） */
+function ruleBody(css, sel) {
+  const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hit = new RegExp('(?:^|\\n)[ \\t]*' + esc + '\\s*\\{').exec(css);
+  if (!hit) return null;
+  const start = css.indexOf('{', hit.index);
+  let depth = 0;
+  for (let j = start; j < css.length; j++) {
+    if (css[j] === '{') depth++;
+    else if (css[j] === '}') {
+      depth--;
+      if (depth === 0) return css.slice(start + 1, j);
+    }
+  }
+  return null;
+}
+
+/** 默认作用域（tokens.css :root / style.css :root / m.css #m-app）里的自定义属性表 */
+function defaultTokenTable() {
+  const table = new Map();
+  const scopes = [[TOKENS_CSS, ':root'], ['web/style.css', ':root'], ['web/m/m.css', '#m-app']];
+  for (const [f, sel] of scopes) {
+    const body = ruleBody(read(f), sel);
+    if (!body) continue;
+    for (const m of body.matchAll(/(--[\w-]+)\s*:\s*([^;}]+)/g)) table.set(m[1], m[2].trim());
+  }
+  return table;
+}
+
+/** 展开 var() 链（含 `var(--a, fallback)` 兜底），拿到可比较的计算值 */
+function resolveValue(value, table, depth = 0) {
+  if (depth > 12) return value;
+  const m = /var\(\s*(--[\w-]+)\s*(?:,([\s\S]*))?\)/.exec(value);
+  if (!m) return value;
+  const fallback = m[2] === undefined ? null : m[2].trim();
+  const repl = table.has(m[1])
+    ? resolveValue(table.get(m[1]), table, depth + 1)
+    : (fallback === null ? 'undefined' : resolveValue(fallback, table, depth + 1));
+  return resolveValue(value.slice(0, m.index) + repl + value.slice(m.index + m[0].length), table, depth + 1);
+}
+
+/** 取长度值里的 px 数字（拿不到就返回 null） */
+function pxOf(value) {
+  const m = /(-?\d+(?:\.\d+)?)px/.exec(String(value));
+  return m ? parseFloat(m[1]) : null;
+}
+
+/** 规范化：hex 统一小写、RGB 三元组去掉多余空格 */
+const normColor = (v) => String(v).trim().toLowerCase().replace(/\s*,\s*/g, ',');
+
+/** 去掉注释但保留换行，行号因此不变（判据只看"真正会被浏览器读到的字节"） */
+const stripComments = (css) => css.replace(/\/\*[\s\S]*?\*\//g, (t) => t.replace(/[^\n]/g, ' '));
+
+/** 列出 web/ 下指定扩展名的文件（仓库相对 POSIX 路径；跳过 node_modules/打包产物等） */
+function walkWeb(exts) {
+  const out = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (SKIP_DIR.has(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (exts.some((x) => e.name.endsWith(x))) out.push(path.relative(ROOT, p).split(path.sep).join('/'));
+    }
+  };
+  walk(path.join(ROOT, 'web'));
+  return out.sort();
+}
+
+const parseHex = (hex) => [
+  parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16),
+];
+
+/** 扫一个样式表文本里所有"裸 #rrggbb"字面量（注释与 url 里的 %23 转义形式都不算） */
+function hexLiterals(cssRaw) {
+  const out = [];
+  const css = stripComments(cssRaw);
+  css.split('\n').forEach((text, i) => {
+    for (const m of text.matchAll(/#[0-9a-fA-F]{6}\b/g)) out.push({ line: i + 1, hex: m[0].toLowerCase(), text: text.trim() });
+  });
+  return out;
+}
+
+test('§3 行62-69：六色语义只在共享令牌层定义一次，样式表里不得再写同值字面量（FIX-22 防复发）', () => {
+  const tokens = read(TOKENS_CSS);
+  const all = CSS_FILES.map(read).join('\n');
+  const problems = [];
+  for (const [name, value, label] of SEM_COLORS) {
+    // ① 正本取值与计划书一致（规范化后比较：hex 大小写等价）
+    const decl = tokens.match(new RegExp(name + '\\s*:\\s*([^;}]+)'));
+    if (!decl) problems.push(`${TOKENS_CSS} 缺少 ${name}（${label}）`);
+    else if (normColor(decl[1]) !== normColor(value)) problems.push(`${name} = ${decl[1].trim()}，§3 要求 ${value}`);
+    // ② 三个样式表里只允许出现一次定义
+    const defs = [...all.matchAll(new RegExp('(?:^|[;{\\s])' + name + '\\s*:', 'gm'))];
+    if (defs.length !== 1) problems.push(`${name} 在三份样式表里被定义 ${defs.length} 次（应只 1 次）`);
+  }
+  // ③ style.css / m.css 不得再出现六色的裸 hex
+  for (const f of ['web/style.css', 'web/m/m.css']) {
+    for (const { line, hex, text } of hexLiterals(read(f))) {
+      if (SEM_COLORS.some(([, v]) => v === hex)) problems.push(`${f}:${line} 仍写死 §3 语义色 ${hex}（应用令牌）：「${text.slice(0, 60)}」`);
+    }
+  }
+  // ④ tokens.css 之外的词法约束：令牌层里的裸 hex 必须是"某个自定义属性的定义"
+  for (const { line, hex, text } of hexLiterals(tokens)) {
+    if (!/^\s*--[\w-]+\s*:/.test(text)) problems.push(`${TOKENS_CSS}:${line} 的裸 hex ${hex} 不在任何令牌定义行上`);
+  }
+  // ⑤ 六色的 RGB 三元组令牌必须与对应主令牌同色（否则 rgba(var(--sem-x-rgb),1) ≠ var(--sem-x)）
+  for (const [name, value] of SEM_COLORS) {
+    const rgbaName = name + '-rgb';
+    const decl = tokens.match(new RegExp(rgbaName + '\\s*:\\s*([^;}]+)'));
+    if (!decl) { problems.push(`${TOKENS_CSS} 缺少 ${rgbaName}（${name} 的半透明形式要用）`); continue; }
+    if (normColor(decl[1]) !== parseHex(value).join(',')) {
+      problems.push(`${rgbaName} = ${decl[1].trim()} ≠ rgb(${value}) = ${parseHex(value).join(',')}`);
+    }
+  }
+  // ⑥ 半透明层必须走 RGB 三元组令牌，不得再散写 rgba(216,178,95,…) 这类原色。
+  //    注释里的示例写法不算（注释不参与渲染，且这里要能自解释）。
+  const rgbTriples = SEM_COLORS.map(([, v]) => parseHex(v).join(','));
+  for (const f of CSS_FILES) {
+    const css = stripComments(read(f));
+    css.split('\n').forEach((text, i) => {
+      for (const m of text.matchAll(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*[,)]/g)) {
+        const key = [m[1], m[2], m[3]].join(',');
+        if (rgbTriples.includes(key)) {
+          // 允许的唯一形态：rgba(var(--sem-*-rgb), …) —— 上面那条正则正是用来抓"没走令牌"的
+          problems.push(`${f}:${i + 1} 半透明层仍写死 ${'rgba(' + m[0].slice(5)}（应写成 rgba(var(--sem-x-rgb), …)）`);
+        }
+      }
+    });
+  }
+  assert.deepStrictEqual(problems, [], `§3 语义令牌问题：\n${problems.join('\n')}`);
+});
+
+test('§3 行74-76：字号/触区下限（判据取解析后的计算值，把值调低必须红）', () => {
+  const tokens = read(TOKENS_CSS);
+  const table = defaultTokenTable();
+  const problems = [];
+  // ① 下限令牌本身的值
+  for (const [name, value] of FLOOR_TOKENS) {
+    const decl = tokens.match(new RegExp(name + '\\s*:\\s*([^;}]+)'));
+    if (!decl) problems.push(`${TOKENS_CSS} 缺少下限令牌 ${name}`);
+    else if (decl[1].trim() !== value) problems.push(`${name} = ${decl[1].trim()}，下限要求 ${value}`);
+  }
+  // ② 接线的计算值（令牌被调低或就地写小值都会在这里红）
+  for (const [f, sel, token, floor] of TOUCH_WIRING) {
+    const body = ruleBody(read(f), sel);
+    if (!body) { problems.push(`${f} 找不到规则 ${sel}`); continue; }
+    const decl = body.match(/min-height\s*:\s*([^;]+)/);
+    if (!decl) { problems.push(`${f} 的 ${sel} 没有 min-height`); continue; }
+    const resolved = resolveValue(decl[1].trim(), table);
+    const px = pxOf(resolved);
+    if (px === null) problems.push(`${f} 的 ${sel} min-height 解析不出 px：${decl[1].trim()} → ${resolved}`);
+    else if (px < floor) problems.push(`${f} 的 ${sel} min-height = ${px}px < ${floor}px（${token}）`);
+  }
+  // ③ 辅助文字令牌 ≥12，且任何 font-size / font 简写都不得低于 12px
+  for (const name of ['--fs-xs', '--fs-sm']) {
+    const px = pxOf(resolveValue(table.get(name) || '', table));
+    if (px === null || px < 12) problems.push(`${name} 解析为 ${table.get(name)}（<12px）`);
+  }
+  for (const f of ['web/style.css', 'web/m/m.css']) {
+    read(f).split('\n').forEach((text, i) => {
+      const sizes = [
+        ...[...text.matchAll(/font-size\s*:\s*([^;}]+)/g)].map((m) => m[1]),
+        ...[...text.matchAll(/(?:^|[;{\s])font\s*:\s*([^;}]+)/g)].map((m) => m[1]),
+      ];
+      for (const raw of sizes) {
+        const px = pxOf(resolveValue(raw.trim(), table));
+        if (px !== null && px < 12) problems.push(`${f}:${i + 1} 文字 ${px}px < 12px（§3 行74）：「${text.trim().slice(0, 70)}」`);
+      }
+    });
+  }
+  // ④ §3 行76：缩小字号 / 紧凑布局不得改小最低触区（偏好块里不许出现 --h*令牌）
+  const prefs = read('web/style.css');
+  for (const sel of ['html[data-pref-font="sm"]', 'html[data-pref-font="lg"]', 'html[data-pref-layout="compact"]']) {
+    const body = ruleBody(prefs, sel);
+    if (!body) { problems.push(`style.css 找不到偏好块 ${sel}`); continue; }
+    if (/--h[\w-]*\s*:/.test(body)) problems.push(`${sel} 改了触区令牌（§3 行76 禁止）`);
+  }
+  assert.deepStrictEqual(problems, [], `§3 下限问题：\n${problems.join('\n')}`);
+});
+
+test('§3 行78：下拉箭头这类共用图标只留一份 data-URI（收在共享令牌层）', () => {
+  const uri = /url\("data:image\/svg\+xml[^"]*M1 1\.5 6 6\.5l5-5[^"]*"\)/g;
+  const inTokens = (read(TOKENS_CSS).match(uri) || []).length;
+  assert.strictEqual(inTokens, 1, `${TOKENS_CSS} 应恰好持有 1 份金色下拉箭头 data-URI（实际 ${inTokens}）`);
+  for (const f of ['web/style.css', 'web/m/m.css']) {
+    const n = (read(f).match(uri) || []).length;
+    assert.strictEqual(n, 0, `${f} 仍内联了下拉箭头 data-URI（${n} 份），应改引 var(--ico-chevron-gold)`);
+    assert.match(read(f), /background-image:\s*var\(--ico-chevron-gold\)/, `${f} 没有引用 --ico-chevron-gold`);
+  }
+});
+
+test('每个引用了样式表的页面都必须能到达 tokens.css（直链或 @import 链）', () => {
+  const pages = walkWeb(['.html']);
+  assert.ok(pages.length >= 3, `扫到的页面太少（${pages.length}），解析可能失效`);
+  const missing = [];
+  for (const page of pages) {
+    const html = read(page);
+    const links = [...html.matchAll(/<link\b[^>]*\brel=["']stylesheet["'][^>]*>/g)]
+      .map((m) => (m[0].match(/\bhref=["']([^"']+)["']/) || [])[1])
+      .filter(Boolean);
+    if (!links.length) {
+      // 自足页面（离线页）：必须内联样式，且镜像由下一条用例比对
+      if (!/<style>/.test(html)) missing.push(`${page} 既没有样式表链接、也没有内联 <style>`);
+      continue;
+    }
+    const dir = path.posix.dirname(page);
+    const abs = (href) => path.posix.normalize(path.posix.join(dir, href.split('?')[0]));
+    const direct = links.map(abs).includes(TOKENS_CSS);
+    const reached = direct || links.some((href) => {
+      const seen = new Set();
+      const stack = [abs(href)];
+      while (stack.length) {
+        const cur = stack.pop();
+        if (seen.has(cur)) continue;
+        seen.add(cur);
+        if (cur === TOKENS_CSS) return true;
+        if (!fs.existsSync(path.join(ROOT, cur))) continue;
+        const css = read(cur);
+        for (const m of css.matchAll(/@import\s+(?:url\()?["']([^"')]+)["']/g)) {
+          stack.push(path.posix.normalize(path.posix.join(path.posix.dirname(cur), m[1])));
+        }
+      }
+      return false;
+    });
+    if (!reached) missing.push(`${page}（引 ${links.join('、')}）到达不了 ${TOKENS_CSS} —— 该页所有令牌都会失效`);
+  }
+  assert.deepStrictEqual(missing, [], `令牌层接线缺失：\n${missing.join('\n')}`);
+});
+
+test('离线页的令牌镜像必须与 web/shared/tokens.css 逐项一致（外链被禁，只能内联镜像）', () => {
+  const mirror = ruleBody(read('web/offline.html'), ':root');
+  assert.ok(mirror, 'offline.html 缺少内联 :root 镜像');
+  const tokens = read(TOKENS_CSS);
+  const problems = [];
+  const names = [...SEM_COLORS.map(([n]) => n)];
+  for (const m of tokens.matchAll(/(--sem-[\w-]+)\s*:\s*([^;}]+)/g)) if (!names.includes(m[1])) names.push(m[1]);
+  // 另外这四个是 style.css 的既有令牌，离线页必须与那边同值
+  const fromStyle = ['--muted', '--gold-bright', '--gold-dim', '--accent-dark'];
+  const styleRoot = ruleBody(read('web/style.css'), ':root');
+  for (const name of [...names, ...fromStyle]) {
+    const src = name.startsWith('--sem-') ? tokens : styleRoot;
+    const a = src.match(new RegExp(name + '\\s*:\\s*([^;}]+)'));
+    const b = mirror.match(new RegExp(name + '\\s*:\\s*([^;}]+)'));
+    if (!b) { problems.push(`离线页镜像缺少 ${name}`); continue; }
+    if (!a) { problems.push(`正本里找不到 ${name}`); continue; }
+    if (normColor(a[1]) !== normColor(b[1])) problems.push(`${name}: 镜像 ${b[1].trim()} ≠ 正本 ${a[1].trim()}`);
+  }
+  assert.deepStrictEqual(problems, [], `离线页令牌镜像过期：\n${problems.join('\n')}`);
+});
+
+test('§3 行77：危险操作不能只靠红色表达 —— 两端"结束本局"类条目必须带可见文案', () => {
+  // 样式层：危险色的类是 .btn.danger / .gear-item.danger（两端都有）
+  assert.match(read('web/style.css'), /\.btn\.danger\b/, 'style.css 缺少 .btn.danger');
+  assert.match(read('web/style.css'), /\.gear-item\.danger\b/, 'style.css 缺少 .gear-item.danger');
+  // 文案层：桌面 app.js 的齿轮菜单把"结束本局"作为**带文字**的条目推入，
+  // 并且 danger 类是**按文案判定**加的（不是所有红按钮都危险，也不是危险只靠红）
+  const app = read('web/app.js');
+  assert.match(app, /items\.push\(\['[^']*结束本局'/, 'app.js 齿轮菜单缺少带文案的"结束本局"条目');
+  assert.match(app, /\/结束本局\/\.test\(label\)[\s\S]{0,80}classList\.add\('danger'\)/,
+    'app.js 的 danger 类必须由条目文案判定（保证"危险的都写了字"）');
+  const mjs = read('web/m/m.js');
+  assert.match(mjs, /结束本局/, 'm.js 齿轮菜单缺少带文案的"结束本局"条目（test/mobile-layout.test.js 也钉了这条）');
+});
+
+/* ------------------------------------------------------------
+   FIX-22 收口：六色字面量在 web/** 的**分布**判据
+   ------------------------------------------------------------
+   为什么还要扫一遍全局："样式表里没有"不等于"仓库里没有"——本轮实测到的漏网形态有三种：
+     · `<meta name="theme-color">`（meta 读不到 CSS 变量，只能是字面量 ✔ 有理由的例外）
+     · JS 里拼出来的 SVG 属性（app.js 的 stroke，见下）
+     · data-URI 里的 **URL 编码**形态 `%23d8b25f`（裸十六进制扫描抓不到，第一版守卫就漏了它）
+   所以这里把所有形态一起扫，并且要求：**每一个命中都必须能对上一张精确白名单里的条目**
+   （文件 + 该行必须逐字包含的片段 + 理由）；反过来，白名单里**没被用到的条目也要红** ——
+   这样"有理由的例外"和"没人管的残留"在机器眼里是两件事，白名单也不会腐烂成摆设。
+   ------------------------------------------------------------ */
+const LITERAL_ALLOW = [
+  ['web/ai-cast.html', '<meta name="theme-color" content="#06090f">', 'meta theme-color 在 CSS 之前就被浏览器读走，只能是字面量'],
+  ['web/offline.html', '<meta name="theme-color" content="#06090f">', '同上'],
+  ['web/offline.html', '--sem-bg: #06090f; --sem-panel: #0f1626; --sem-ink: #ebe4d7;', '离线页自足内联镜像（pwa.test.js 禁止它外链，镜像与正本的一致性由"镜像"用例钉住）'],
+  ['web/offline.html', '--sem-gold: #d8b25f; --sem-moon: #dbe6ff; --sem-danger: #b3323f;', '同上'],
+  ['web/app.js', "'rgba(216,178,95,.3)'", 'JS 拼 SVG stroke 属性，该处取不到 CSS 变量；本轮禁改 app.js（并行工作流在改）+ 单文件内容哈希连锁，登记为例外待收敛'],
+];
+
+/** 扫 web/**（排除共享令牌层）里的全部六色命中形态：裸 hex / %23 编码 / rgba 原色 */
+function scanSemanticLiterals() {
+  const lows = SEM_COLORS.map(([, v]) => v);
+  const triples = SEM_COLORS.map(([, v]) => parseHex(v).join(','));
+  const hits = [];
+  for (const rel of walkWeb(['.html', '.js', '.css', '.json', '.webmanifest', '.svg'])) {
+    if (rel === TOKENS_CSS) continue;
+    const raw = read(rel);
+    const text = rel.endsWith('.css') || rel.endsWith('.html') ? stripComments(raw) : raw;
+    text.split('\n').forEach((line, i) => {
+      const found = [];
+      for (const m of line.matchAll(/#[0-9a-fA-F]{6}\b/g)) if (lows.includes(m[0].toLowerCase())) found.push(m[0]);
+      for (const m of line.matchAll(/%23([0-9a-fA-F]{6})/g)) if (lows.includes('#' + m[1].toLowerCase())) found.push('%23' + m[1]);
+      for (const m of line.matchAll(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/g)) if (triples.includes([m[1], m[2], m[3]].join(','))) found.push('rgb(' + [m[1], m[2], m[3]].join(',') + ')');
+      if (found.length) hits.push({ rel, line: i + 1, found, text: line.trim() });
+    });
+  }
+  return { hits };
+}
+
+test('§3 六色字面量：web/** 里每个命中都必须对得上精确白名单（含 %23 编码形态），白名单过期也红', () => {
+  const { hits } = scanSemanticLiterals();
+  const used = new Set();
+  const violations = [];
+  for (const h of hits) {
+    const key = LITERAL_ALLOW.findIndex(([f, snippet]) => f === h.rel && h.text.includes(snippet));
+    if (key < 0) violations.push(`${h.rel}:${h.line} 出现六色字面量 ${h.found.join('/')}（无白名单条目）：「${h.text.slice(0, 90)}」`);
+    else used.add(key);
+  }
+  assert.deepStrictEqual(violations, [], `六色字面量漏网：\n${violations.join('\n')}`);
+  const stale = LITERAL_ALLOW.map(([f, snippet], i) => (used.has(i) ? null : `${f} 的白名单条目已不再命中：「${snippet.slice(0, 60)}」`)).filter(Boolean);
+  assert.deepStrictEqual(stale, [], `白名单过期（应当删除对应条目或恢复用法）：\n${stale.join('\n')}`);
+  // 共享令牌层自身：%23 编码形态只允许出现在图标令牌那行
+  const tokenHits = read(TOKENS_CSS).split('\n')
+    .map((text, i) => ({ num: i + 1, text }))
+    .filter(({ text }) => /%23[0-9a-fA-F]{6}/.test(text));
+  for (const { num, text } of tokenHits) {
+    if (!/^\s*--ico-[\w-]+\s*:/.test(text)) violations.push(`${TOKENS_CSS}:${num} 的 %23 编码色不在图标令牌定义行上`);
+  }
+  assert.deepStrictEqual(violations, [], `令牌层编码色越界：\n${violations.join('\n')}`);
 });

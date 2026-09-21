@@ -5,24 +5,90 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#06090f">
 <title>离线 · AI 狼人杀</title>
-<!-- 样式内联：这个页面必须在"任何外部资源都取不到"时仍然能看。
-     取值与 style.css 的 token 一致（墨蓝夜色 + 鎏金），只是内联了一份最小副本。 -->
+<!-- 样式内联：这个页面必须在"任何外部资源都取不到"时仍然能看（test/pwa.test.js 因此
+     禁止它外链样式表/脚本），所以这里内联一份**最小镜像**，语义名与取值对齐
+     web/shared/tokens.css（§3 六色 + RGB 三元组）。镜像与正本的一致性由
+     test/css.test.js 的「离线页令牌镜像」用例逐项比对：改了正本忘了改这里会红。 -->
 <style>
-  html, body { margin: 0; height: 100%; background: #06090f; color: #ebe4d7;
+  :root {
+    --sem-bg: #06090f; --sem-panel: #0f1626; --sem-ink: #ebe4d7;
+    --sem-gold: #d8b25f; --sem-moon: #dbe6ff; --sem-danger: #b3323f;
+    --sem-bg-rgb: 6, 9, 15; --sem-panel-rgb: 15, 22, 38; --sem-ink-rgb: 235, 228, 215;
+    --sem-gold-rgb: 216, 178, 95; --sem-moon-rgb: 219, 230, 255; --sem-danger-rgb: 179, 50, 63;
+    /* 下面四个是 style.css 既有令牌的同值副本（本页自足，只能内联） */
+    --muted: #8d96b7; --gold-bright: #f4de9f; --gold-dim: #8a6b23; --accent-dark: #7d1c27;
+  }
+  html, body { margin: 0; height: 100%; background: var(--sem-bg); color: var(--sem-ink);
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; }
   .wrap { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; text-align: center; gap: 14px; }
-  .ring { width: 120px; height: 120px; border-radius: 50%; border: 6px solid #8a6b23; box-shadow: inset 0 0 0 4px #d8b25f; background: #7d1c27; display: flex; align-items: center; justify-content: center; font-size: 48px; }
+  .ring { width: 120px; height: 120px; border-radius: 50%; border: 6px solid var(--gold-dim); box-shadow: inset 0 0 0 4px var(--sem-gold); background: var(--accent-dark); display: flex; align-items: center; justify-content: center; }
+  /* 品牌环里的狼首：仓库既有徽记（web/assets/brand/wolf-emblem.svg）的**内联**副本
+     —— 用 <img> 就得发一次外部请求，违背本页"断网也要能看"的前提（P2-7）；
+     也不再拿 emoji 当品牌标记（计划书 §3 行 78：核心品牌用统一 SVG，内容 emoji 才保留）。 */
+  .ring-mark { width: 86px; height: 99px; display: block; }
   h1 { font-size: 20px; margin: 6px 0 0; letter-spacing: 1px; }
-  p { margin: 0; color: #8d96b7; line-height: 1.7; font-size: 14px; max-width: 30em; }
-  .hint { color: #d8b25f; }
-  button { margin-top: 8px; padding: 10px 22px; border-radius: 999px; border: 1px solid #d8b25f;
-    background: transparent; color: #f4de9f; font-size: 15px; cursor: pointer; }
-  button:hover { background: rgba(216,178,95,.12); }
+  p { margin: 0; color: var(--muted); line-height: 1.7; font-size: 14px; max-width: 30em; }
+  .hint { color: var(--sem-gold); }
+  button { margin-top: 8px; padding: 10px 22px; border-radius: 999px; border: 1px solid var(--sem-gold);
+    background: transparent; color: var(--gold-bright); font-size: 15px; cursor: pointer; }
+  button:hover { background: rgba(var(--sem-gold-rgb), .12); }
 </style>
 </head>
 <body>
 <div class="wrap">
-  <div class="ring">🐺</div>
+  <div class="ring"><svg class="ring-mark" viewBox="230 175 564 650" width="86" height="99" role="img" aria-label="月夜狼冠" focusable="false">
+    <defs>
+    <linearGradient id="offw-gold" x1="12%" y1="0" x2="88%" y2="100%"><stop stop-color="#6e4d22"/><stop offset=".22" stop-color="#edcf91"/><stop offset=".4" stop-color="#b48a47"/><stop offset=".61" stop-color="#71522e"/><stop offset=".82" stop-color="#d7b470"/><stop offset="1" stop-color="#79572d"/></linearGradient>
+    <linearGradient id="offw-steel" x1="15%" y1="0" x2="75%" y2="100%"><stop stop-color="#9baabc"/><stop offset=".27" stop-color="#667891"/><stop offset=".59" stop-color="#344359"/><stop offset="1" stop-color="#101824"/></linearGradient>
+    <linearGradient id="offw-leftPlane" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#a6b5c6"/><stop offset=".53" stop-color="#51647e"/><stop offset="1" stop-color="#263449"/></linearGradient>
+    <linearGradient id="offw-rightPlane" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#536783"/><stop offset="1" stop-color="#152032"/></linearGradient>
+    <linearGradient id="offw-muzzle" x1="0" y1="0" x2="70%" y2="100%"><stop stop-color="#b9c4cd"/><stop offset=".5" stop-color="#75899f"/><stop offset="1" stop-color="#273951"/></linearGradient>
+    <linearGradient id="offw-eye" x1="0" y1="0" x2="0" y2="100%"><stop stop-color="#ffad7b"/><stop offset=".32" stop-color="#ff614d"/><stop offset="1" stop-color="#a72132"/></linearGradient>
+    <linearGradient id="offw-ear" x1="0" y1="0" x2="100%" y2="100%"><stop stop-color="#070b15"/><stop offset="1" stop-color="#28334a"/></linearGradient>
+    <path id="offw-wolf-outline" d="M286 184 L396 268 Q453 245 512 256 Q571 245 628 268 L738 184 L718 382 L760 440 L728 439 L785 518 L735 512 L755 570 L706 557 L705 616 L654 600 Q606 727 512 816 Q418 727 370 600 L319 616 L318 557 L269 570 L289 512 L239 518 L296 439 L264 440 L306 382 Z"/>
+    </defs>
+<g id="offw-wolf">
+    <use xlink:href="#offw-wolf-outline" href="#offw-wolf-outline" fill="#02050a" stroke="#02050a" stroke-width="24" stroke-linejoin="round"/>
+    <use xlink:href="#offw-wolf-outline" href="#offw-wolf-outline" fill="url(#offw-steel)" stroke="url(#offw-gold)" stroke-width="4" stroke-linejoin="round"/>
+    <!-- Tall triangular ears with deep inner planes. -->
+    <path d="M308 223 L380 291 L335 373 Z" fill="url(#offw-ear)"/>
+    <path d="M716 223 L644 291 L689 373 Z" fill="url(#offw-ear)"/>
+    <path d="M316 244 L334 347 L349 306 Z M708 244 L690 347 L675 306 Z" fill="#67404a" opacity=".62"/>
+    <path d="M294 201 L396 286 M730 201 L628 286" fill="none" stroke="#d0bb91" stroke-width="3"/>
+    <!-- Forehead: a lancet shape, echoing the architecture behind it. -->
+    <path d="M398 289 Q452 264 512 274 L481 369 L435 431 L335 385 L352 328 Z" fill="url(#offw-leftPlane)"/>
+    <path d="M626 289 Q572 264 512 274 L543 369 L589 431 L689 385 L672 328 Z" fill="url(#offw-rightPlane)"/>
+    <path d="M512 275 L547 376 L528 434 L512 477 L496 434 L477 376 Z" fill="#8291a7" opacity=".63"/>
+    <path d="M512 291 L512 426" fill="none" stroke="#d6d9d5" stroke-width="3" opacity=".55"/>
+    <!-- Cheek ruffs: asymmetric light, symmetric anatomy. -->
+    <path d="M331 399 L298 449 L327 451 L284 503 L329 492 L307 545 L347 526 L343 579 L381 554 L426 640 L449 572 L430 478 Z" fill="#1b293d"/>
+    <path d="M693 399 L726 449 L697 451 L740 503 L695 492 L717 545 L677 526 L681 579 L643 554 L598 640 L575 572 L594 478 Z" fill="#101b2d"/>
+    <path d="M318 456 L349 416 L396 450 L367 482 L326 501 L351 466 Z M706 456 L675 416 L628 450 L657 482 L698 501 L673 466 Z" fill="#6e829b" opacity=".74"/>
+    <path d="M355 529 L384 493 L413 499 L391 553 L378 586 Z" fill="#91a1b2" opacity=".7"/>
+    <path d="M669 529 L640 493 L611 499 L633 553 L646 586 Z" fill="#51647e"/>
+    <!-- Recessed eyes: crimson accents, no blurred glow. -->
+    <path d="M343 435 Q391 411 453 445 L480 484 Q419 506 355 465 Z M681 435 Q633 411 571 445 L544 484 Q605 506 669 465 Z" fill="#040910"/>
+    <path d="M362 447 Q400 437 452 466 L464 480 Q414 483 379 464 Z M662 447 Q624 437 572 466 L560 480 Q610 483 645 464 Z" fill="url(#offw-eye)"/>
+    <path d="M411 448 L422 451 L419 478 L410 475 Z M613 448 L602 451 L605 478 L614 475 Z" fill="#0a080d"/>
+    <path d="M373 448 L402 452 M651 448 L622 452" fill="none" stroke="#ffcf9a" stroke-width="3" stroke-linecap="round"/>
+    <path d="M342 425 Q398 403 461 448 M682 425 Q626 403 563 448" fill="none" stroke="#9eacb9" stroke-width="6"/>
+    <!-- Tapered bridge and broad nose give the head a distinctly lupine profile. -->
+    <path d="M496 438 L512 477 L528 438 L565 557 L581 642 L551 699 L512 739 L473 699 L443 642 L459 557 Z" fill="url(#offw-muzzle)"/>
+    <path d="M512 478 L512 649 L551 699 L581 642 L565 557 L528 438 Z" fill="#30455f" opacity=".6"/>
+    <path d="M458 543 L434 587 L409 565 L428 641 L475 689 L454 629 Z M566 543 L590 587 L615 565 L596 641 L549 689 L570 629 Z" fill="#c0c7c9" opacity=".8"/>
+    <path d="M512 503 L489 580 L482 620" fill="none" stroke="#d0d5d3" stroke-width="4" opacity=".7"/>
+    <path d="M469 634 Q512 614 555 634 L546 666 L512 686 L478 666 Z" fill="#060c15" stroke="#91a1b2" stroke-width="2"/>
+    <path d="M484 638 Q509 627 536 637" fill="none" stroke="#667c96" stroke-width="5" stroke-linecap="round"/>
+    <path d="M512 685 V714 M468 697 Q493 725 512 714 Q531 725 556 697" fill="none" stroke="#101b2b" stroke-width="7" stroke-linecap="round"/>
+    <path d="M443 694 L474 749 L492 735 L512 782 L532 735 L550 749 L581 694 L559 759 L512 816 L465 759 Z" fill="#1b293c"/>
+    <path d="M476 754 L512 798 L548 754" fill="none" stroke="#a0804b" stroke-width="3"/>
+    <!-- Engraved, restrained fur accents; no external images, fonts or filters. -->
+    <g fill="none" stroke="#bac3c9" stroke-width="2" opacity=".35" stroke-linecap="round">
+      <path d="M402 305 L433 292 M381 323 L423 305 M628 305 L599 292 M646 323 L604 305"/>
+      <path d="M366 504 L352 543 M383 542 L385 568 M658 504 L672 543 M641 542 L639 568"/>
+    </g>
+  </g>
+  </svg></div>
   <h1>现在没有网络</h1>
   <p>离线时打不开新对局：<span class="hint">AI 在服务器端调用模型</span>，断网就没法继续了。</p>
   <p>已经打开过的页面可以脱离网络显示，但任何推进对局的操作都需要联网——这是单并发、串行调用的必然结果，不是缓存能绕开的。</p>

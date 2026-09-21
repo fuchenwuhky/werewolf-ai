@@ -26,15 +26,15 @@
    ============================================================ */
 :root {
   /* ---- 墨蓝夜色阶（冷）：页面 → 卡片 → 抬起 ---- */
-  --bg: #06090f;
+  --bg: var(--sem-bg);
   --bg2: #0a0f1c;
-  --card: #0f1626;
+  --card: var(--sem-panel);
   --card2: #141d33;
   --ink-950: #04060b;
-  --ink-900: #06090f;
+  --ink-900: var(--sem-bg);
   --ink-850: #080d18;
   --ink-800: #0b1120;
-  --ink-750: #0f1626;
+  --ink-750: var(--sem-panel);
   --ink-700: #131c31;
   --ink-650: #18223c;
   --ink-600: #1f2b4a;
@@ -47,22 +47,22 @@
   --line-strong: rgba(170, 198, 255, .30);
 
   /* ---- 文字：暖骨白，与冷底形成"灯火 vs 月光"的对照 ---- */
-  --text: #ebe4d7;
+  --text: var(--sem-ink);
   --text-dim: #c4bdd0;
   --muted: #8d96b7;
 
   /* ---- 月光（冷强调）：用于标题、焦点、夜晚状态 ---- */
-  --moon: #dbe6ff;
+  --moon: var(--sem-moon);
   --moon-dim: #93a6cf;
 
   /* ---- 鎏金（暖强调）：用于主标题、徽章、主按钮 ---- */
-  --gold: #d8b25f;
+  --gold: var(--sem-gold);
   --gold-bright: #f4de9f;
   --gold-dim: #8a6b23;
   --gold-deep: #5c4715;
 
   /* ---- 血红（狼 / 死亡 / 危险）：比正红更暗，像干涸的血 ---- */
-  --accent: #b3323f;
+  --accent: var(--sem-danger);
   --accent-dark: #7d1c27;
   --danger: #a82633;
 
@@ -71,8 +71,8 @@
   --accent2: #4fae9b;   /* 旧名，保留 */
   --violet: #9b7fd4;    /* 神秘 / 查验 */
   --ember: #e0903c;     /* 当前发言 / 白天 */
-  --warn: #d8b25f;
-  --err: #ff8f8f;      /* 错误提示文字（原 var(--err) 散写归一） */
+  --warn: var(--gold);
+  --err: var(--state-error-text);      /* 错误提示文字（原 var(--err) 散写归一） */
   --priv: #1b2440;      /* 私密内容底色 */
 
   /* ---- 圆角：小控件 / 卡片 / 面板 / 胶囊 ---- */
@@ -94,16 +94,16 @@
   /* ---- 控件尺寸（FIN-03 §7.3 表）：
      输入/下拉/普通按钮 ≥40；紧凑工具 ≥32；主操作 ≥44（.btn.primary）；大号 48。
      --h-icon：返回/关闭/设置/笔记等图标按钮 40×40。 ---- */
-  --h-ctl: 40px;
-  --h-ctl-sm: 40px; /* FIN-03：.btn.small 用于文本次级按钮（管理档案/图鉴入口等），按普通按钮 ≥40；纯图标紧凑工具用 .icon-btn 32-40 */
-  --h-ctl-lg: 48px;
-  --h-icon: 40px;
+  --h-ctl: var(--h-ctl-min);
+  --h-ctl-sm: var(--h-ctl-min); /* FIN-03：.btn.small 用于文本次级按钮（管理档案/图鉴入口等），按普通按钮 ≥40；纯图标紧凑工具用 .icon-btn 32-40 */
+  --h-ctl-lg: var(--h-touch-min);
+  --h-icon: var(--h-ctl-min);
 
   /* ---- 字号阶 ---- */
-  --fs-xs: 11px;
-  --fs-sm: 12px;
+  --fs-xs: var(--fs-aux-min);
+  --fs-sm: var(--fs-aux-min);
   --fs-md: 13px;
-  --fs-base: 14px;
+  --fs-base: var(--fs-body-desktop);
   --fs-lg: 16px;
   --fs-xl: 20px;
   --fs-2xl: 26px;
@@ -119,8 +119,8 @@
 
   /* ---- 内凹控件井 ---- */
   --inset-field: inset 0 2px 6px rgba(0, 0, 0, .55), inset 0 0 0 1px rgba(255, 255, 255, .02);
-  --ring: 0 0 0 2px rgba(216, 178, 95, .6);
-  --ring-soft: 0 0 0 3px rgba(216, 178, 95, .16);
+  --ring: 0 0 0 2px rgba(var(--sem-gold-rgb), .6);
+  --ring-soft: 0 0 0 3px rgba(var(--sem-gold-rgb), .16);
   --ring-moon: 0 0 0 3px rgba(160, 190, 255, .18);
 
   /* ---- 动效 ---- */
@@ -196,7 +196,7 @@ body.ww-layer-open { overflow: hidden; }
   background:
     radial-gradient(120% 70% at 50% -10%, rgba(56, 84, 158, .38), transparent 62%),
     radial-gradient(90% 60% at 12% 8%, rgba(120, 96, 200, .16), transparent 60%),
-    linear-gradient(180deg, #070c1a 0%, #080d1a 38%, #06090f 78%, #04060b 100%);
+    linear-gradient(180deg, #070c1a 0%, #080d1a 38%, var(--sem-bg) 78%, var(--ink-950) 100%);
   transition: background var(--dur-slow) var(--ease);
 }
 /* 星野：三层不同密度/尺寸的点，比"一张星空图"轻得多，也不会有缩放模糊 */
@@ -268,7 +268,7 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
   padding: var(--sp-6) var(--sp-6) calc(var(--sp-5) + 82px);
   border-bottom: 1px solid var(--line-dim);
   /* 地平线暖光：村舍剪影贴在纯黑天上等于看不见，需要一层"村庄自己的灯光"把它托出来 */
-  background: radial-gradient(130% 130% at 50% 132%, rgba(216, 178, 95, .13), transparent 62%);
+  background: radial-gradient(130% 130% at 50% 132%, rgba(var(--sem-gold-rgb), .13), transparent 62%);
 }
 .hero-inner { display: flex; align-items: center; gap: var(--sp-5); max-width: 1440px; margin: 0 auto; position: relative; z-index: 2; }
 .hero-scene { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 130px; display: block; pointer-events: none; }
@@ -341,7 +341,7 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
 .home-card { margin: 0 0 var(--sp-4); }
 #resume-box.home-card {
   margin: 0 0 var(--sp-4);
-  border-color: rgba(216, 178, 95, .45);
+  border-color: rgba(var(--sem-gold-rgb), .45);
   box-shadow: var(--el-2), var(--bevel), var(--ring-soft);
 }
 #resume-box h2 { margin: 0 0 var(--sp-2); border-bottom: none; padding-bottom: 0; font-size: var(--fs-lg); }
@@ -400,7 +400,7 @@ details.fold > summary:hover { color: var(--gold); }
 /* 顶部一道金色细光：石板的"上边缘被灯照着" */
 .card::before {
   content: ''; position: absolute; left: 10%; right: 10%; top: -1px; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(216, 178, 95, .5), transparent);
+  background: linear-gradient(90deg, transparent, rgba(var(--sem-gold-rgb), .5), transparent);
 }
 .card h2 {
   display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
@@ -466,7 +466,7 @@ details.fold > summary:hover { color: var(--gold); }
 .card select, .modal .mbody select, select.field {
   appearance: none; -webkit-appearance: none; cursor: pointer;
   padding-right: 34px;
-  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5l5-5' fill='none' stroke='%23d8b25f' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-image: var(--ico-chevron-gold);
   background-repeat: no-repeat; background-position: right 12px center;
 }
 .card select:disabled, .modal .mbody select:disabled, .field:disabled { opacity: .5; cursor: not-allowed; }
@@ -529,7 +529,7 @@ input[type=radio]:checked {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-2);
   min-height: var(--h-ctl); padding: 0 var(--sp-4);
   border: 1px solid var(--line-strong); border-radius: var(--r-sm);
-  background: linear-gradient(180deg, #1b2440, #101728);
+  background: linear-gradient(180deg, var(--priv), #101728);
   color: var(--text); cursor: pointer;
   font-size: var(--fs-base); font-family: inherit; line-height: 1; letter-spacing: .5px;
   box-shadow: var(--el-1), var(--bevel);
@@ -541,17 +541,17 @@ input[type=radio]:checked {
 /* 主按钮＝鎏金封印：深色字压在金色上，是整套界面最亮的暖色焦点。
    FIN-03：主操作（开始/投票/技能确认）高 ≥44、宽 ≥112。 */
 .btn.primary {
-  min-height: 44px; min-width: 112px;
+  min-height: var(--h-main-min); min-width: 112px;
   background: linear-gradient(180deg, var(--gold-bright) 0%, var(--gold) 46%, #a8822c 100%);
   border-color: rgba(255, 236, 180, .55); color: #241802; font-weight: 700;
   text-shadow: 0 1px 0 rgba(255, 255, 255, .35);
   box-shadow: var(--el-2), var(--bevel-gold);
 }
 .btn.primary:hover { background: linear-gradient(180deg, #fff0bf 0%, var(--gold-bright) 46%, var(--gold) 100%); color: #1b1201; }
-.btn.primary:disabled { opacity: .38; cursor: not-allowed; box-shadow: none; transform: none; }
+.btn.primary:disabled { opacity: var(--state-disabled-opacity); cursor: not-allowed; box-shadow: none; transform: none; }
 .btn.ghost { background: rgba(146, 174, 235, .05); border-color: var(--line); }
-.btn.ghost:hover { background: rgba(216, 178, 95, .1); }
-.btn.danger { background: linear-gradient(180deg, #7d1c27, #4a0f17); border-color: #9c2b39; color: #ffd9dc; }
+.btn.ghost:hover { background: var(--state-hover); }
+.btn.danger { background: linear-gradient(180deg, var(--accent-dark), #4a0f17); border-color: #9c2b39; color: #ffd9dc; }
 .btn.danger:hover { border-color: var(--accent); color: #fff; }
 .btn.small { min-height: var(--h-ctl-sm); padding: 0 var(--sp-3); font-size: var(--fs-sm); border-radius: var(--r-sm); }
 .btn.big { min-height: var(--h-ctl-lg); padding: 0 var(--sp-6); font-size: var(--fs-lg); letter-spacing: 4px; font-weight: 700; min-width: 168px; }
@@ -584,7 +584,7 @@ input[type=radio]:checked {
   font-size: var(--fs-base); line-height: 1; font-family: inherit;
   transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-.role-row button:hover { border-color: var(--gold); color: var(--gold-bright); background: rgba(216, 178, 95, .12); }
+.role-row button:hover { border-color: var(--gold); color: var(--gold-bright); background: rgba(var(--sem-gold-rgb), .12); }
 
 /* ---------- 规则开关 ---------- */
 #rules-editor { display: flex; flex-direction: column; }
@@ -647,12 +647,12 @@ details summary:hover { color: var(--gold); }
   padding: var(--sp-2) var(--sp-5); position: sticky; top: 0; z-index: 60; flex: none;
   background: linear-gradient(180deg, rgba(11, 17, 32, .96) 0%, rgba(7, 11, 22, .96) 100%);
   border-bottom: 1px solid var(--gold-dim);
-  box-shadow: 0 1px 0 rgba(216, 178, 95, .22), 0 8px 30px rgba(0, 0, 0, .6);
+  box-shadow: 0 1px 0 rgba(var(--sem-gold-rgb), .22), 0 8px 30px rgba(0, 0, 0, .6);
   backdrop-filter: blur(10px);
 }
 .topbar h1 {
   font-family: var(--font-goth); font-size: 21px; margin: 0; letter-spacing: 2px; color: var(--gold-bright);
-  text-shadow: 0 1px 0 rgba(0, 0, 0, .6), 0 0 10px rgba(216, 178, 95, .25);
+  text-shadow: 0 1px 0 rgba(0, 0, 0, .6), 0 0 10px rgba(var(--sem-gold-rgb), .25);
 }
 .topbar h1::before { content: '✠ '; color: var(--accent); }
 .topbar .sub { color: var(--muted); font-size: var(--fs-sm); font-style: italic; }
@@ -684,7 +684,7 @@ details summary:hover { color: var(--gold); }
   box-shadow: var(--bevel-gold), var(--el-1);
 }
 #g-day { font-family: var(--font-cn-title); font-size: var(--fs-lg); font-weight: 700; color: var(--gold-bright); letter-spacing: 1px; line-height: 1.2; }
-.day-kicker { font-size: 9px; letter-spacing: 2.5px; color: var(--muted); text-transform: uppercase; }
+.day-kicker { font-size: var(--fs-xs); letter-spacing: 2.5px; color: var(--muted); text-transform: uppercase; }
 .phase-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-md);
@@ -692,9 +692,9 @@ details summary:hover { color: var(--gold); }
 }
 .phase-chip::before { content: '◐'; color: var(--moon-dim); font-size: var(--fs-sm); }
 body[data-phase='night'] .phase-chip { border-color: rgba(146, 174, 235, .38); background: rgba(90, 122, 200, .14); }
-body[data-phase='day'] .phase-chip { border-color: rgba(216, 178, 95, .42); background: rgba(216, 178, 95, .12); color: var(--gold-bright); }
+body[data-phase='day'] .phase-chip { border-color: rgba(var(--sem-gold-rgb), .42); background: rgba(var(--sem-gold-rgb), .12); color: var(--gold-bright); }
 body[data-phase='day'] .phase-chip::before { content: '☀'; }
-body[data-phase='vote'] .phase-chip { border-color: rgba(179, 50, 63, .45); background: rgba(179, 50, 63, .14); color: #ffc9cf; }
+body[data-phase='vote'] .phase-chip { border-color: rgba(var(--sem-danger-rgb), .45); background: rgba(var(--sem-danger-rgb), .14); color: #ffc9cf; }
 body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .me-chip {
   display: inline-flex; align-items: center; gap: 6px;
@@ -712,7 +712,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   content: ''; width: 7px; height: 7px; border-radius: 50%;
   background: var(--jade); box-shadow: 0 0 10px rgba(88, 185, 163, .85);
 }
-.alive-meter.low::before { background: var(--accent); box-shadow: 0 0 10px rgba(179, 50, 63, .9); animation: pulseDot 1.6s ease-in-out infinite; }
+.alive-meter.low::before { background: var(--accent); box-shadow: 0 0 10px rgba(var(--sem-danger-rgb), .9); animation: pulseDot 1.6s ease-in-out infinite; }
 @keyframes pulseDot { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .alive-meter b { color: var(--text); font-weight: 600; }
 
@@ -781,11 +781,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .seat-row.speaking { border-color: rgba(224, 144, 60, .55); }
 .seat-row.speaking .row-num { border-color: var(--ember); }
 .seat-row.speaking .row-name { color: var(--ember); }
-.seat-row.mine { border-color: rgba(216, 178, 95, .5); }
+.seat-row.mine { border-color: rgba(var(--sem-gold-rgb), .5); }
 .seat-row.mine .row-name { color: var(--gold-bright); }
 .seat-row.targetable { cursor: pointer; border-style: dashed; border-color: var(--line-strong); }
 .seat-row.targetable:hover { border-color: var(--gold); }
-.seat-row.picked { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(179, 50, 63, .18); }
+.seat-row.picked { border-style: solid; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--sem-danger-rgb), .18); }
 .seat-row.picked .row-name { color: #ffc9cf; }
 .seat-row .tag-chip { max-width: 100%; }
 
@@ -819,8 +819,8 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .ring-stage::before {
   content: ''; position: absolute; left: 50%; top: 50%; width: 88%; height: 88%;
   transform: translate(-50%, -50%); border-radius: 50%;
-  border: 1px solid rgba(216, 178, 95, .24);
-  box-shadow: inset 0 0 70px rgba(216, 178, 95, .05), 0 0 40px rgba(0, 0, 0, .5);
+  border: 1px solid rgba(var(--sem-gold-rgb), .24);
+  box-shadow: inset 0 0 70px rgba(var(--sem-gold-rgb), .05), 0 0 40px rgba(0, 0, 0, .5);
 }
 /* 内圈虚线：圆心牌之外的一圈细刻线，把"中心信息区"框住 */
 .ring-stage::after {
@@ -840,7 +840,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .rc-vote { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; margin-top: 2px; }
 .rc-vote span {
   padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--fs-xs);
-  background: rgba(179, 50, 63, .18); border: 1px solid rgba(179, 50, 63, .4); color: #ffc9cf;
+  background: rgba(var(--sem-danger-rgb), .18); border: 1px solid rgba(var(--sem-danger-rgb), .4); color: #ffc9cf;
   font-variant-numeric: tabular-nums;
 }
 
@@ -862,7 +862,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 .seat .sname {
-  max-width: 58px; margin-top: 3px; font-size: 10px; line-height: 1.3; color: var(--text-dim); text-align: center;
+  max-width: 58px; margin-top: 3px; font-size: var(--fs-xs); line-height: 1.3; color: var(--text-dim); text-align: center;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* 肖像与隐藏身份无关；数字保留在左下角，右侧继续留给身份和票数徽记。 */
@@ -876,20 +876,20 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .has-ai-portrait.portrait-ready .seat-index {
   position: absolute; left: -5px; bottom: -4px; width: 19px; height: 19px;
   display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--gold-dim);
-  background: var(--ink-900); color: var(--gold-bright); font: 700 11px/1 sans-serif;
+  background: var(--ink-900); color: var(--gold-bright); font: 700 var(--fs-xs)/1 sans-serif;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .7); pointer-events: none;
 }
 /* 挂在 .snum 内部（右下角）：挂在座位外层会压住下面的昵称 */
 .seat .snum .role-chip {
   position: absolute; right: -4px; bottom: -4px;
   display: inline-flex; align-items: center; justify-content: center;
-  width: 19px; height: 19px; padding: 0; border-radius: 50%; font-size: 10px; overflow: hidden;
+  width: 19px; height: 19px; padding: 0; border-radius: 50%; font-size: var(--fs-xs); overflow: hidden;
   background: #070c18; border: 1px solid var(--line-strong);
   box-shadow: 0 2px 6px rgba(0, 0, 0, .8);
 }
 .seat .badge { position: absolute; font-size: var(--fs-sm); line-height: 1; }
 .seat .snum .badge { right: -5px; top: -5px; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .9)); }
-.seat.mine .snum { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(216, 178, 95, .16), 0 5px 16px rgba(0, 0, 0, .6); }
+.seat.mine .snum { border-color: var(--gold); box-shadow: 0 0 0 3px rgba(var(--sem-gold-rgb), .16), 0 5px 16px rgba(0, 0, 0, .6); }
 .seat.mine .sname { color: var(--gold-bright); }
 .seat.dead { opacity: .42; }
 .seat.dead .snum { filter: grayscale(.85); border-color: var(--line-dim); }
@@ -912,7 +912,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .seat.targetable:hover .snum { border-style: solid; border-color: var(--gold); transform: translateY(-2px); }
 .seat.picked .snum {
   border-color: var(--accent); border-width: 2px;
-  box-shadow: 0 0 0 4px rgba(179, 50, 63, .2), 0 0 24px rgba(179, 50, 63, .4);
+  box-shadow: 0 0 0 4px rgba(var(--sem-danger-rgb), .2), 0 0 24px rgba(var(--sem-danger-rgb), .4);
   transform: translateY(-2px);
 }
 .seat.picked .sname { color: #ffc9cf; }
@@ -947,7 +947,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   padding: var(--sp-2) var(--sp-3);
   background: rgba(10, 14, 26, .6); border: 1px solid rgba(146, 174, 235, .14); border-radius: var(--r-md);
 }
-.pm-row.current { border-color: rgba(216, 178, 95, .55); }
+.pm-row.current { border-color: rgba(var(--sem-gold-rgb), .55); }
 .pm-row.archived { opacity: .6; }
 .pm-main { min-width: 0; }
 .pm-name { font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
@@ -968,7 +968,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6;
   min-height: 36px; padding: 0 18px; border-radius: var(--r-pill);
   border: 1px solid var(--gold-dim); cursor: pointer;
-  background: linear-gradient(180deg, #1b2440, #101728);
+  background: linear-gradient(180deg, var(--priv), #101728);
   color: var(--gold-bright); font-size: var(--fs-md); font-family: inherit;
   box-shadow: var(--el-2);
 }
@@ -981,7 +981,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 }
 .banner::before, .banner::after {
   content: ''; position: absolute; top: 50%; width: 26%; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(216, 178, 95, .55));
+  background: linear-gradient(90deg, transparent, rgba(var(--sem-gold-rgb), .55));
 }
 .banner::before { left: 0; }
 .banner::after { right: 0; transform: scaleX(-1); }
@@ -1012,10 +1012,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border-radius: 50%; background: var(--moon-dim); vertical-align: 1px;
 }
 .msg .role-tag { padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); border: 1px solid var(--line); }
-.msg.right { background: linear-gradient(180deg, rgba(48, 40, 18, .5), rgba(20, 26, 44, .7)); border-color: rgba(216, 178, 95, .28); }
+.msg.right { background: linear-gradient(180deg, rgba(48, 40, 18, .5), rgba(20, 26, 44, .7)); border-color: rgba(var(--sem-gold-rgb), .28); }
 .msg.right::before { background: var(--gold); }
 .msg.right .meta .who { color: var(--gold-bright); }
-.msg.wolf { background: linear-gradient(180deg, rgba(60, 18, 26, .5), rgba(20, 14, 22, .7)); border-color: rgba(179, 50, 63, .32); }
+.msg.wolf { background: linear-gradient(180deg, rgba(60, 18, 26, .5), rgba(20, 14, 22, .7)); border-color: rgba(var(--sem-danger-rgb), .32); }
 .msg.wolf::before { background: var(--accent); }
 .msg.wolf .meta .who { color: #ffb9c1; }
 .msg.private { border-style: dashed; }
@@ -1024,7 +1024,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   background: linear-gradient(180deg, rgba(16, 23, 42, .6), rgba(11, 16, 30, .55));
 }
 .msg.event::before { background: linear-gradient(180deg, var(--line-strong), transparent); }
-.msg.event.red { border-color: rgba(179, 50, 63, .38); color: #ffcdd2; }
+.msg.event.red { border-color: rgba(var(--sem-danger-rgb), .38); color: #ffcdd2; }
 .msg.event.red::before { background: var(--accent); }
 .msg.event.green { border-color: rgba(88, 185, 163, .32); color: #b9ead9; }
 .msg.event.green::before { background: var(--jade); }
@@ -1033,7 +1033,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .actionbar {
   flex: none; display: flex; flex-direction: column; gap: var(--sp-2);
   padding: var(--sp-3) var(--sp-4) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(180deg, rgba(6, 9, 15, .6), rgba(6, 9, 15, .97) 42%);
+  background: linear-gradient(180deg, rgba(var(--sem-bg-rgb), .6), rgba(var(--sem-bg-rgb), .97) 42%);
   backdrop-filter: blur(12px) saturate(1.1);
   border-top: 1px solid var(--line); box-shadow: 0 -12px 34px rgba(0, 0, 0, .55);
   position: relative; z-index: 30;
@@ -1064,11 +1064,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--text-dim);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform .08s var(--ease);
 }
-.chip:hover { border-color: var(--gold-dim); color: var(--gold-bright); background: rgba(216, 178, 95, .1); }
+.chip:hover { border-color: var(--gold-dim); color: var(--gold-bright); background: var(--state-hover); }
 .chip:active { transform: translateY(1px); }
 .chip.sel {
-  border-color: var(--accent); background: rgba(179, 50, 63, .2); color: #ffd0d5;
-  box-shadow: 0 0 0 3px rgba(179, 50, 63, .14);
+  border-color: var(--accent); background: rgba(var(--sem-danger-rgb), .2); color: #ffd0d5;
+  box-shadow: 0 0 0 3px rgba(var(--sem-danger-rgb), .14);
 }
 .chip.dead-chip { opacity: .45; cursor: not-allowed; text-decoration: line-through; }
 .chip small { color: var(--muted); font-size: var(--fs-xs); }
@@ -1086,7 +1086,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .coach-panel .coach-tag {
   display: inline-block; margin-bottom: var(--sp-3); padding: 3px 9px;
   border-radius: var(--r-pill); font-size: var(--fs-xs);
-  border: 1px solid rgba(216, 178, 95, .35); background: rgba(216, 178, 95, .1); color: var(--gold-bright);
+  border: 1px solid rgba(var(--sem-gold-rgb), .35); background: rgba(var(--sem-gold-rgb), .1); color: var(--gold-bright);
 }
 .coach-panel .coach-warn { color: #ffcdd2; }
 /* 本局速览：终局后这一列原本只有一颗按钮 + 大片留白，把复盘最想问的四件事摆出来 */
@@ -1171,7 +1171,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
 .cdx-filters button:hover { border-color: var(--gold-dim); color: var(--gold-bright); }
-.cdx-filters button.on { border-color: var(--gold); background: rgba(216, 178, 95, .14); color: var(--gold-bright); }
+.cdx-filters button.on { border-color: var(--gold); background: var(--state-sel); color: var(--gold-bright); }
 
 .cdx-body {
   flex: 1 1 auto; min-height: 0; display: grid;
@@ -1204,11 +1204,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   background: linear-gradient(180deg, transparent 0%, rgba(6, 4, 10, .68) 42%, rgba(6, 4, 10, .94) 100%);
 }
 .cdx-card .cdx-name { font-family: var(--font-cn-title); font-size: var(--fs-md); letter-spacing: 1px; line-height: 1.3; }
-.cdx-card .cdx-cat { font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+.cdx-card .cdx-cat { font-size: var(--fs-xs); color: var(--muted); letter-spacing: 1px; }
 .cdx-card.on .card-frame { box-shadow: 0 0 0 2px var(--gold), 0 10px 28px rgba(0, 0, 0, .7); }
 .cdx-card .cdx-ingame {
   position: absolute; right: -4px; top: -6px; z-index: 6;
-  padding: 1px 7px; border-radius: var(--r-pill); font-size: 10px; font-weight: 700;
+  padding: 1px 7px; border-radius: var(--r-pill); font-size: var(--fs-xs); font-weight: 700;
   background: linear-gradient(180deg, var(--gold-bright), var(--gold-deep)); color: #241802;
   box-shadow: 0 2px 8px rgba(0, 0, 0, .6);
 }
@@ -1227,14 +1227,14 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   padding: 3px 9px; border-radius: var(--r-pill); font-size: var(--fs-xs);
   border: 1px solid var(--line); background: rgba(146, 174, 235, .07); color: var(--text-dim);
 }
-.cdx-detail .cdx-chips span.hot { border-color: var(--gold-dim); background: rgba(216, 178, 95, .12); color: var(--gold-bright); }
+.cdx-detail .cdx-chips span.hot { border-color: var(--gold-dim); background: rgba(var(--sem-gold-rgb), .12); color: var(--gold-bright); }
 .cdx-detail .cdx-short { margin: 0 0 var(--sp-3); font-size: var(--fs-md); color: var(--gold-bright); line-height: 1.7; }
 .cdx-detail .cdx-desc { margin: 0 0 var(--sp-4); font-size: var(--fs-md); color: var(--text-dim); line-height: 1.85; }
 /* 阵营不固定提示（暗恋者）：与能力正文分开，避免被当成又一段技能描述 */
 .cdx-detail .cdx-note {
   margin: 0 0 var(--sp-4); padding: 9px var(--sp-3); border-radius: var(--r-sm);
   font-size: var(--fs-sm); line-height: 1.75; color: var(--gold-bright);
-  border: 1px solid var(--gold-dim); border-left-width: 3px; background: rgba(216, 178, 95, .1);
+  border: 1px solid var(--gold-dim); border-left-width: 3px; background: rgba(var(--sem-gold-rgb), .1);
 }
 .cdx-detail h4 {
   margin: var(--sp-4) 0 var(--sp-2); padding-bottom: 5px; font-size: var(--fs-sm); color: var(--muted);
@@ -1348,7 +1348,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid var(--line); background: rgba(146, 174, 235, .05); color: var(--text-dim);
   transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
-.modal .tabs button.on { border-color: var(--gold); background: rgba(216, 178, 95, .14); color: var(--gold-bright); }
+.modal .tabs button.on { border-color: var(--gold); background: var(--state-sel); color: var(--gold-bright); }
 .modal .mbody { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--sp-4) var(--sp-5); }
 .rulebook h3 { font-family: var(--font-cn-title); color: var(--gold-bright); letter-spacing: 2px; }
 .rulebook p, .rulebook li { line-height: 1.85; }
@@ -1465,7 +1465,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   /* 配色变量：默认中立金，真正的取值在同文件下面的"卡框配色表"里按 data-role 分组给出。
      --fr-tint-a：低浓度平涂（不支持混合模式时的降级）
      --fr-tint-h：色相混合浓度（支持 mix-blend-mode 时用，见下面的规则） */
-  --fr-accent: #d8b25f;
+  --fr-accent: var(--gold);
   --fr-tint: #000000;
   --fr-tint-a: 0;
   --fr-tint-h: 0;
@@ -1587,8 +1587,8 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
      注意 .flip-back 不是 .card-frame，拿不到那边的默认值，所以 --fr-tint* 必须在这里给全。 */
   --fr-tint: #a8781a; --fr-tint-a: .3; --fr-tint-h: .45;
   background:
-    radial-gradient(ellipse at center, #18223c 0%, #080d18 75%),
-    #080d18;
+    radial-gradient(ellipse at center, var(--ink-650) 0%, var(--ink-850) 75%),
+    var(--ink-850);
   /* 边框/内框线交给 SVG 框层（下面那条），这里不再自己画一圈 —— 牌背与牌面才是同一套语言 */
   border: none;
   font-size: 17px; color: var(--muted); font-family: var(--font-cn-title); letter-spacing: 3px;
@@ -1604,10 +1604,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
 }
 .flip-back .cb-txt { position: relative; z-index: 1; }
-.flip-back::before { content: '✠'; font-size: 30px; color: var(--accent); text-shadow: 0 0 16px rgba(179,46,62,.7); }
+.flip-back::before { content: '✠'; font-size: 30px; color: var(--accent); text-shadow: 0 0 16px rgba(var(--sem-danger-rgb),.7); }
 .flip-front {
   transform: rotateY(180deg);
-  background: radial-gradient(ellipse at center, #0f1626 0%, #060a14 80%);
+  background: radial-gradient(ellipse at center, var(--sem-panel) 0%, #060a14 80%);
   padding: 0;
   /* 角色名是 .card-frame 的**兄弟**节点：自定义属性不跨兄弟继承，
      所以 --band/--band-y 必须也定义在 .flip-front 上（否则下面 left/bottom 的 var() 整条失效，
@@ -1650,7 +1650,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   width: min(360px, 88vw); min-height: 56px;
   display: flex; flex-direction: column; gap: var(--sp-1); justify-content: center;
   background: linear-gradient(180deg, rgba(24,34,60,.94), rgba(9,14,26,.97));
-  border: 1px solid rgba(216, 178, 95,.32);
+  border: 1px solid rgba(var(--sem-gold-rgb),.32);
   border-radius: var(--r-md);
   box-shadow: var(--el-3);
   padding: var(--sp-3) var(--sp-4); text-align: center;
@@ -1668,8 +1668,8 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 }
 .inspect-stage::before {
   content: ''; position: absolute; inset: -20%;
-  background: radial-gradient(ellipse at 30% 20%, rgba(179,46,62,.14), transparent 45%),
-              radial-gradient(ellipse at 75% 80%, rgba(216, 178, 95,.1), transparent 45%);
+  background: radial-gradient(ellipse at 30% 20%, rgba(var(--sem-danger-rgb),.14), transparent 45%),
+              radial-gradient(ellipse at 75% 80%, rgba(var(--sem-gold-rgb),.1), transparent 45%);
   animation: mist 9s ease-in-out infinite alternate;
 }
 @keyframes mist { from { transform: translateX(-3%) scale(1); } to { transform: translateX(3%) scale(1.06); } }
@@ -1695,7 +1695,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .inspect-card .in-body {
   position: absolute; inset: var(--band-t-y) var(--band) var(--band-y);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--sp-3); padding: var(--sp-5);
-  background: radial-gradient(ellipse at 50% 34%, #26355c 0%, #0a0f1c 76%);
+  background: radial-gradient(ellipse at 50% 34%, #26355c 0%, var(--bg2) 76%);
 }
 .inspect-card .in-emoji { font-size: 76px; filter: drop-shadow(0 6px 16px rgba(0,0,0,.9)); }
 .inspect-card .in-name { font-size: 24px; font-family: var(--font-cn-title); letter-spacing: 6px; }
@@ -1706,7 +1706,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .paused-banner {
   margin: 10px 14px 0;
   padding: var(--sp-3) var(--sp-4);
-  border: 1px solid #8a6b23;
+  border: 1px solid var(--gold-dim);
   border-left: 4px solid #e0a83c;
   border-radius: var(--r-md);
   background: linear-gradient(180deg, rgba(72,50,12,.55), rgba(26,19,8,.78));
@@ -1720,7 +1720,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .paused-banner .pb-actions { margin-top: 10px; display: flex; gap: 10px; flex-wrap: wrap; }
 
 /* ============ 流式"打字中"气泡 ============ */
-.msg.typing { border-left: 2px solid var(--gold-dim, #5c4715); background: rgba(255,255,255,.02); }
+.msg.typing { border-left: 2px solid var(--gold-dim, var(--gold-deep)); background: rgba(255,255,255,.02); }
 .typing-tag { color: var(--muted); font-size: var(--fs-sm); letter-spacing: 1px; }
 .typing-body { white-space: pre-wrap; word-break: break-word; }
 .typing-body.muted { color: var(--muted); }
@@ -1737,7 +1737,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 #offline-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
   padding: var(--sp-2) 14px; text-align: center; font-size: var(--fs-base);
-  background: #4a0f17; color: #ffd9b0; border-bottom: 1px solid #d8b25f;
+  background: #4a0f17; color: #ffd9b0; border-bottom: 1px solid var(--sem-gold);
 }
 #offline-banner[hidden] { display: none; }
 
@@ -1747,10 +1747,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 }
 #sw-update button {
   padding: 10px var(--sp-4); border-radius: var(--r-pill); cursor: pointer; font-size: var(--fs-base);
-  border: 1px solid #d8b25f; background: #0f1626; color: #f4de9f;
+  border: 1px solid var(--sem-gold); background: var(--sem-panel); color: var(--gold-bright);
   box-shadow: var(--el-2);
 }
-#sw-update button:hover { background: #1b2440; }
+#sw-update button:hover { background: var(--priv); }
 
 /* ============================================================
    规则书（桌面与手机共用同一份内容与渲染器：web/rulebook.js）
@@ -1767,10 +1767,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 }
 .rb-chip {
   padding: 6px 10px; border-radius: var(--r-pill); cursor: pointer;
-  font-size: var(--fs-sm); color: var(--gold); background: rgba(216, 178, 95,.08);
-  border: 1px solid rgba(216, 178, 95,.35);
+  font-size: var(--fs-sm); color: var(--gold); background: rgba(var(--sem-gold-rgb),.08);
+  border: 1px solid rgba(var(--sem-gold-rgb),.35);
 }
-.rb-chip:active { background: rgba(216, 178, 95,.2); }
+.rb-chip:active { background: rgba(var(--sem-gold-rgb),.2); }
 .rb-body { padding-top: 10px; }
 .rb-sec { margin-bottom: var(--sp-5); scroll-margin-top: 56px; }
 .rb-h {
@@ -1785,7 +1785,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .rb-steps > li { margin-bottom: 7px; }
 .rb-note {
   margin: 0 0 10px; padding: 8px 10px; line-height: 1.8;
-  border-left: 3px solid var(--accent); background: rgba(179,46,62,.1);
+  border-left: 3px solid var(--accent); background: rgba(var(--sem-danger-rgb),.1);
   color: #f0d7db; border-radius: 0 var(--r-sm) var(--r-sm) 0;
 }
 /* 表格：手机上 4 列必然超宽 —— 外壳横向滚动，绝不撑破弹窗 */
@@ -1795,7 +1795,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   border: 1px solid var(--line-dim); padding: 6px 8px; text-align: left;
   vertical-align: top; line-height: 1.65;
 }
-.rb-table th { background: rgba(216, 178, 95,.12); color: var(--gold-bright); white-space: nowrap; }
+.rb-table th { background: rgba(var(--sem-gold-rgb),.12); color: var(--gold-bright); white-space: nowrap; }
 .rb-table tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
 
 /* 齿轮菜单（手机对局页左上角） */
@@ -1803,16 +1803,16 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .gear-item {
   text-align: left; padding: 12px var(--sp-3); cursor: pointer; font-size: var(--fs-md);
   border-radius: var(--r-sm); border: 1px solid var(--line-dim);
-  background: linear-gradient(180deg, #18223c, #0d1425); color: var(--text);
+  background: linear-gradient(180deg, var(--ink-650), #0d1425); color: var(--text);
 }
 .gear-item:active { border-color: var(--gold); color: var(--gold-bright); }
-.gear-item.danger { border-color: rgba(179,46,62,.5); color: #f0b8bf; }
+.gear-item.danger { border-color: rgba(var(--sem-danger-rgb),.5); color: #f0b8bf; }
 
 /* 键盘可达性：焦点必须看得见（暗色主题下默认描边几乎不可见） */
-:focus-visible { outline: 2px solid #d8b25f; outline-offset: 2px; }
+:focus-visible { outline: 2px solid var(--sem-gold); outline-offset: 2px; }
 .skip-link {
   position: absolute; left: -9999px; top: 0; z-index: 10000;
-  padding: 10px var(--sp-4); background: #d8b25f; color: #14101d; font-weight: 700; border-radius: 0 0 var(--r-sm) 0;
+  padding: 10px var(--sp-4); background: var(--sem-gold); color: #14101d; font-weight: 700; border-radius: 0 0 var(--r-sm) 0;
 }
 .skip-link:focus { left: 0; }
 .sr-only {

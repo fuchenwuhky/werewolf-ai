@@ -166,7 +166,10 @@ test('技能键：可用=金（主操作语义）、不可用=灰、次要=暗�
   assert.match(off, /cursor:\s*not-allowed/);
   // 次要但可用：保留暗红描边以区分「不可用」（次要≠危险）
   assert.ok(cols(alt).length >= 2, '.key.alt 需要底色与描边两色');
-  assert.match(alt, /border-color:[^;]*rgba\(179,\s*46,\s*62/, '.key.alt 的描边保留暗红，与灰红的「不可用」区分');
+  // 描边走 §3 危险色令牌（rgb(179,50,63) 的 .55 透明层）：钉**令牌化后的形态**而不是字面量，
+  // 这样"危险色漂移 / 又散写回原色"会红，同时不挡住令牌化迁移（原判据钉死了 rgba(179,46,62,…) 字面量）。
+  assert.match(alt, /border-color:[^;]*rgba\(var\(--sem-danger-rgb\),\s*\.55\)/, '.key.alt 的描边必须是 §3 危险色的 .55 透明层（走 --sem-danger-rgb）');
+  assert.ok(!/rgba\(179,\s*(46|50),\s*(62|63)/.test(alt), `.key.alt 不得再散写危险色原色（应走 --sem-danger-rgb）：${alt}`);
   // 代码侧：setKeyEnabled 必须同时改类与 disabled
   const fn = MJS.slice(MJS.indexOf('function setKeyEnabled'), MJS.indexOf('function setKeyEnabled') + 420);
   assert.match(fn, /classList\.toggle\('on'/, 'setKeyEnabled 未切换 .on');
