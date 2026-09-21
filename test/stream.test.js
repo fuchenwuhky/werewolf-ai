@@ -58,7 +58,12 @@ test('流式：SSE 增量按序回调、正文与独白分别累积、用量从�
     assert.strictEqual(out.usage.cachedTokens, 80, '缓存用量必须保留（上帝面板要显示命中率）');
     assert.strictEqual(out.usage.completionTokens, 20);
     assert.strictEqual(out.usage.estimated, false);
-    assert.ok(out.ttftMs != null && out.ttftMs >= 0, '应记录首字延迟 TTFT');
+    // TTFT 必须是从"请求发出"算起的**有限**毫秒数（src/ai/llm.js:241 `ttftMs = Date.now() - t0`）。
+    // 原写法 `ttftMs != null && ttftMs >= 0` 里 `>= 0` 是恒真半边（时钟差不可能为负），等于没验证单位；
+    // 改成有限值 + 真实上界：本用例的假 fetch 立刻 resolve、5 个 chunk 无延迟，实测 TTFT 恒为 0~2ms，
+    // 2000ms 对最慢的 CI 也是极宽松的容差，只拦"量纲/时间基准取错"这类真缺陷（例如把 ttftMs 写成
+    // Date.now() 的绝对毫秒）。合法的 0 不能排除，所以不用 `> 0`。
+    assert.ok(Number.isFinite(out.ttftMs) && out.ttftMs < 2000, `应记录首字延迟 TTFT（有限且 < 2000ms；实际 ${out.ttftMs}）`);
     assert.deepStrictEqual(deltas.map((d) => d.content).filter(Boolean), ['{"text":"', '你好"}'], '增量应保持顺序');
     assert.strictEqual(deltas[0].reasoning, '先想一下');
   } finally { global.fetch = origFetch; resetStreamMode(); }
@@ -239,7 +244,15 @@ test('Agent 决策：生成中可观测到直播文本，结束后清空并记�
     assert.strictEqual(g.live, null, '决策结束必须清空直播缓冲');
     assert.strictEqual(g.llmStats.streamedCalls, 1);
     assert.strictEqual(g.llmStats.ttftCount, 1);
-    assert.ok(g.llmStats.ttftMsTotal >= 0 && g.llmStats.ttftMsMax >= 0);
+    // 该次调用的 chunkDelay=15ms：首块正文/独白到达前至少睡 15ms，所以 TTFT 必然 > 0；
+    // 上界 5000ms 是慢机器容差（实测 ~16~30ms，整条流 5 块 ×15ms 也才 ~75ms）。
+    // 原写法 `ttftMsTotal >= 0 && ttftMsMax >= 0` 两个半边都恒真（都源自 Date.now() 差值），
+    // 换成"有限正数 + 上界"，并额外钉住不变式：ttftCount=1 时累计值必须等于最大值
+    // （src/ai/agent.js:402-404 在同一分支里同时更新 total 与 max）——
+    // 这一条能抓住"只累加 total、忘了更新 max"这类真缺陷，而旧的 >= 0 写法会放它过去。
+    assert.ok(Number.isFinite(g.llmStats.ttftMsTotal) && g.llmStats.ttftMsTotal > 0 && g.llmStats.ttftMsTotal < 5000,
+      `TTFT 累计应为有限正毫秒数（首块延迟 15ms 保证 > 0，上限 5000ms 为慢机器容差），实际 ${g.llmStats.ttftMsTotal}`);
+    assert.strictEqual(g.llmStats.ttftMsMax, g.llmStats.ttftMsTotal, '只调用 1 次（ttftCount=1）时最大值必须等于累计值');
     assert.strictEqual(g.llmStats.promptTokens, 50);
     // 直播不得留下任何事件
     const newEvents = g.events.slice(eventsBefore);

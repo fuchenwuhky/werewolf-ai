@@ -2,41 +2,5 @@
   "version": 1,
   "note": "断言卫生基线（FIX-20）：登记**历史存量**的恒真/宽容断言，避免一次性大改无关文件。键 = fingerprint（文件 + 规则 + 归一化行内容），行号只作参考。新增违规会让 node scripts/check-guards.js 失败；确有理由的例外请改用源码里的 // GUARD-ALLOW: <理由>，收拾干净后用 node scripts/check-guards.js --update-baseline 收缩本文件。",
   "generator": "node scripts/check-guards.js --update-baseline",
-  "violations": [
-    {
-      "file": "test/remediation.test.js",
-      "line": 572,
-      "rule": "ok-status-disjunction",
-      "text": "assert.ok(a1.code === 409 || a1.code === 403, `未开局 action 应 409/403，实际 ${a1.code}`);",
-      "fingerprint": "04c286e19fd06124"
-    },
-    {
-      "file": "test/remediation.test.js",
-      "line": 659,
-      "rule": "ok-literal-truthy",
-      "text": "assert.ok(true);",
-      "fingerprint": "ad2d60fa103b2631"
-    },
-    {
-      "file": "test/remediation.test.js",
-      "line": 802,
-      "rule": "ok-status-disjunction",
-      "text": "assert.ok(r4.code === 403 || r4.code === 429, '无 Origin 的远端配对走码校验/限流，不该被 Origin 拦死');",
-      "fingerprint": "ff034d917a61ca66"
-    },
-    {
-      "file": "test/stream.test.js",
-      "line": 61,
-      "rule": "always-true-compare",
-      "text": "assert.ok(out.ttftMs != null && out.ttftMs >= 0, '应记录首字延迟 TTFT');",
-      "fingerprint": "51bfd22cb6075c29"
-    },
-    {
-      "file": "test/stream.test.js",
-      "line": 242,
-      "rule": "always-true-compare",
-      "text": "assert.ok(g.llmStats.ttftMsTotal >= 0 && g.llmStats.ttftMsMax >= 0);",
-      "fingerprint": "f5332baf29a56eab"
-    }
-  ]
+  "violations": []
 }

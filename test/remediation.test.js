@@ -567,9 +567,21 @@ test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支
     const st = await call('/api/stats');
     assert.strictEqual(st.code, 200);
 
-    // action：无 pending 409 / 错 token 403
+    // action 的两条守卫是**先后**关系（src/api.js：`if (!game.pending) return 409` 在
+    // `if (body.token !== entry.tokens.player) return 403` 之前），所以「无 pending」与「token 错」
+    // 是两个局面下的两个确定结果，**不是**同一次调用可能给出的两种码。
+    // 原写法 `a1.code === 409 || a1.code === 403` 把这两种局面混成一次调用，实际两条守卫都没被钉住：
+    // 新建局没开局，game.pending 恒为 null（Game 构造器置 null），403 那一半永远走不到。
+    const entry = api.games.get(gameId);
     const a1 = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
-    assert.ok(a1.code === 409 || a1.code === 403, `未开局 action 应 409/403，实际 ${a1.code}`);
+    assert.strictEqual(a1.code, 409, `未开局（pending 为空）action 必须 409，实际 ${a1.code}`);
+    assert.match(a1.body.error, /没有等待中的操作/, '必须命中"无等待操作"这条守卫，而不是 token 校验');
+    // token 错 → 403：置一个 pending 桩把另一个局面也钉住，避免依赖 Mock 驱动时序（用完立刻复位）
+    entry.game.pending = { seat: 1, request: { task: 'speech' }, resolve() {}, reject() {} };
+    const a1b = await call(`/api/games/${gameId}/action`, { method: 'POST', body: { token: 'ptok', payload: {} } });
+    entry.game.pending = null;
+    assert.strictEqual(a1b.code, 403, `pending 存在但 token 不匹配必须 403，实际 ${a1b.code}`);
+    assert.match(a1b.body.error, /token 无效/);
     // review：GET（无复盘）返回 null review（带上帝令牌；无令牌本来就会 403——见 UX-01）
     const rv = await call(`/api/games/${gameId}/review?token=${encodeURIComponent(ok1.body.godToken)}`);
     assert.strictEqual(rv.code, 200);
@@ -652,11 +664,17 @@ test('深挖：getReview 的 done 形状 + startReview 的 409/400/cached 分支
     assert.match(r2.body.error, /还没结束/);
     entry.game.finished = true;
 
-    // 座位不存在 → 400（913-916）
+    // done 缓存的短路（走真实路由）：带上帝令牌 + 对局已结束 + 已有 done 复盘 + 未 regenerate
+    // ⇒ 200 { cached: true }，不再走座位校验/重新生成（startReview 的判定顺序：令牌 → 已结束 → 显式座位 → 缓存 → 生成）。
+    // 原来这行是 `assert.ok(true);`——探针实测这次调用返回的正是 200 cached，占位符把结果整个盖住了；
+    // 「座位不存在 → 400」那条分支由下面 r5 用显式 seat:99 钉住（方法级调用），这里钉的是**路由级**的缓存短路。
     const r3 = stubRes();
     await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' }, body: { token: 'gt' } }), r3.res, `/api/games/${gid}/review`, new URLSearchParams());
     await new Promise((r) => setTimeout(r, 10));
-    assert.ok(true);
+    assert.strictEqual(r3.code, 200, `已有 done 复盘时 POST /review 必须短路返回，实际 ${r3.code}`);
+    assert.strictEqual(r3.body.cached, true, '必须回 cached:true，而不是重新生成一份复盘');
+    assert.strictEqual(entry.review.status, 'done', '短路不得把已有复盘置为 running');
+    assert.strictEqual(entry.review.text, '复盘内容', '短路不得动已有复盘文本');
     const r4 = stubRes();
     await api.handle(stubReq({ method: 'POST', remote: '127.0.0.1', headers: { host: 'localhost:3210' } }), r4.res, `/api/games/${gid}/review?token=gt`, new URLSearchParams());
     // 上面的 handle 需要带 body；改用显式 body 调 startReview：
@@ -796,10 +814,17 @@ test('分支：恶意 Origin 的状态改变请求必须 403（pair/unpair/confi
     const r3 = stubRes();
     await api.handle(stubReq({ method: 'PUT', remote: '127.0.0.1', headers: evil, body: { model: 'x' } }), r3.res, '/api/config', new URLSearchParams());
     assert.strictEqual(r3.code, 401, 'PUT config 恶意 Origin 按未授权处理');
-    // 伪造 statChange 无 Origin 头（curl 类客户端）不受 Origin 检查影响
+    // 无 Origin 头（curl / Electron 主进程类客户端）不受 Origin 检查影响：
+    //   · isTrustedOrigin 对"没有 Origin 头"直接放行（src/auth.js：`if (!origin) return true`）；
+    //   · 限流计数在 Origin 检查**之后**（src/api.js 先 isTrustedOrigin 再 _rateAllow），
+    //     所以上面 r1 被 Origin 拒掉时并没有消耗配额 —— 本用例到这里只发生 1 次计数尝试，远不到 10 次上限。
+    // 于是只有一条结局：请求走到配对逻辑、被它拒绝 → 403（本用例没有 setEnabled(true)，auth 处于默认的
+    // 本机模式，pair() 抛「本机模式无需配对」，由 api.js 的 catch 映射成 403）。
+    // 429 需要超限流窗口才会出现，不是"竞态下两种都合法"——原并集写法把这条守卫顺序整个盖住了。
     const r4 = stubRes();
     await api.handle(stubReq({ method: 'POST', remote: '10.0.0.9', headers: { host: 'localhost:3210' }, body: { code: '123456' } }), r4.res, '/api/auth/pair', new URLSearchParams());
-    assert.ok(r4.code === 403 || r4.code === 429, '无 Origin 的远端配对走码校验/限流，不该被 Origin 拦死');
+    assert.strictEqual(r4.code, 403, `无 Origin 的远端配对应走到配对逻辑并被它拒绝（403），实际 ${r4.code}`);
+    assert.doesNotMatch(r4.body.error, /Origin/, '拒绝理由必须是配对逻辑本身，而不是被 Origin 检查拦死');
   } finally {
     await terminateApi(api, dataDir);
     }
