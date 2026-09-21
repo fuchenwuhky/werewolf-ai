@@ -1033,7 +1033,9 @@ class Api {
     logger.openGameLog(gameId);
     logger.info('api', `对局已创建 ${gameId}（${useMock ? 'Mock' : llmCfg.model}，${check.total}人${mySeat ? '，你在 ' + mySeat + ' 号' : '，纯观战'}）`, { gameId });
     await this.saveGame(entry, { force: true });
-    // REVERSE-CHECK 注入：临时停用建局时的 touch
+    // FIX-09：建局 = 服务端可观测的"使用这份档案" → 更新 lastUsedAt（档案列表排序字段）。
+    // 放在存盘之后、响应之前；失败只 warn，绝不影响开局（见 _touchProfileUsage）。
+    await this._touchProfileUsage(ownerProfileId);
     return this.json(res, 200, { gameId, playerToken: entry.tokens.player, godToken: entry.tokens.god, mock: useMock, mySeat });
   }
 
