@@ -49,7 +49,7 @@ const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
 const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
 const { ProfileStore } = require('./profiles/store');
-const { AnnotationStore } = require('./annotations/store');
+const { AnnotationStore, hasMeaningfulAnnotations } = require('./annotations/store');
 const { ProfileMigration } = require('./profiles/migration');
 const transfer = require('./profiles/transfer');
 const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('./tmp-files');
@@ -831,7 +831,9 @@ class Api {
         const out = await this.importApplyRes(body.package);
         if (out.status === 200) {
           // AC-08：成功也必须透传恢复状态白名单字段——损坏/未清完的记录不能在 HTTP 重拼时被丢掉
-          const clean = { ok: true, imported: (out.body.gameMap && Object.keys(out.body.gameMap).length) || 0, profileId: out.body.profileId, gameMap: out.body.gameMap, importedNotes: out.body.importedNotes || 0 };
+          // NEW-08：`imported` 由 importApplyRes **核实落盘之后**给出；这里绝不回退到
+          // `Object.keys(gameMap).length` —— 那正是"用预先生成的映射键数冒充成功数"的旧缺陷。
+          const clean = { ok: true, imported: out.body.imported || 0, profileId: out.body.profileId, gameMap: out.body.gameMap, importedNotes: out.body.importedNotes || 0 };
           if (Array.isArray(out.body.pendingRecoveries)) clean.pendingRecoveries = out.body.pendingRecoveries;
           return this.json(res, 200, clean);
         }
@@ -1863,12 +1865,20 @@ class Api {
           // 笔记随局落地（PROF-04）：旧 gameId → 新 gameId 重映射，座位经白名单规范化。
           // 审核 P1-2 复验：**不再吞掉写盘故障**——磁盘失败视为整次导入失败，走下方回滚。
           const noteDoc = notes[g.id];
-          if (noteDoc && noteDoc.seats && Object.keys(noteDoc.seats).length) {
+          // FIX-07：判据同 profileExport —— 只有"有意义"的标注才落地/计数，
+          // 全默认值（旧前端的"清除"痕迹）既不建文件也不进 importedNotes（存储不再只增不减）
+          if (hasMeaningfulAnnotations(noteDoc)) {
             await this.annotations.put({ profileId: prof.id, gameId: newId, expectedRevision: 0, seats: noteDoc.seats });
             importedNotes++;
           }
         }
-        const body = { ok: true, profileId: prof.id, gameMap, importedNotes };
+        // NEW-08：导入数量必须来自**真正完成落盘的记录**，不能用"写循环之前就定好的重映射表键数"
+        // 冒充成功数（写入被吞/循环提前结束时，键数会报"全部成功"——实测把 rename 从第 2 局起变成
+        // 静默失效，接口仍报 imported=3 而磁盘上只有 1 局）。重映射 id 两两不同（重复 id 已被
+        // validateImportPackage 拒绝），这里逐个**核实文件确实在磁盘上**再计数。
+        const importedGames = [...new Set(Object.values(gameMap))]
+          .filter((id) => fs.existsSync(path.join(this.saveDir, `${id}.json`))).length;
+        const body = { ok: true, profileId: prof.id, imported: importedGames, gameMap, importedNotes };
         // FIN-02：损坏/未清完的历史恢复记录必须如实上报，不得假装已处理
         if (retry.kept.length) body.pendingRecoveries = retry.kept;
         return { status: 200, body };
@@ -2022,7 +2032,10 @@ class Api {
       for (const g of games) {
         try {
           const doc = this.annotations.get(pid, g.id);
-          if (doc && Object.keys(doc.seats || {}).length) notes[g.id] = doc;
+          // FIX-07：计数判据是"有没有**有意义**的座位"，不是"seats 里有没有键"——
+          // 旧前端用 PUT 写全默认值来"清除标注"，那些座位与"已清空"无法区分，
+          // 按 `Object.keys(seats).length` 计数会让导出包虚报"这局有笔记"。
+          if (doc && hasMeaningfulAnnotations(doc)) notes[g.id] = doc;
         } catch (_) { /* 单局笔记读取失败不阻断导出 */ }
       }
       const pkg = transfer.buildExportPackage({ profile: prof, games, notes, hostLabel: '本机导出' });

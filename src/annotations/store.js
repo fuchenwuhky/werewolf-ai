@@ -20,6 +20,14 @@ const CONFIDENCE = ['low', 'medium', 'high'];
 const MAX_CANDIDATES = 3;
 const MAX_NOTE = 200;
 
+/**
+ * 单座位标注的**默认值**（唯一来源）：normalizeSeatAnnotation 与「是否已清空」判据
+ * （isMeaningfulSeatAnnotation）共用同一组常量 —— 判据分叉过一次就会变成"计数与清洗语义不一致"
+ * 这类极难排查的缺陷（FIX-07 的计数虚高正是这么来的）。
+ */
+const DEFAULT_LEANING = 'neutral';
+const DEFAULT_CONFIDENCE = 'low';
+
 class AnnotationConflict extends Error {
   constructor(msg) { super(msg); this.code = 409; }
 }
@@ -32,18 +40,53 @@ function emptyDoc(profileId, gameId) {
 function normalizeSeatAnnotation(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const out = {};
-  out.leaning = LEANINGS.includes(raw.leaning) ? raw.leaning : 'neutral';
+  out.leaning = LEANINGS.includes(raw.leaning) ? raw.leaning : DEFAULT_LEANING;
   out.candidateRoleIds = Array.isArray(raw.candidateRoleIds)
     ? [...new Set(raw.candidateRoleIds.filter((r) => typeof r === 'string' && /^[a-z_]{1,32}$/.test(r)))].slice(0, MAX_CANDIDATES)
     : [];
   out.claimedRoleId = typeof raw.claimedRoleId === 'string' && /^[a-z_]{1,32}$/.test(raw.claimedRoleId) ? raw.claimedRoleId : null;
-  out.confidence = CONFIDENCE.includes(raw.confidence) ? raw.confidence : 'low';
+  out.confidence = CONFIDENCE.includes(raw.confidence) ? raw.confidence : DEFAULT_CONFIDENCE;
   out.note = typeof raw.note === 'string' ? raw.note.slice(0, MAX_NOTE) : '';
   out.evidenceSeq = Number.isInteger(raw.evidenceSeq) && raw.evidenceSeq > 0 ? raw.evidenceSeq : null;
   out.day = Number.isInteger(raw.day) && raw.day > 0 ? raw.day : null;
   out.phase = typeof raw.phase === 'string' && /^[a-z_]{1,16}$/.test(raw.phase) ? raw.phase : null;
   out.updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt.slice(0, 30) : null;
   return out;
+}
+
+/**
+ * 单座位标注「是否有意义」——导出/导入计数用（FIX-07 的"导出计数虚高"收口）。
+ *
+ * 判据：只要**任一**字段与"刚清空 / 从未填写"的默认形态不同，就算有意义：
+ *   leaning ≠ neutral、confidence ≠ low、候选非空、有自称、笔记非空、有证据序号、有天数、有阶段。
+ * 默认值复用 DEFAULT_LEANING/DEFAULT_CONFIDENCE（与 normalizeSeatAnnotation 同一来源），不另立一套。
+ *
+ * ⚠ 这是**有意的启发式，不是缺陷**：用户若**故意**只记录"中立 + 低置信 + 空笔记"，
+ * 该座位与"已清空"在数据上无法区分，于是不计入导出计数。取舍理由：FIX-07 的原始缺陷正是
+ * 旧前端用 PUT 写全默认值来"清除标注"，导致导出计数虚高、存储只增不减；宁可漏计一个语义上
+ * 等于空的座位，也不能让"清除"继续留下计数痕迹。**别把这条当 bug 来"修"。**
+ */
+function isMeaningfulSeatAnnotation(seat) {
+  if (!seat || typeof seat !== 'object') return false;
+  if (seat.leaning !== DEFAULT_LEANING) return true;
+  if (seat.confidence !== DEFAULT_CONFIDENCE) return true;
+  if (Array.isArray(seat.candidateRoleIds) && seat.candidateRoleIds.length > 0) return true;
+  if (seat.claimedRoleId) return true;
+  if (typeof seat.note === 'string' && seat.note.length > 0) return true;
+  if (Number.isInteger(seat.evidenceSeq)) return true;
+  if (Number.isInteger(seat.day)) return true;
+  return typeof seat.phase === 'string' && seat.phase.length > 0;
+}
+
+/**
+ * 一份标注文档里是否存在任何"有意义"的座位（导出计数 / 导入落地判据）。
+ * 全默认 / 空 seats / 非对象 一律视为"没有笔记" —— 它们不该出现在导出包的 notes 里，
+ * 也不该在导入时凭空创建一个只含默认值的标注文件（存储只增不减）。
+ */
+function hasMeaningfulAnnotations(doc) {
+  const seats = (doc && typeof doc === 'object' && doc.seats) || {};
+  if (typeof seats !== 'object') return false;
+  return Object.keys(seats).some((k) => isMeaningfulSeatAnnotation(seats[k]));
 }
 
 class AnnotationStore {
@@ -148,4 +191,7 @@ class AnnotationStore {
   }
 }
 
-module.exports = { AnnotationStore, normalizeSeatAnnotation, AnnotationConflict, SCHEMA_VERSION, LEANINGS, CONFIDENCE, MAX_CANDIDATES, MAX_NOTE };
+module.exports = {
+  AnnotationStore, normalizeSeatAnnotation, AnnotationConflict, SCHEMA_VERSION, LEANINGS, CONFIDENCE,
+  MAX_CANDIDATES, MAX_NOTE, DEFAULT_LEANING, DEFAULT_CONFIDENCE, isMeaningfulSeatAnnotation, hasMeaningfulAnnotations,
+};
