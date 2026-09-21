@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v13-note'; // 档案/标注V2 + 网络优先资源策略（前代 ww-v12-note 缓存优先）
+const VERSION = 'ww-v14-note'; // 补齐预缓存清单（session-model）+ 离线兜底匹配（前代 ww-v13-note 只有网络优先资源策略）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -36,6 +36,7 @@ const SHELL = [
   '/rulebook.js',
   '/app.js',
   '/shared/annotations-model.js',
+  '/shared/session-model.js',
   '/ai-cast.js',
   '/ai-cast.html',
   '/ai-cast-page.js',
@@ -78,15 +79,24 @@ self.addEventListener('message', (event) => {
 /** 静态资源：网络优先，断网回退缓存（审核 P1-3）。
  *  旧的「缓存优先 + 后台更新」在版本号未升时会让老用户无限期运行旧脚本；
  *  网络优先保证在线首次加载就是最新资源，离线时仍可命中缓存继续看牌。 */
-async function networkFirstAsset(req) {
+async function networkFirstAsset(req, event) {
   const cache = await caches.open(ASSET_CACHE);
   try {
     const res = await fetch(req);
-    if (res && res.ok && res.type === 'basic') cache.put(req, res.clone()).catch(() => {});
+    // 落盘必须挂到 waitUntil：裸 .catch 的话 SW 可能在写盘前被终止，该资源就永远进不了缓存。
+    if (res && res.ok && res.type === 'basic' && event) {
+      event.waitUntil(cache.put(req, res.clone()).catch(() => {}));
+    }
     return res;
   } catch (_) {
-    const hit = await cache.match(req);
-    if (hit) return hit;
+    // 离线兜底：先精确匹配（同 ?v= 版本，保证新鲜度），再忽略查询串找同路径的任意版本副本。
+    // 顺序不能反。预缓存清单（SHELL）存的是**无查询串** URL，而服务端下发 HTML 时会把本地
+    // js/css 改写成 ?v=<内容哈希>，没有 ignoreSearch 这一步，预缓存条目永远不会被命中
+    // ——「装完 SW 还没再联网就断网，页面外壳在、脚本全 miss」（验收发现的 P1）。
+    const exact = await cache.match(req);
+    if (exact) return exact;
+    const loose = await cache.match(req, { ignoreSearch: true });
+    if (loose) return loose;
     throw new Error('offline and not cached: ' + req.url);
   }
 }
@@ -112,5 +122,5 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return; // 跨域交给浏览器
   if (url.pathname.startsWith('/api/')) return;    // 见文件头 ①：接口一律不进缓存
   if (req.mode === 'navigate') { event.respondWith(networkFirstNav(req)); return; }
-  event.respondWith(networkFirstAsset(req));
+  event.respondWith(networkFirstAsset(req, event));
 });
