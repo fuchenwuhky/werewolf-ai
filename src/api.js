@@ -718,6 +718,23 @@ class Api {
         const prof = await this.profiles.create(await this.readBody(req));
         return this.json(res, 200, { profile: prof });
       }
+      // ---------- 回收区 / 恢复（验收 P2：「归档代替删除」的恢复入口）----------
+      // ⚠ 顺序关键：这两条必须排在**任何** /api/profiles/<id> 形态的兜底路由之前。
+      // `trash` 不是 UUID，一旦被后面的 profileMatch（/^\/api\/profiles\/([0-9a-fA-F-]{36})…/）
+      // 或别的兜底吃掉，恢复能力就再次只存在于注释里 —— 这是本次修复的核心顺序约束。
+      if (pathname === '/api/profiles/trash' && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
+        return this.json(res, 200, { items: this.profiles.listTrash(), defaultProfileId: this.defaultProfileId });
+      }
+      // archiveId 段在这里故意放宽到"任意字符"（含 /），再由 restoreProfile 用与 store 完全相同的
+      // 白名单收敛成 400：真实请求入口会先 decodeURIComponent（%2f→/、%2e%2e→..），路径穿越串
+      // 真正到达 api.handle 时是已解码形态；若在正则里就匹配不上，非法 id 会以 404 混过去而不是 400。
+      const trashRestoreMatch = pathname.match(/^\/api\/profiles\/trash\/(.+)\/restore$/);
+      if (trashRestoreMatch && method === 'POST') {
+        if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+        if (!this._rateAllow(req, 'profrestore', 10)) return this.json(res, 429, { error: '恢复过于频繁，请稍后再试' });
+        return this.restoreProfile(res, trashRestoreMatch[1]);
+      }
       if (pathname === '/api/profiles/import/preview' && method === 'POST') {
         if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
         try {
@@ -1611,6 +1628,35 @@ class Api {
       if (!prof.archivedAt) return this.json(res, 409, { error: '请先归档再删除' });
       const info = await this.profiles.trash(pid, { activeGames: active });
       return this.json(res, 200, { ok: true, archiveId: info.archiveId });
+    } catch (e) {
+      return this.json(res, e.code || 400, { error: e.message });
+    }
+  }
+
+  /**
+   * 从回收区恢复档案（验收 P2）：把 trash/<archiveId>/ 里的档案目录搬回原位并补索引。
+   *  · archiveId 白名单与 store.restoreFromTrash 完全一致（/^[0-9A-Za-z-]+$/），路由层绝不放宽：
+   *    路径穿越串（../etc、a/b）在到达文件系统之前就被拒成 400；
+   *  · 写操作：必须在 store 的串行化入口 _serialize 内执行，与 PATCH/DELETE 的
+   *    read-check-write 周期排同一条队，避免恢复与并发写互相覆盖索引/档案；
+   *  · 失败按 .code 透传（400 非法 id / 404 回收区没有或已恢复过 / 409 目标位置被占用）。
+   */
+  async restoreProfile(res, archiveId) {
+    try {
+      const raw = String(archiveId == null ? '' : archiveId);
+      if (!/^[0-9A-Za-z-]+$/.test(raw)) {
+        return this.json(res, 400, { error: '非法 archiveId' });
+      }
+      const prof = await this.profiles._serialize(() => this.profiles.restoreFromTrash(raw));
+      if (!prof) return this.json(res, 404, { error: '回收区数据已搬回，但档案文件缺失，无法恢复' });
+      // 与 GET /api/profiles 的摘要字段保持一致（不把内部存储细节泄漏成新契约）
+      const summary = {
+        id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, bio: prof.bio,
+        preferences: prof.preferences || { fontScale: 1, layout: 'reading', reducedMotion: false },
+        createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
+        archivedAt: prof.archivedAt || null, lastUsedAt: prof.lastUsedAt || prof.updatedAt,
+      };
+      return this.json(res, 200, { ok: true, profile: summary });
     } catch (e) {
       return this.json(res, e.code || 400, { error: e.message });
     }
