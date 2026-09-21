@@ -59,8 +59,12 @@ function main() {
   // 踩过：dist 里残留旧版本的 portable exe，按后缀模糊找会捞到旧包 —— 构建前先清掉旧产物，
   // 构建后按 artifactName 精确取本版文件（build.win.artifactName 与 portable.artifactName 一致）。
   const dist = path.join(DESKTOP, 'dist');
-  for (const f of fs.readdirSync(dist)) {
-    if (f.endsWith('.exe') && f.includes('portable')) fs.rmSync(path.join(dist, f), { force: true });
+  // 干净检出、或刚清过 dist 时这个目录还不存在（dist 由 electron-builder 创建）——
+  // 少了守卫会直接 ENOENT 崩在打包前（验收发现）。
+  if (fs.existsSync(dist)) {
+    for (const f of fs.readdirSync(dist)) {
+      if (f.endsWith('.exe') && f.includes('portable')) fs.rmSync(path.join(dist, f), { force: true });
+    }
   }
   run(process.execPath, [
     binJs('electron-builder', 'electron-builder'), '--win', 'portable', '--x64',

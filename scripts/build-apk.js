@@ -43,13 +43,34 @@ function main(argv) {
   run('2/4 cap sync android（必须做：它才把 app/www 刷进 android assets）',
     isWin ? 'npx.cmd' : 'npx', ['cap', 'sync', 'android'], { cwd: APP, shell: isWin });
 
-  const env = {
-    ...process.env,
-    JAVA_HOME: process.env.JAVA_HOME || 'D:\\jdk-21.0.12.1+1',
-    ANDROID_HOME: process.env.ANDROID_HOME || 'D:\\android-sdk',
+  // JDK / Android SDK 定位（验收发现）：原先直接把某台机器的 D:\jdk-21.0.12.1+1 与 D:\android-sdk
+  // 写死成"环境变量缺省值"，换机器/CI 必崩。改为「环境变量 → 常见安装位置（不递归、不深扫）」，
+  // 找不到就给可读的错误说明该设哪个变量。
+  const childDirs = (parents, re) => {
+    const out = [];
+    for (const parent of parents) {
+      if (!parent) continue;
+      let names = [];
+      try { names = fs.readdirSync(parent); } catch (_) { continue; }
+      for (const n of names) if (re.test(n)) out.push(path.join(parent, n));
+    }
+    return out;
   };
-  if (!fs.existsSync(env.JAVA_HOME)) throw new Error(`找不到 JDK：${env.JAVA_HOME}`);
-  if (!fs.existsSync(env.ANDROID_HOME)) throw new Error(`找不到 Android SDK：${env.ANDROID_HOME}`);
+  const jdk = [
+    process.env.JAVA_HOME,
+    ...childDirs(['C:\\Program Files\\Java', 'C:\\Program Files\\Eclipse Adoptium', 'C:\\Program Files\\Microsoft', 'D:\\'], /^jdk/i),
+  ].find((p) => p && fs.existsSync(path.join(p, 'bin', isWin ? 'java.exe' : 'java')));
+  if (!jdk) throw new Error('找不到 JDK：请设置 JAVA_HOME（需要 JDK 17+）。已尝试：环境变量 JAVA_HOME、C:\\Program Files\\Java、D:\\ 下的 jdk* 目录。');
+  const sdk = [
+    process.env.ANDROID_HOME,
+    process.env.ANDROID_SDK_ROOT,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Android', 'Sdk') : null,
+    'D:\\android-sdk',
+    ...childDirs(['D:\\'], /^android-sdk/i),
+  ].find((p) => p && fs.existsSync(path.join(p, 'platform-tools')));
+  if (!sdk) throw new Error('找不到 Android SDK：请设置 ANDROID_HOME。已尝试：环境变量 ANDROID_HOME / ANDROID_SDK_ROOT、%LOCALAPPDATA%\\Android\\Sdk、D:\\android-sdk。');
+  const env = { ...process.env, JAVA_HOME: jdk, ANDROID_HOME: sdk };
+  console.log(`  JDK: ${jdk}\n  SDK: ${sdk}`);
   // gradlew.bat 是批处理：Node 在 Windows 上必须经 shell 启动（否则直接 EINVAL）
   run('3/4 gradle assembleDebug', isWin ? 'gradlew.bat' : './gradlew', ['assembleDebug', '--no-daemon', '-q'], { cwd: ANDROID, env, shell: isWin });
 
