@@ -12,6 +12,10 @@
  *   ⑦ pin 清单与"pin 用例签名"一致（新增 pin 用例忘了登记 → 这里红）；
  *   ⑧ **行尾免疫**：CRLF 工作区按仓库（LF）字节复核 pin，不许假红（否则钩子会拦住每一次推送）；
  *      并且"已知假红降级"只在那两条行尾敏感的 pin 用例失败时才允许 —— 其它失败绝不放行。
+ *   ⑨ **断言绑定识别**（FIX-20 漏检洞）：别名（`const a = require('node:assert'); a.ok(true)`）、
+ *      解构（`const { ok } = require('node:assert'); ok(true)`）、链式（`require('assert').ok(true)`）
+ *      三种写法下 6 条规则都要生效（逐条复核）；同时**不许**退化成"任何 `xx.ok()` 都算断言"，
+ *      并把手里的"已知边界"（不识别 / 会多报的形态）显式钉住。
  */
 'use strict';
 const { test } = require('node:test');
@@ -205,6 +209,7 @@ test('守卫：只有标记、没写理由的 GUARD-ALLOW 不生效（按违规�
   try {
     writeFixture(root, 'bare.test.js', [
       "'use strict';",
+      "const assert = require('node:assert');",
       BARE_DIRECTIVE,
       'assert.ok(true);',
     ].join('\n'));
@@ -225,7 +230,8 @@ test('守卫：只有标记、没写理由的 GUARD-ALLOW 不生效（按违规�
 test('守卫：基线内历史违规不阻断，基线外新增违规才失败（--update-baseline 收缩）', () => {
   const root = makeRoot('baseline');
   try {
-    writeFixture(root, 'old.test.js', ["'use strict';", 'assert.ok(true);'].join('\n'));
+    // 注意：夹具里必须有"真实的断言绑定"（`require('node:assert')`）——扫描按绑定生效，不再认字面前缀
+    writeFixture(root, 'old.test.js', ["'use strict';", "const assert = require('node:assert');", 'assert.ok(true);'].join('\n'));
     const baselineFile = path.join(root, 'scripts', 'guards-baseline.json');
     fs.writeFileSync(baselineFile, guards.baselineContent(guards.scanAssertionHygiene(root).violations), 'utf8');
     const parsed = JSON.parse(fs.readFileSync(baselineFile, 'utf8'));
@@ -237,7 +243,7 @@ test('守卫：基线内历史违规不阻断，基线外新增违规才失败�
     assert.match(ok.stdout, /基线内历史 1 处、基线外新增 0 处/);
 
     // 新增一条**不同**的违规 → 必须失败
-    writeFixture(root, 'new.test.js', ["'use strict';", 'assert.ok(rows.length >= 0);'].join('\n'));
+    writeFixture(root, 'new.test.js', ["'use strict';", "const assert = require('node:assert');", 'assert.ok(rows.length >= 0);'].join('\n'));
     const bad = runCli(['--root', root, '--assertions-only']);
     assert.strictEqual(bad.status, 1, '基线之外的新违规必须失败');
     assert.match(bad.stderr, /test\/new\.test\.js/);
@@ -472,4 +478,327 @@ test('假红降级：腿 A2 只在"行尾差异 + 恰好那两条 pin 用例失�
   const strict = guards.runPinTests({ root: ROOT, spawn: fakeSpawn, log() {}, logErr() {}, eolDrift: false });
   assert.strictEqual(strict.ok, false);
   assert.strictEqual(strict.crlfFalseRed, false);
+});
+
+// ---------------------------------------------------------------- ⑨ 断言绑定识别（别名/解构/链式）
+/**
+ * 修复前的漏检洞（实测）：扫描只认 `assert.` 这个**字面前缀**，于是
+ *   `const a = require('node:assert'); a.ok(true);`        → 退出码 0（漏检）
+ *   `const a = require('node:assert'); a.strictEqual(s, 404||500);` → 退出码 0（漏检）
+ * 下面按 6 条规则 × 3 种绑定写法逐条复核；夹具里每行同时也是"行号必须准"的证明。
+ */
+const ALIAS_CASES = [
+  {
+    rule: 'ok-literal-truthy',
+    destructure: "const { ok } = require('node:assert');",
+    alias: 'a.ok(true);',
+    destructured: 'ok(true);',
+    chained: "require('node:assert').ok(true);",
+  },
+  {
+    rule: 'always-true-compare',
+    destructure: "const { ok } = require('node:assert');",
+    alias: 'a.ok(rows.length >= 0);',
+    destructured: 'ok(rows.length >= 0);',
+    chained: "require('node:assert').ok(rows.length >= 0);",
+  },
+  {
+    rule: 'equals-alternative-literal',
+    destructure: "const { strictEqual } = require('node:assert/strict');",
+    alias: 'a.strictEqual(res.status, 404 || 500);',
+    destructured: 'strictEqual(res.status, 404 || 500);',
+    chained: "require('node:assert').strictEqual(res.status, 404 || 500);",
+  },
+  {
+    rule: 'ok-status-disjunction',
+    destructure: "const { ok } = require('node:assert');",
+    alias: 'a.ok(res.status === 404 || res.status === 500);',
+    destructured: 'ok(res.status === 404 || res.status === 500);',
+    chained: "require('node:assert').ok(res.status === 404 || res.status === 500);",
+  },
+  {
+    rule: 'ok-tautology-disjunction',
+    destructure: "const { ok } = require('node:assert');",
+    alias: 'a.ok(n !== 1 || n !== 2);',
+    destructured: 'ok(n !== 1 || n !== 2);',
+    chained: "require('node:assert').ok(n !== 1 || n !== 2);",
+  },
+  {
+    rule: 'ok-truthy-fallback',
+    destructure: "const { ok } = require('node:assert');",
+    alias: 'a.ok(x !== undefined || true);',
+    destructured: 'ok(x !== undefined || true);',
+    chained: "require('node:assert').ok(x !== undefined || true);",
+  },
+];
+
+for (const c of ALIAS_CASES) {
+  test(`守卫别名：${c.rule} 对「别名命名空间 / 解构 / 链式 require」三种写法都生效`, () => {
+    const root = makeRoot(`alias-${c.rule}`);
+    try {
+      writeFixture(root, 'probe.test.js', [
+        "'use strict';",
+        "const test = require('node:test');",
+        "const a = require('node:assert');",
+        c.destructure,
+        '',
+        "test('别名写法', () => {",
+        '  const res = { status: 404 };',
+        '  const rows = [];',
+        '  const n = 1;',
+        '  const x = 1;',
+        `  ${c.alias}`,
+        `  ${c.destructured}`,
+        `  ${c.chained}`,
+        '});',
+      ].join('\n'));
+
+      const scan = guards.scanAssertionHygiene(root);
+      assert.deepStrictEqual(
+        scan.violations.map((v) => v.rule),
+        [c.rule, c.rule, c.rule],
+        `三种绑定写法都必须命中 ${c.rule}：${JSON.stringify(scan.violations)}`,
+      );
+      assert.deepStrictEqual(scan.violations.map((v) => v.line), [11, 12, 13], '行号要准（报警要能点到位）');
+      assert.deepStrictEqual(scan.aliasBindings.map((b) => b.file), ['test/probe.test.js'], '要报出"识别到了别名/解构绑定"');
+
+      const res = runCli(['--root', root, '--assertions-only']);
+      assert.strictEqual(res.status, 1, `守卫必须非零退出，实际 ${res.status}\n${res.stdout}${res.stderr}`);
+      assert.match(res.stderr, new RegExp(`probe\\.test\\.js:12\\s+\\[${c.rule}\\]`), '解构那一行必须被点名');
+      assert.match(res.stdout, /识别到 assert 以外的断言绑定/);
+    } finally {
+      cleanup(root);
+    }
+  });
+}
+
+test('守卫别名：B/C 两种漏检写法的端到端反向验证（临时文件必须红，删掉必须绿）', () => {
+  const root = makeRoot('alias-reverse');
+  try {
+    // B：const a=require('node:assert'); a.ok(true);
+    writeFixture(root, 'b.test.js', ["'use strict';", "const a = require('node:assert');", 'a.ok(true);'].join('\n'));
+    // C：const a=require('node:assert'); a.strictEqual(s, 404||500);
+    writeFixture(root, 'c.test.js', ["'use strict';", "const a = require('node:assert');", 'a.strictEqual(s, 404 || 500);'].join('\n'));
+
+    const red = runCli(['--root', root, '--assertions-only']);
+    assert.strictEqual(red.status, 1, `B/C 两种写法都必须让守卫失败\n${red.stdout}${red.stderr}`);
+    assert.match(red.stderr, /b\.test\.js:3\s+\[ok-literal-truthy\]/);
+    assert.match(red.stderr, /c\.test\.js:3\s+\[equals-alternative-literal\]/);
+
+    // 删掉两个临时文件 → 必须立刻变绿（说明红就是这两处引起的，不是别的噪音）
+    for (const name of ['b.test.js', 'c.test.js']) fs.rmSync(path.join(root, 'test', name));
+    const green = runCli(['--root', root, '--assertions-only']);
+    assert.strictEqual(green.status, 0, `删掉违规文件后必须通过\n${green.stdout}${green.stderr}`);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：绑定识别基于文件里真实的 require/解构（不是"任何 xx.ok() 都算断言"）', () => {
+  // 直接复核"识别出了哪些绑定名"：这条断言是"基于真实绑定"这一设计的证明
+  const code = guards.stripForScan([
+    "'use strict';",
+    "const assert = require('node:assert/strict');",
+    "const a = require('assert');",
+    "const strictNs = require('node:assert').strict;",
+    'const b = a;',
+    "const { ok, strictEqual: isSame, strict: s2 } = require('node:assert');",
+    "const db = require('./helpers');",
+    "const other = require('assert-plus');",
+    "const dyn = require('node:' + 'assert');",
+  ].join('\n'), { keepRequireStrings: true });
+
+  const bindings = guards.collectAssertBindings(code);
+  assert.deepStrictEqual([...bindings.namespaces].sort(), ['a', 'assert', 'b', 's2', 'strictNs']);
+  assert.deepStrictEqual([...bindings.methods.get('ok')], ['ok']);
+  assert.deepStrictEqual([...bindings.methods.get('strictEqual')], ['isSame']);
+  assert.strictEqual(bindings.methods.has('equal'), false, '没解构出来的方法不该凭空出现');
+  assert.ok(!bindings.namespaces.has('db'), "别的模块的 require 不算断言：require('./helpers')");
+  assert.ok(!bindings.namespaces.has('other'), "非 assert 模块名不算断言：require('assert-plus')");
+  assert.ok(!bindings.namespaces.has('dyn'), '动态 require 不识别（已知边界）');
+});
+
+test('守卫别名：对象方法 / 别的模块的 .ok() 一律不算断言（不许误报）', () => {
+  const root = makeRoot('alias-false-positive');
+  try {
+    writeFixture(root, 'objects.test.js', [
+      "'use strict';",
+      'const db = { ok: () => true, strictEqual: () => true };',
+      "const h = require('./helpers');",
+      'db.ok(true);',
+      'db.strictEqual(1, 404 || 500);',
+      'h.ok(true);',
+      'h.strictEqual(1, 404 || 500);',
+      "require('assert-plus').ok(true);",
+      "require('node:assert').strictEqual(1, 404 || 500);",
+      "const a = require('node:assert');",
+      'a.ok(true);',
+    ].join('\n'));
+
+    const scan = guards.scanAssertionHygiene(root);
+    assert.deepStrictEqual(
+      scan.violations.map((v) => [v.line, v.rule]),
+      [[9, 'equals-alternative-literal'], [11, 'ok-literal-truthy']],
+      `对象方法/别的模块不许误报，只有真断言要报：${JSON.stringify(scan.violations)}`,
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：改名解构、命名空间二次别名、.strict 绑定、链式 .strict 都要生效', () => {
+  const root = makeRoot('alias-forms');
+  try {
+    writeFixture(root, 'forms.test.js', [
+      "'use strict';",
+      "const { ok: isOk, strictEqual: isSame } = require('node:assert');",
+      "const base = require('assert');",
+      'const alias = base;',
+      "const strictNs = require('node:assert').strict;",
+      "const { strict: s } = require('assert');",
+      'isOk(true);',
+      'isSame(404, 404 || 500);',
+      'alias.ok(true);',
+      'strictNs.ok(true);',
+      's.ok(true);',
+      "require('assert').strict.deepStrictEqual(1, 404 || 500);",
+    ].join('\n'));
+
+    const scan = guards.scanAssertionHygiene(root);
+    assert.deepStrictEqual(scan.violations.map((v) => [v.line, v.rule]), [
+      [7, 'ok-literal-truthy'],
+      [8, 'equals-alternative-literal'],
+      [9, 'ok-literal-truthy'],
+      [10, 'ok-literal-truthy'],
+      [11, 'ok-literal-truthy'],
+      [12, 'equals-alternative-literal'],
+    ], `改名/二次别名/.strict 都要生效：${JSON.stringify(scan.violations)}`);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：已知边界（设计取舍，钉住以免被误当成"已覆盖"）', () => {
+  const root = makeRoot('alias-boundary');
+  try {
+    writeFixture(root, 'boundary.test.js', [
+      "'use strict';",
+      "const a = require('node:assert');",
+      // ① 计算成员 / 可选链：不识别（稳定写法 a.ok(...) 一定识别）
+      "a['ok'](true);",
+      'a?.ok(true);',
+      // ② 无声明符的解构赋值 / 复杂解构形态（默认值）：不识别
+      'let b;',
+      "({ ok: b } = require('node:assert'));",
+      'b(true);',
+      "const { ok = () => {} } = require('node:assert');",
+      'ok(true);',
+      // ③ 把断言挂到别的对象上再用：不识别（不排除 `.assert` 就会误报 node:test 的 `t.assert.ok()`）
+      'const h = { assert: a };',
+      'h.assert.ok(true);',
+    ].join('\n'));
+
+    assert.deepStrictEqual(
+      guards.scanAssertionHygiene(root).violations,
+      [],
+      '这些形态按设计漏报（宁可漏报也不误报）——若哪天识别了，请更新源码注释与本用例',
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：已知边界（文件级近似）—— 解构名被同名参数遮蔽时会多报', () => {
+  const root = makeRoot('alias-shadow');
+  try {
+    writeFixture(root, 'shadow.test.js', [
+      "'use strict';",
+      "const { ok } = require('node:assert');",
+      '',
+      'function notAnAssert(ok) {',
+      '  ok(true);',
+      '}',
+      'ok(true);',
+    ].join('\n'));
+
+    // 第 5 行的 ok 其实是参数，不是断言 → 这是**已知的多报**（不做作用域分析的代价）。
+    // 方向是"多报可疑行"而不是"漏掉恒真断言"；真被遮蔽时写 `// GUARD-ALLOW: <理由>` 说明即可。
+    assert.deepStrictEqual(
+      guards.scanAssertionHygiene(root).violations.map((v) => v.line),
+      [5, 7],
+      '文件级近似的已知边界：多报第 5 行；这个行为被钉住，改动识别逻辑时请显式复核',
+    );
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：只有 require(...) 的模块名字符串被保留，字符串/正则里的别名断言仍不算违规', () => {
+  const code = guards.stripForScan([
+    "const a = require('node:assert');",
+    'const doc = "const a = require(\'node:assert\'); a.ok(true);";',
+    'const rx = /a\\.ok\\(true\\)/;',
+  ].join('\n'), { keepRequireStrings: true });
+
+  assert.match(code, /require\('node:assert'\)/, "require 的模块名字符串必须保留（绑定判定与链式 require 都要看它）");
+  assert.ok(!code.includes('a.ok(true)'), `字符串/正则里的代码骨架必须照样清空：${code}`);
+  // 默认形态不受影响（其它调用方依赖这个默认值）
+  assert.ok(!guards.stripForScan("require('node:assert')").includes('node:assert'), '不传 keepRequireStrings 时字符串照旧清空');
+});
+
+test('守卫别名：没有识别到绑定的裸 assert.x() 不误报，但必须给出"可能漏检"提示（不阻断）', () => {
+  const root = makeRoot('alias-unbound');
+  try {
+    // 断言库是通过"别的途径"拿到的（`const { assert } = require('./helpers')`）：识别不了 → 不报违规，
+    // 但必须提示，否则语义收窄（不再认字面前缀）会**静默**丢掉这块覆盖。
+    writeFixture(root, 'unbound.test.js', [
+      "'use strict';",
+      "const { assert } = require('./helpers');",
+      'assert.ok(true);',
+    ].join('\n'));
+
+    const scan = guards.scanAssertionHygiene(root);
+    assert.deepStrictEqual(scan.violations, [], '识别不到绑定就不该误报（宁可漏报也不误报对象方法）');
+    assert.deepStrictEqual(scan.unboundAssert.map((w) => w.file), ['test/unbound.test.js']);
+
+    const res = runCli(['--root', root, '--assertions-only']);
+    assert.strictEqual(res.status, 0, '只是提示，不阻断');
+    assert.match(res.stdout, /却没识别到断言绑定/);
+    assert.match(res.stdout, /test\/unbound\.test\.js/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：t.assert.x()（别的对象上的同名属性）既不算断言也不该触发提示', () => {
+  const root = makeRoot('alias-tassert');
+  try {
+    writeFixture(root, 'node-test-ctx.test.js', [
+      "'use strict';",
+      "const test = require('node:test');",
+      '',
+      "test('用测试上下文的断言', (t) => {",
+      '  t.assert.ok(true);',
+      '  t.assert.strictEqual(1, 404 || 500);',
+      '});',
+    ].join('\n'));
+
+    const scan = guards.scanAssertionHygiene(root);
+    assert.deepStrictEqual(scan.violations, [], 't.assert 不是我们识别的绑定，不该误报');
+    assert.deepStrictEqual(scan.unboundAssert, [], '它没有"裸用 assert"，不该触发可能漏检提示');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('守卫别名：没识别到绑定的 assert.ok(true) 不再算违规（字面前缀已废弃，这是有意的语义收窄）', () => {
+  const root = makeRoot('alias-no-binding');
+  try {
+    writeFixture(root, 'nobinding.test.js', ["'use strict';", 'assert.ok(true);'].join('\n'));
+    const scan = guards.scanAssertionHygiene(root);
+    assert.deepStrictEqual(scan.violations, [], '没有 require/解构绑定 → 不按断言调用处理（改动前的行为靠字面前缀）');
+    assert.strictEqual(scan.unboundAssert.length, 1, '但这种文件必须被点名，避免盲区静默存在');
+  } finally {
+    cleanup(root);
+  }
 });

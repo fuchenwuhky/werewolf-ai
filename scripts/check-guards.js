@@ -23,6 +23,10 @@
  *
  * ## 腿 B：断言卫生扫描
  *   `test/**\/*.test.js` 里的恒真/宽容断言——它们会让用例失去意义（FIX-20 本体）。
+ *   规则套在**这份文件里真实的断言绑定**上（不是只认 `assert.` 字面前缀）：别名
+ *   `const a = require('node:assert'); a.ok(true)`、解构 `const { ok } = require('node:assert'); ok(true)`、
+ *   链式 `require('assert').ok(true)` 都算断言调用；`db.ok(true)`（对象方法）不算。
+ *   判定方式与**已知边界**（不做的形态）见下方 collectAssertBindings 的注释。
  *   仓库里存在历史存量违规，本脚本**不**要求一次性修完（那会引出一大片无关改动）：
  *   历史违规登记在 `scripts/guards-baseline.json`（键 = 文件 + 规则 + 行内容指纹，行号漂移不影响匹配），
  *   只有**不在基线里**的违规才让脚本失败。基线收拾干净后用 `--update-baseline` 重新登记。
@@ -117,21 +121,145 @@ const TEXT_EXT = /\.(?:html?|js|css|svg|json|md|txt|webmanifest)$/i;
 const INDEXISH = /^(?:i|j|k|n|m|idx|index|at|pos|found|biz|off|offset|line|col|row|seq|slot|seat|no|num)$/;
 
 /**
+ * 断言库的**绑定识别**（FIX-20 漏检洞修复）：扫描原来只认 `assert.` 这个字面前缀，于是
+ *   `const a = require('node:assert'); a.ok(true);`（别名）
+ *   `const { ok } = require('node:assert'); ok(true);`（解构）
+ *   `require('assert').ok(true);`（链式）
+ * 全部漏检 —— 而"最容易写出恒真断言"的那类作者恰好爱用别名，守卫因此被削掉一半价值。
+ * 现在先在**这份文件**里认出真实的断言绑定，再把 6 条规则套到这些绑定上。
+ * 绝不退化成"任何 `xx.ok(...)` 都算断言"：`const db = { ok() {} }; db.ok(true);` 不是断言（会误报对象方法）。
+ *
+ * 判定方式（纯词法，不做作用域分析；输入是"去掉注释、但保留 `require(...)` 模块名字符串"的代码骨架）：
+ *   ① `const/let/var X = require('assert' | 'node:assert' | 'assert/strict' | 'node:assert/strict')`，
+ *      可带 `.strict` 成员（如 `require('assert').strict`）→ X 是断言命名空间：
+ *      `X.ok(...)` / `X.strictEqual(...)` / `X.deepStrictEqual(...)` / `X(...)` 都按断言调用处理；
+ *   ② `const { ok, strictEqual: isSame } = require(...)` → 解构出的**本地名**按属性名归类（支持改名）；
+ *      解构出 `strict` 属性（`const { strict: s } = require('assert')`）算命名空间；
+ *   ③ `const b = a;` / `const b = a.strict;`（a 已是命名空间）→ b 也是命名空间（只认 const；最多 4 轮传递）；
+ *   ④ 链式 `require('assert').ok(...)` / `require('node:assert').strict.strictEqual(...)` 由调用名分支覆盖。
+ *
+ * ## 已知边界（宁可漏报，不误报；下面这些写法**不**识别，别以为已覆盖）
+ *   · ESM：`import assert from 'node:assert'` / `import { ok } from 'assert/strict'` / `await import(...)`
+ *     —— 本仓库 `"type": "commonjs"`，测试文件里写 import 根本跑不起来；
+ *   · 动态/间接 require：`require('node:' + 'assert')`、`require(spec)`、`require.resolve(...)`；
+ *   · 非 assert 的模块名：`require('assert-plus')`、`require('./my-assert')` 一律不算（宁漏不误报）；
+ *   · 无声明符的解构赋值：`({ ok } = require('node:assert'))`；
+ *   · 复杂解构形态：默认值 `{ ok = fn }`、嵌套 `{ strict: { ok } }`、计算属性 `{ ['ok']: o }`、数组模式；
+ *   · 计算成员 / 可选链：`assert['ok'](true)`、`assert?.ok(true)`、`assert.strict?.['equal'](...)`；
+ *   · 包装与工厂：`const a = makeAssert()`、`const a = pkg.assert`（不是 require 出来的断言模块）；
+ *   · 把断言挂到别的对象上再用：`const h = { assert }; h.assert.ok(true)`
+ *     （调用名前的 `(?<![\w$.])` 会把它当成"别人的同名属性"排除 —— 这是有意的：不排除就会误报 `t.assert.ok()`）；
+ *   · **作用域不做分析**（文件级近似，方向是"多报可疑行"而非"漏掉恒真断言"）：解构名被同名参数或
+ *     局部变量遮蔽时会多报 —— 例：`const { ok } = require('node:assert');` 之后
+ *     `function f(ok) { ok(true); }` 里的 ok 也会被算作断言（meta 测试把这个边界钉住）；
+ *   · `let`/`var` 别名传递按"取并集"处理（`let b = a; b = other;` 仍认 b 是断言）。
+ *
+ * ## 语义收窄的安全网（unboundAssert）
+ *   识别绑定意味着**不再**靠 `assert.` 字面前缀：一份文件若用 `assert` 当断言却没识别到绑定
+ *   （例如 `const { assert } = require('./helpers')` 这种"通过别的途径拿到断言库"），旧写法能抓到、
+ *   新写法会漏。为了不让这个盲区**静默**存在，扫描会对这种文件输出"可能漏检"的提示
+ *   （只提示、不阻断、也不当成违规 —— 拿不准的写法宁可漏报也不误报对象方法）。
+ */
+const ASSERT_REQUIRE_SRC = String.raw`require\(\s*['"](?:node:)?assert(?:\/strict)?['"]\s*\)(?:\s*\.\s*strict)?`;
+/** "等值"类规则关心的断言方法（改这里 = 改规则覆盖面，meta 测试逐条复核） */
+const ASSERT_EQUALS_METHODS = ['strictEqual', 'equal', 'deepStrictEqual'];
+/** 规则模板里的"调用名"占位符：扫描时换成这份文件真实的断言调用名 */
+const CALLEE_SLOT = '%C%';
+
+/** 转义成字面量正则片段（绑定名来自源码，必须转义） */
+const escapeRe = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** 记录"属性 → 本地绑定名"（解构可以改名：`{ ok: isOk }`） */
+function bindMethod(methods, prop, local) {
+  if (!methods.has(prop)) methods.set(prop, new Set());
+  methods.get(prop).add(local);
+}
+
+/**
+ * 收集一份代码骨架里的断言绑定。
+ * 返回 { namespaces: Set<名>, methods: Map<属性名, Set<本地名>> } —— 名字是**文件级**的（边界见上）。
+ */
+function collectAssertBindings(code) {
+  const namespaces = new Set();
+  const methods = new Map();
+  const declared = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*${ASSERT_REQUIRE_SRC}`, 'g');
+  for (const m of code.matchAll(declared)) namespaces.add(m[1]);
+  const destructured = new RegExp(String.raw`\b(?:const|let|var)\s*\{([^{}]*)\}\s*=\s*${ASSERT_REQUIRE_SRC}`, 'g');
+  for (const m of code.matchAll(destructured)) {
+    for (const entry of m[1].split(',')) {
+      const one = /^\s*([A-Za-z_$][\w$]*)\s*(?::\s*([A-Za-z_$][\w$]*))?\s*$/.exec(entry);
+      if (!one) continue; // 默认值/嵌套/计算属性等形态解析不了 → 跳过（宁漏不误报）
+      const prop = one[1];
+      const local = one[2] || prop;
+      if (prop === 'strict') namespaces.add(local); // assert.strict 也是可用的命名空间
+      else bindMethod(methods, prop, local);
+    }
+  }
+  const aliased = /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)(?:\s*\.\s*strict)?\s*[;,)]/g;
+  for (let pass = 0, grew = true; grew && pass < 4; pass++) {
+    grew = false;
+    for (const m of code.matchAll(aliased)) {
+      if (namespaces.has(m[2]) && !namespaces.has(m[1])) { namespaces.add(m[1]); grew = true; }
+    }
+  }
+  return { namespaces, methods };
+}
+
+/**
+ * 把规则的 `%C%` 展开成"这份文件里所有有效的断言调用名"：
+ * 命名空间（含 `.strict`）、命名空间的方法、解构出的本地名、直接链式 require。
+ * 前缀用 `(?<![\w$.])`（不是 `\b`）：`myassert.ok(true)`、`foo.assert.ok(true)`、
+ * `x.require('assert').ok(true)` 都不是我们这个绑定，必须排除；`\b` 也挡不住 `$`/`_` 开头的绑定名。
+ */
+function assertCalleeSource(bindings, kind) {
+  const alts = new Set();
+  for (const ns of bindings.namespaces) {
+    const base = `${escapeRe(ns)}(?:\\.\\s*strict)?`;
+    alts.add(base);
+    alts.add(kind === 'ok' ? `${base}\\.\\s*ok` : `${base}\\.\\s*(?:${ASSERT_EQUALS_METHODS.join('|')})`);
+  }
+  const wanted = kind === 'ok' ? ['ok'] : ASSERT_EQUALS_METHODS;
+  for (const prop of wanted) for (const local of bindings.methods.get(prop) || []) alts.add(escapeRe(local));
+  alts.add(ASSERT_REQUIRE_SRC);
+  alts.add(kind === 'ok'
+    ? `${ASSERT_REQUIRE_SRC}\\.\\s*ok`
+    : `${ASSERT_REQUIRE_SRC}\\.\\s*(?:${ASSERT_EQUALS_METHODS.join('|')})`);
+  return `(?<![\\w$.])(?:${[...alts].join('|')})`;
+}
+
+/** 用一份文件的绑定表编译规则正则（6 条规则 × 文件数，开销可忽略） */
+function buildHygieneRegex(rule, bindings) {
+  return new RegExp(rule.pattern.split(CALLEE_SLOT).join(assertCalleeSource(bindings, rule.callee)), 'g');
+}
+
+/**
+ * "裸 assert 被当断言用"的形态（`assert.ok(...)` / `assert(...)`），排除 `t.assert.ok(...)`
+ * 这种**别的对象上的同名属性**。只用于"可能漏检"提示：见到它就说明这份文件在用 assert，
+ * 而扫描没识别到对应绑定 —— 那正是语义收窄后唯一可能静默漏掉的情形。
+ */
+const BARE_ASSERT_CALL = /(?<![\w$.])assert\s*(?:\.\s*\w+)?\s*\(/;
+
+/**
  * 恒真 / 宽容断言。这些写法会让用例"永远绿"，比没有测试更糟（它给人安全感）。
- * 规则只在**代码骨架**上匹配（注释去掉、字符串字面量换成 ""、正则字面量换成 /re/），
+ * 规则只在**代码骨架**上匹配（注释去掉、字符串字面量换成 ""、正则字面量换成 /re/，
+ * 但 `require(...)` 的模块名字符串保留 —— 断言绑定的判定要靠它），
  * 所以把 `assert.ok(true)` 写在字符串/注释里不会被误报。
+ * `callee`：这条规则该套在哪些调用名上（'ok' = ok/裸调用，'equals' = 等值方法），
+ *           扫描时由 assertCalleeSource() 按**文件里真实的绑定**展开。
  * `accept(match)` 可选：对正则命中做进一步甄别（避免误报）。
  */
 const HYGIENE_RULES = [
   {
     id: 'ok-literal-truthy',
     desc: 'assert.ok(字面真值)：条件永远为真，用例等于没写',
-    re: /\bassert(?:\.ok)?\(\s*(?:true|[1-9]\d*)\s*[,)]/,
+    callee: 'ok',
+    pattern: String.raw`%C%\(\s*(?:true|[1-9]\d*)\s*[,)]`,
   },
   {
     id: 'always-true-compare',
     desc: 'assert.ok(x >= 0) / assert.ok(x.length >= 0)：长度、计数、时长这类量恒 ≥ 0，断言永远成立',
-    re: /\bassert(?:\.ok)?\(([^;]*?)\s*>=\s*0\s*(?=[,)])/,
+    callee: 'ok',
+    pattern: String.raw`%C%\(([^;]*?)\s*>=\s*0\s*(?=[,)])`,
     accept(m) {
       // 只看 ">= 0" 左边最末尾那个操作数：a.b.c / a.b() / 字面量
       const operand = /([\w$.[\]]+(?:\([^()]*\))?)\s*$/.exec(m[1]);
@@ -147,23 +275,27 @@ const HYGIENE_RULES = [
   {
     id: 'equals-alternative-literal',
     desc: 'assert.strictEqual(x, 404 || 500)：`404 || 500` 求值就是 404，想放过两个状态码却只放过一个（意图与行为不符）',
-    re: /\bassert\.(?:strictEqual|equal|deepStrictEqual)\(\s*[^,;]+,\s*\d+\s*\|\|\s*\d+\s*[,)]/,
+    callee: 'equals',
+    pattern: String.raw`%C%\(\s*[^,;]+,\s*\d+\s*\|\|\s*\d+\s*[,)]`,
   },
   {
     id: 'ok-status-disjunction',
     desc: 'assert.ok(status === 404 || status === 500)：两个状态码都算过',
-    re: /\bassert\.ok\([^;]*?([\w$.[\]]+)\s*===?\s*\d{3}\s*\|\|\s*\1\s*===?\s*\d{3}[^;]*?[,)]/,
+    callee: 'ok',
+    pattern: String.raw`%C%\([^;]*?([\w$.[\]]+)\s*===?\s*\d{3}\s*\|\|\s*\1\s*===?\s*\d{3}[^;]*?[,)]`,
   },
   {
     id: 'ok-tautology-disjunction',
     desc: 'assert.ok(x !== 1 || x !== 2)：至少有一个不等 → 恒真',
-    re: /\bassert\.ok\([^;]*?([\w$.[\]]+)\s*!==?\s*\d+\s*\|\|\s*\1\s*!==?\s*\d+[^;]*?[,)]/,
+    callee: 'ok',
+    pattern: String.raw`%C%\([^;]*?([\w$.[\]]+)\s*!==?\s*\d+\s*\|\|\s*\1\s*!==?\s*\d+[^;]*?[,)]`,
   },
   {
     id: 'ok-truthy-fallback',
     desc: 'assert.ok(x !== undefined || true) / assert.ok(true || x)：`|| true` 是恒真兜底',
+    callee: 'ok',
     // 注意 `x === true || y` 是正常写法（断言 x 是布尔真），必须排除；只认"裸 true 作为 || 的一侧"
-    re: /\bassert(?:\.ok)?\(\s*true\s*\|\||\bassert(?:\.ok)?\([^;]*?\|\|\s*true\s*[,)]/,
+    pattern: String.raw`%C%\(\s*true\s*\|\||%C%\([^;]*?\|\|\s*true\s*[,)]`,
   },
 ];
 
@@ -186,7 +318,7 @@ const sha256b64 = (buffer) => `sha256-${crypto.createHash('sha256').update(buffe
  * 这一步是必要的：JS 标识符里不可能出现 `-`，所以字符串/正则被清空后，还留着 GUARD-ALLOW 的地方
  * 只可能是注释 —— 于是"文档里提到 GUARD-ALLOW"或"测试名里写着 GUARD-ALLOW"都不会被误当成豁免指令。
  */
-function stripForScan(src, { keepComments = false } = {}) {
+function stripForScan(src, { keepComments = false, keepRequireStrings = false } = {}) {
   let out = '';
   let i = 0;
   let prev = ''; // 上一个有意义的输出字符，用来判断 `/` 是除法还是正则
@@ -213,14 +345,18 @@ function stripForScan(src, { keepComments = false } = {}) {
     }
     if (c === '"' || c === "'" || c === '`') {
       const quote = c;
+      const start = i;
+      // keepRequireStrings：只留 `require(` 紧跟的那个字符串（模块名住在字符串里，断言绑定与"链式 require"
+      // 的判定都要看它）。其余字符串一律清空 —— 所以 `const doc = "assert.ok(true)"` 依旧不会被当成代码。
+      const keep = keepRequireStrings && /(?:^|[^\w$.])require\s*\(\s*$/.test(out.slice(-64));
       i++;
       while (i < n) {
         if (src[i] === '\\') { i += 2; continue; }
         if (src[i] === quote) { i++; break; }
-        if (src[i] === '\n') out += '\n';
+        if (src[i] === '\n' && !keep) out += '\n';
         i++;
       }
-      out += quote === '`' ? '``' : '""';
+      out += keep ? src.slice(start, i) : (quote === '`' ? '``' : '""');
       prev = '"';
       continue;
     }
@@ -287,29 +423,40 @@ const isBareDirective = (codeLine) => /(?:\/\/|\/\*)\s*GUARD-ALLOW\s*(?:\*\/)?\s
 
 /**
  * 扫描 test/**\/*.test.js 的恒真/宽容断言。
- * 返回 { violations, allowed, bareTags }：
- *   violations 未豁免的违规（含 fingerprint）
- *   allowed    生效的豁免（含理由）—— 一定要打印出来
- *   bareTags   写了 GUARD-ALLOW 却没写理由的指令（不生效，按违规处理）
+ * 返回 { violations, allowed, bareTags, aliasBindings }：
+ *   violations    未豁免的违规（含 fingerprint）
+ *   allowed       生效的豁免（含理由）—— 一定要打印出来
+ *   bareTags      写了 GUARD-ALLOW 却没写理由的指令（不生效，按违规处理）
+ *   aliasBindings 规则**按别名/解构生效**的文件（`assert` 以外的绑定名；用于把"识别到了什么"打印出来）
+ *   unboundAssert 用了裸 `assert` 却没识别到绑定的文件（可能漏检 → 只提示，不阻断；见 BARE_ASSERT_CALL）
  */
 function scanAssertionHygiene(root = ROOT) {
   const violations = [];
   const allowed = [];
   const bareTags = [];
+  const aliasBindings = [];
+  const unboundAssert = [];
   for (const abs of listTestFiles(root)) {
     // 统一成 LF：这个仓库里有个别文件含裸 \r 换行（autocrlf 的历史包袱），不归一化会让行号漂移
     const raw = fs.readFileSync(abs, 'utf8').replace(/\r\n?/g, '\n');
     const rawLines = raw.split('\n');
-    const codeLines = stripForScan(raw).split('\n');
+    // 代码骨架保留 `require(...)` 的模块名字符串：断言绑定的判定、"链式 require"的命中都要看它
+    const code = stripForScan(raw, { keepRequireStrings: true });
+    const codeLines = code.split('\n');
     const allowLines = stripForScan(raw, { keepComments: true }).split('\n');
     const file = toRel(root, abs);
+    const bindings = collectAssertBindings(code);
+    const rules = HYGIENE_RULES.map((rule) => ({ rule, re: buildHygieneRegex(rule, bindings) }));
+    const extraNamespaces = [...bindings.namespaces].filter((n) => n !== 'assert').sort();
+    const extraMethods = [...bindings.methods].flatMap(([prop, locals]) => [...locals].sort().map((l) => `${prop}:${l}`)).sort();
+    if (extraNamespaces.length || extraMethods.length) aliasBindings.push({ file, namespaces: extraNamespaces, methods: extraMethods });
+    if (!bindings.namespaces.has('assert') && BARE_ASSERT_CALL.test(code)) unboundAssert.push({ file });
     allowLines.forEach((line, i) => {
       if (isBareDirective(line)) bareTags.push({ file, line: i + 1, text: (rawLines[i] || '').trim() });
     });
     codeLines.forEach((text, i) => {
       const rawText = (rawLines[i] || '').trim();
-      for (const rule of HYGIENE_RULES) {
-        const re = rule.re.global ? rule.re : new RegExp(rule.re.source, rule.re.flags + 'g');
+      for (const { rule, re } of rules) {
         let matched = false;
         for (const m of text.matchAll(re)) {
           if (rule.accept && !rule.accept(m)) continue;
@@ -325,7 +472,7 @@ function scanAssertionHygiene(root = ROOT) {
       }
     });
   }
-  return { violations, allowed, bareTags };
+  return { violations, allowed, bareTags, aliasBindings, unboundAssert };
 }
 
 /** 读基线（格式非法就抛错——绝不当成"空基线"静默放过） */
@@ -575,7 +722,7 @@ function checkGuards(opts = {}) {
   }
 
   // ---- 腿 B：断言卫生 ----
-  const { violations, allowed, bareTags } = scanAssertionHygiene(root);
+  const { violations, allowed, bareTags, aliasBindings, unboundAssert } = scanAssertionHygiene(root);
   const baseline = loadBaseline(baselinePath);
   const known = new Set(baseline.violations.map((v) => v.fingerprint));
   const fresh = violations.filter((v) => !known.has(v.fingerprint));
@@ -583,8 +730,21 @@ function checkGuards(opts = {}) {
   const present = new Set(violations.map((v) => v.fingerprint));
   const obsolete = baseline.violations.filter((v) => !present.has(v.fingerprint));
 
-  log(`\n▶ 断言卫生（test/**/*.test.js，${HYGIENE_RULES.length} 条规则）`);
+  log(`\n▶ 断言卫生（test/**/*.test.js，${HYGIENE_RULES.length} 条规则；按文件里真实的断言绑定生效）`);
   log(`    当前违规 ${violations.length} 处：基线内历史 ${historical.length} 处、基线外新增 ${fresh.length} 处`);
+  if (aliasBindings.length) {
+    log('  ℹ 识别到 assert 以外的断言绑定（别名/解构，规则已按它们生效）：');
+    for (const b of aliasBindings) {
+      const parts = [];
+      if (b.namespaces.length) parts.push(`命名空间=${b.namespaces.join('/')}`);
+      if (b.methods.length) parts.push(`解构=${b.methods.join('/')}`);
+      log(`      · ${b.file}  ${parts.join('  ')}`);
+    }
+  }
+  if (unboundAssert.length) {
+    log(`  ⚠ ${unboundAssert.length} 个文件在裸用 assert 却没识别到断言绑定（可能漏检，只提示不阻断）：`);
+    for (const u of unboundAssert) log(`      · ${u.file} —— 若它确实在用断言库，请把它拿到断言库的方式补进 collectAssertBindings`);
+  }
   for (const v of fresh) {
     logErr(`  ✖ ${v.file}:${v.line}  [${v.rule}] ${v.text}`);
     logErr(`      → ${HYGIENE_RULES.find((r) => r.id === v.rule).desc}`);
@@ -613,7 +773,7 @@ function checkGuards(opts = {}) {
 
   if (fresh.length) badge.ok = false;
   log(badge.ok ? '\n✓ 守卫通过' : '\n✖ 守卫失败（见上）');
-  return { ok: badge.ok, pin, staticPins, violations, fresh, historical, allowed, bareTags, obsolete, baselinePath, root };
+  return { ok: badge.ok, pin, staticPins, violations, fresh, historical, allowed, bareTags, aliasBindings, unboundAssert, obsolete, baselinePath, root };
 }
 
 function main(argv = process.argv.slice(2)) {
@@ -644,6 +804,12 @@ module.exports = {
   CSP_PAGES,
   BRAND_DIR,
   HYGIENE_RULES,
+  ASSERT_REQUIRE_SRC,
+  ASSERT_EQUALS_METHODS,
+  BARE_ASSERT_CALL,
+  collectAssertBindings,
+  assertCalleeSource,
+  buildHygieneRegex,
   stripForScan,
   normalizeText,
   fingerprintOf,
