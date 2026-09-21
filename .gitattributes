@@ -1,0 +1,11 @@
+# 行尾固定（只这三份，故意不用 * text=auto —— 那会引发全仓重新规范化并污染并行工作区）
+#
+# 为什么需要：这三份文件的**字节**被测试用 SHA-256 钉住 ——
+#   · web/index.html、web/m/index.html 的内联 <script> 哈希，钉在 src/static.js 的 CSP 白名单里；
+#   · design/brand/v2/wolf-emblem.svg 的哈希，钉在品牌 manifest 里。
+# 而 Windows 默认 core.autocrlf=true，检出会变成 CRLF，于是本地这两条守卫假红、
+# CI（Linux，LF）却是绿的 —— 2026-09-21 真的把主控误导过一次（差点去"重新 pin"本来正确的值）。
+# 固定为 LF 后，Windows 检出与 CI 看到的字节一致，这类假红永久消失。
+design/brand/v2/wolf-emblem.svg text eol=lf
+web/index.html text eol=lf
+web/m/index.html text eol=lf
