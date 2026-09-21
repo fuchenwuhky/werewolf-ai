@@ -1,16 +1,31 @@
-# 行尾固定（只这四份，故意不用 * text=auto —— 那会引发全仓重新规范化并污染并行工作区）
+# 行尾固定（只这六份，故意不用 * text=auto —— 那会引发全仓重新规范化并污染并行工作区）
 #
-# 为什么需要：这四份文件的**字节**被测试用 SHA-256 钉住 ——
+# 为什么需要：这六份文件的**字节**被测试用 SHA-256 钉住 ——
 #   · web/index.html、web/m/index.html 的内联 <script> 哈希，钉在 src/static.js 的 CSP 白名单里；
 #   · design/brand/v2/wolf-emblem.svg 的哈希，钉在品牌 manifest 的 sourceSha256；
-#   · design/brand/v2/export/app-icon.svg 的哈希，钉在品牌 manifest 的 files[] 里。
-# 而 Windows 默认 core.autocrlf=true，检出会变成 CRLF，于是本地这两条守卫假红、
+#   · design/brand/v2/export/app-icon.svg 的哈希，钉在品牌 manifest 的 files[] 里；
+#   · web/assets/icon.svg 必须与 design/brand/v2/export/app-icon.svg **逐字节相同**；
+#   · web/assets/brand/wolf-emblem.svg 必须与 design/brand/v2/wolf-emblem.svg **逐字节相同**
+#     （品牌检查用 SHA-256 直接比对这两对「源 ↔ 派生」，报错原文分别是
+#      「SHA-256 与 v2（直拷 app-icon.svg）不符」与「SHA-256 与 v2（派生自 …）不符」）。
+# 而 Windows 默认 core.autocrlf=true，检出会变成 CRLF，于是本地守卫假红、
 # CI（Linux，LF）却是绿的 —— 2026-09-21 真的把主控误导过一次（差点去"重新 pin"本来正确的值）。
 # 固定为 LF 后，Windows 检出与 CI 看到的字节一致，这类假红永久消失。
+#
+# 最后两份（web/assets/icon.svg、web/assets/brand/wolf-emblem.svg）是 2026-09-21 补上的：
+# 它们原先漏在名单外，于是形成了更坏的一种形态 —— **主仓库绿、全新检出红**。在 Windows 全新检出里
+# 它们会变成 CRLF（icon.svg 实测 7659 字节 / 68 个 CR、SHA-256 8404ea01…；
+# wolf-emblem.svg 实测 72 个 CR、SHA-256 c591a039…），而主仓库里是脚本写出的 LF
+# （与 design 源文件逐字节一致），因此 brand:check 在任何全新 clone / CI 上必然失败、
+# 门禁根本不可复现。⚠ 第一次只补了前一份，回干净检出复验**仍然红**，才暴露后一份 ——
+# 教训：这一整类缺陷只有「在干净检出里真跑一遍门禁、并且把**全部**失败项都看完」才抓得到；
+# 在主仓库自测永远是绿的，改完也必须**再回干净检出复验**，不许以本机绿为凭。
 #
 # 注意：manifest 里另外 21 个 PNG + 1 个 ICO 是**二进制**，git 不会做行尾转换，
 # 哈希与行尾无关，因此**不要**把它们写进来。
 design/brand/v2/wolf-emblem.svg text eol=lf
 design/brand/v2/export/app-icon.svg text eol=lf
+web/assets/brand/wolf-emblem.svg text eol=lf
+web/assets/icon.svg text eol=lf
 web/index.html text eol=lf
 web/m/index.html text eol=lf
