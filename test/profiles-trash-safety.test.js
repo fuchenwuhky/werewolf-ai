@@ -125,6 +125,10 @@ test('正常回收区不被启动对账误动；恢复是搬移，二次恢复�
   assert.strictEqual(back.id, a.id);
   assert.ok(has(store2, a.id));
   assert.strictEqual(store2.list().filter((p) => p.id === a.id).length, 1, '索引里只能有一份');
+  // 恢复成功后，回收区里只剩 restore.json 墓碑：它必须留在磁盘上（供启动对账与诊断），
+  // 但**不能再出现在 listTrash()/接口/界面里** —— 否则用户看到"恢复成功却还挂着一条不可恢复"。
+  assert.strictEqual(store2.listTrash().length, 0, '恢复成功后该条应从回收站列表消失');
+  assert.ok(fs.existsSync(path.join(trash, ids[0], 'restore.json')), '墓碑仍保留在磁盘上');
   assert.throws(() => store2.restoreFromTrash(ids[0]), /回收区没有该档案/, '搬移后不能重复恢复');
   assert.throws(() => store2.restoreFromTrash('../etc'), /非法 archiveId/);
 });

@@ -303,7 +303,11 @@ class ProfileStore {
         nickname: (meta && meta.profile && meta.profile.nickname) || null,
         restorable: !!(meta && meta.id) && fs.existsSync(path.join(p, 'profile-dir')),
       };
-    }).sort((a, b) => String(b.archiveId).localeCompare(String(a.archiveId)));
+    // 只列**真正可恢复**的条目。恢复成功后目录已被搬回原位，回收区只剩 restore.json 墓碑；
+    // 照目录列会让用户看到"恢复成功但回收站里还挂着一条不可恢复"的错觉（前端真机实测反馈）。
+    // 墓碑仍留在磁盘上供启动对账与诊断使用，只是不再出现在接口与界面里。
+    }).filter((t) => t.restorable)
+      .sort((a, b) => String(b.archiveId).localeCompare(String(a.archiveId)));
   }
 
   /** 从回收区恢复档案目录（恢复路由 / 启动对账共用） */
