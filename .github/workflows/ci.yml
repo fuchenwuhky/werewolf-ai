@@ -63,9 +63,10 @@ jobs:
         run: npm ci
       - name: ESLint（语言级错误：未定义变量、重复键、不可达代码…）
         run: npm run eslint
-      - name: 覆盖率门禁（行 88 / 分支 80 / 函数 78）
+      - name: 覆盖率门禁（行 92 / 分支 84 / 函数 86；api.js 单文件 85 / 75）
         run: npm run coverage
-      # 评测 harness：固定种子 × 配置矩阵跑 90 局，指标必须落在基线容差内。
+      # 评测 harness：固定种子跑评测，指标必须落在基线容差内。
+      # 注意 --games=N 是**每个配置** N 局，默认会跑 base + nosheriff 两个配置（当前 npm run eval = --games=30）。
       # 只放在这一个作业里（不放进 4 版本矩阵）：mock 局是确定性的，跨 Node 版本跑没有额外信息，
       # 反而会把"某个版本的浮点/排序细节不同"引入成假警报。
       - name: 评测回归门禁（固定种子 × 配置矩阵 vs 基线）

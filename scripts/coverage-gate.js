@@ -5,10 +5,10 @@
  * 用 Node 自带的测试覆盖率（`--experimental-test-coverage`），解析 all files 行并跟阈值比较。
  * 阈值是**棘轮**：定在实测基线略下方，只拦"明显回退"，不要求为了数字去补测试。
  *
- * 实测基线（2026-xx，203→214 项测试）：行 90.99% / 分支 84.13% / 函数 82.22%
- * 阈值取基线下方一小截：行 88 / 分支 80 / 函数 78。
+ * 实测基线（2026-09-21，全量 651 项测试）：行 94.27% / 分支 86.11% / 函数 88.19%
+ * 阈值取基线下方一小截：行 92 / 分支 84 / 函数 86；另对 api.js 单文件设 85 / 75。
  *
- * 用法：node scripts/coverage-gate.js [--line=88] [--branch=80] [--funcs=78] [--report]
+ * 用法：node scripts/coverage-gate.js [--line=92] [--branch=84] [--funcs=86] [--report]
  */
 'use strict';
 const { spawnSync } = require('child_process');
