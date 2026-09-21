@@ -146,7 +146,7 @@ async function showMyGamesSheet() {
           const t = await api('GET', `/api/games/${r.id}/tokens`);
           const handle = { gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: Date.now() };
           state.resume = { handle, fromDisk: !r.inMemory };
-          try { localStorage.setItem('mww_current', JSON.stringify(handle)); } catch (_) {}
+          try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', handle); } catch (_) {}
           $('#m-modal').innerHTML = '';
           resumeGame();
         } catch (e) { go.disabled = false; flash(`恢复失败：${e.message}`); }
@@ -267,7 +267,7 @@ function askLeaveGame() {
   wrap.appendChild(el('p', null, '对局进度已保存，退出后可从首页「▶ 继续上局」回来。要退出吗？'));
   const row = el('div', 'btnrow');
   const leave = el('button', 'btn danger', '退出到首页');
-  leave.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); localStorage.removeItem('mww_current'); location.reload(); });
+  leave.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); });
   const stay = el('button', 'btn primary', '继续对局');
   stay.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); });
   row.append(leave, stay);
@@ -359,7 +359,7 @@ async function init() {
   $('#m-to-bottom').addEventListener('click', () => { scrollFlow(true); });
   $('#m-flow').addEventListener('scroll', onFlowScroll);
   $('#m-my-seat').addEventListener('change', () => {
-    try { localStorage.setItem('ww_seat', $('#m-my-seat').value); } catch (_) { /* 隐私模式忽略 */ }
+    window.WWGameDraft.writeSeat(localStorage, 'ww_seat', $('#m-my-seat').value);
     renderSeatSelect();
   });
   $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
@@ -403,7 +403,7 @@ async function init() {
   });
   window.addEventListener('online', () => { if (state.game && state.game.gameId) poll(); });
   window.addEventListener('storage', async (e) => {
-    if (e.key !== 'ww_profile_id') return;
+    if (!window.WWProfileState.isSelectionKey(e.key)) return;
     await loadProfiles();
     if (!state.game) await loadResumeCard();
   });
@@ -432,7 +432,7 @@ function openGear() {
   if (inGame && !over) {
     rows.push(['⏹ 结束本局', () => askTerminate()]);
   } else {
-    rows.push(['🏠 返回首页', () => { localStorage.removeItem('mww_current'); location.reload(); }]);
+    rows.push(['🏠 返回首页', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }]);
   }
   // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
   // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
@@ -587,7 +587,7 @@ function openSettingsModal() {
     row.appendChild(end);
   }
   const home = el('button', 'btn danger', '🏠 退出到首页（放弃本局）');
-  home.addEventListener('click', () => { localStorage.removeItem('mww_current'); location.reload(); });
+  home.addEventListener('click', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); });
   row.appendChild(home);
   wrap.appendChild(row);
   openModal(wrap);
@@ -1065,7 +1065,7 @@ function renderSeatSelect() {
 }
 
 function savedSeatChoice() {
-  try { return localStorage.getItem('ww_seat') || 'random'; } catch (_) { return 'random'; } // 与桌面版共用同一个键
+  return window.WWGameDraft.readSeat(localStorage, 'ww_seat'); // 与桌面版共用同一个键
 }
 
 // ---------------- 底部弹层（手机习惯的交互容器） ----------------
@@ -1118,26 +1118,17 @@ function openSheet(title, bodyEl, footEl, opts) {
 const AVATAR_EMOJI = { scholar: '🎓', hunter: '🏹', seer: '🔮', wolf: '🐺', witch: '🧪', night: '🌙', candle: '🕯️', mask: '🎭' };
 
 async function loadProfiles() {
-  try {
-    const r = await api('GET', '/api/profiles');
-    state.profiles = r.profiles || [];
-    let saved = null;
-    try { saved = localStorage.getItem('ww_profile_id'); } catch (_) {}
-    // 只恢复"存在且未归档"的选中 id；归档/删除过的档案不能再被悄悄选中
-    const cur = state.profiles.find((p) => p.id === saved && !p.archivedAt);
-    state.profileId = cur ? cur.id : (state.profiles.find((p) => !p.archivedAt) || {}).id || r.defaultProfileId || null;
-    renderProfileStrip();
-    applyProfilePrefs(currentProfilePrefs()); // 档案级偏好跟随当前档案（FIN-07 行4）
-  } catch (e) {
-    state.profileId = null;
-    renderProfileStrip(`档案加载失败：${e.message}`);
-  }
+  // M1：拉列表 + 选中 id 落地收在共享模块（两端原本逐字相同），这里只接上本端的界面刷新
+  await window.WWProfileState.loadProfiles({
+    api, state, storage: localStorage,
+    onLoaded: () => { renderProfileStrip(); applyProfilePrefs(currentProfilePrefs()); }, // 档案级偏好跟随当前档案（FIN-07 行4）
+    onFailed: (msg) => renderProfileStrip(`档案加载失败：${msg}`),
+  });
 }
 
 /** 当前档案的偏好（无档案时回落默认值） */
 function currentProfilePrefs() {
-  const p = state.profiles.find((x) => x.id === state.profileId);
-  return (p && p.preferences) || { fontScale: 1, layout: 'reading', reducedMotion: false };
+  return window.WWProfileState.prefsOf(state.profiles, state.profileId);
 }
 
 /** 偏好应用：html[data-pref-*] → style.css 共享变量（与桌面端同一套语义/CSS） */
@@ -1235,11 +1226,8 @@ function renderHomeProfile(err) {
 }
 
 function onSelectProfile(pid) {
-  state.profileId = pid;
-  try { localStorage.setItem('ww_profile_id', pid); } catch (_) {}
-  const p = state.profiles.find((x) => x.id === pid);
-  // 档案昵称作为"我的昵称"默认值；用户手改过（dataset.touched）就不再覆盖
-  if (p && $('#m-my-name') && !$('#m-my-name').dataset.touched) $('#m-my-name').value = p.nickname;
+  // M1：写选中键 + 昵称预填收在共享模块（两端原本逐字相同），这里只接本端的界面刷新
+  window.WWProfileState.selectProfile({ state, storage: localStorage, profileId: pid, nameInput: $('#m-my-name') });
   applyProfilePrefs(currentProfilePrefs()); // 切档 → 外观偏好跟着档案走
   renderProfileStrip();
   if (!state.game) loadResumeCard();
@@ -1289,7 +1277,7 @@ function openProfileManager() {
         if (!confirm(`彻底删除「${pp.nickname}」？\n\n其战绩与笔记将进入回收区（本期不自动清空）。\n建议先点「导出」留一份备份。`)) return;
         try {
           await api('DELETE', `/api/profiles/${pp.id}`);
-          if (state.profileId === pp.id) { state.profileId = null; try { localStorage.removeItem('ww_profile_id'); } catch (_) {} }
+          window.WWProfileState.deselectIfCurrent({ state, storage: localStorage, profileId: pp.id });
           await loadProfiles(); openProfileManager();
         } catch (e) { alert(`删除失败：${e.message}`); }
       }, 'btn small danger');
@@ -1575,7 +1563,7 @@ async function startGame() {
     if (randomSeat) { body.mySeat = 'random'; body.myName = humanName; } // 座位由服务端抽签
     // 对局归属固化（PROF-02）：开局即锁定到所选档案；未加载出档案时不带字段（服务端归默认档案）
     if (state.profileId) body.profileId = state.profileId;
-    try { localStorage.setItem('ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
+    try { window.WWGameDraft.writeSeat(localStorage, 'ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
     const created = await api('POST', '/api/games', body);
     // mock 随句柄保存：首页「继续上局」卡要如实标出试玩/真实（防止恢复时误标花钱）
     const owner = state.profiles.find((x) => x.id === state.profileId);
@@ -1599,15 +1587,15 @@ async function loadResumeCard() {
   if (!card) return;
   state.resume = null;
   card.classList.add('hidden');
-  const saved = localStorage.getItem('mww_current');
+  const saved = window.WWGameDraft.readHandleRaw(localStorage, 'mww_current');
   if (!saved) { await adoptResumableForHandleless(); return; }
   let g = null;
-  try { g = JSON.parse(saved); } catch (_) { localStorage.removeItem('mww_current'); card.classList.add('hidden'); return; }
+  try { g = window.WWGameDraft.parseHandle(saved); } catch (_) { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); card.classList.add('hidden'); return; }
   // 会话摘要同时覆盖内存与磁盘；列表落盘有延迟，不能因列表暂缺就删除有效句柄。
   try {
     const r = await api('GET', `/api/games/${g.gameId}/session?token=${g.playerToken || g.godToken}`);
     if (!r || r.finished || !r.started) {
-      localStorage.removeItem('mww_current'); // 确实已结束 / 不存在 / 从未开局 → 才允许清句柄
+      window.WWGameDraft.clearHandle(localStorage, 'mww_current'); // 确实已结束 / 不存在 / 从未开局 → 才允许清句柄
       card.classList.add('hidden');
       return;
     }
@@ -1628,7 +1616,7 @@ async function adoptResumableForHandleless() {
     const t = await api('GET', `/api/games/${r.id}/tokens`);
     const handle = window.SessionModel.withView({ gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: r.date ? new Date(r.date).getTime() : null }, r);
     state.resume = { handle, fromDisk: !r.inMemory };
-    try { localStorage.setItem('mww_current', JSON.stringify(handle)); } catch (_) {}
+    try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', handle); } catch (_) {}
     $('#m-resume-meta').textContent = `${handle.ownerNickname || '原档案'} · ${resumeMetaText(handle, r)}` + (!r.inMemory ? ' · 服务已重启，将从存档恢复' : '');
     card.classList.remove('hidden');
   } catch (_) { card.classList.add('hidden'); }
@@ -1652,7 +1640,7 @@ async function resumeGame() {
     next.savedAt = Date.now();
     state.resume = { handle: next };
     state.game = next;
-    try { localStorage.setItem('mww_current', JSON.stringify(next)); } catch (_) {}
+    try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', next); } catch (_) {}
     enterGame();
   } catch (e) {
     flash(`从存档恢复失败：${e.message}`);
@@ -1687,7 +1675,7 @@ function persistGameHandle(immediate) {
   if (!immediate && now - (state.lastHandleWrite || 0) < 60000) return;
   state.lastHandleWrite = now;
   g.savedAt = now;
-  try { localStorage.setItem('mww_current', JSON.stringify(g)); } catch (_) { /* 隐私模式忽略 */ }
+  try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', g); } catch (_) { /* 隐私模式忽略 */ }
 }
 
 // ---------------- 屏3：对局 ----------------
@@ -1705,7 +1693,7 @@ function enterGame() {
   // 再异步拉服务端标注（含旧数据一次性迁移）。拉到后 updateSeats 刷新角标。
   state.anno = { rev: 0, seats: {}, loaded: false, available: false, gameId: state.game.gameId };
   state.annoUndo = null; // 换局不残留撤销快照
-  try { state.tags = JSON.parse(localStorage.getItem(`mww_tags_${state.game.gameId}`)) || {}; } catch (_) { state.tags = {}; }
+  try { state.tags = window.WWGameDraft.readTags(localStorage, 'mww_tags_', state.game.gameId); } catch (_) { state.tags = {}; }
   $('#m-flow').innerHTML = '';
   const mycard = $('#m-mycard');
   if (mycard) mycard.dataset.sig = ''; // 换局强制重画身份牌（sig 相同的旧局残影）
@@ -1743,19 +1731,15 @@ function setGameTab(name) {
 }
 
 function startPolling() {
-  stopPolling();
-  if (startStream()) return; // 优先 SSE 推送
-  startPollFallback();
+  // M1：停旧 → 建推送 → 否则退回轮询 的顺序判断收在共享模块（两端原本逐字相同的四行）
+  window.WWConnectionState.startConnection({ stopPolling, startStream, startFallback: startPollFallback });
 }
 function startPollFallback() {
-  if (state.pollTimer) return;
-  state.pollTimer = setInterval(poll, 1200);
+  if (!window.WWConnectionState.beginFallback(state, poll)) return; // 已在轮询：不叠定时器（与原来同义）
   poll();
 }
 function stopPolling() {
-  if (state.pollTimer) clearInterval(state.pollTimer);
-  state.pollTimer = null;
-  stopStream();
+  window.WWConnectionState.stopConnection(state, ['stream']);
 }
 
 /**
@@ -1765,31 +1749,25 @@ function stopPolling() {
  * 旧值 8s 小于一个心跳周期，正常空闲必误降级；40s = 2 个心跳 + 余量，轮询兜底不受影响）。
  */
 function startStream() {
-  if (typeof window === 'undefined' || !window.EventSource) return false;
+  if (!window.WWConnectionState.canStream(state)) return false; // 不支持 SSE / 没有对局（两端原本逐字相同的三行）
   const g = state.game;
-  if (!g || !g.gameId) return false;
   try {
-    const es = new EventSource(`/api/games/${g.gameId}/stream?token=${g.playerToken || g.godToken}&after=${state.playerAfter || 0}`);
-    state.stream = { es };
+    state.stream = window.WWConnectionState.openStream({
+      kind: 'player',
+      url: window.WWConnectionState.streamUrl(g.gameId, g.playerToken || g.godToken, state.playerAfter || 0),
+      onActivity: () => { state.lastStreamAt = Date.now(); },
+      onFrame: (kind, v) => applyView(v),
+      onEnd: () => { stopStream(); poll(); },
+      onError: () => { stopStream(); appendSys('⚠ 推送中断，已切换为轮询'); startPollFallback(); },
+    });
     state.lastStreamAt = Date.now();
-    es.addEventListener('view', (ev) => {
-      state.lastStreamAt = Date.now();
-      let v;
-      try { v = JSON.parse(ev.data); } catch (_) { return; }
-      applyView(v);
-    });
-    es.addEventListener('ping', () => { state.lastStreamAt = Date.now(); });
-    es.addEventListener('end', () => { stopStream(); poll(); });
-    es.addEventListener('error', () => {
-      if (es.readyState === 2) { stopStream(); appendSys('⚠ 推送中断，已切换为轮询'); startPollFallback(); }
-    });
     state.streamWatchdog = setInterval(() => {
-      if (!state.stream) return;
-      if (Date.now() - (state.lastStreamAt || 0) > 40000) {
+      // M1：判空那一跳收进共享模块；阈值（本端 40s）与降级动作仍留在本端
+      window.WWConnectionState.watchdogTick(state, () => Date.now() - (state.lastStreamAt || 0) > 40000, () => {
         stopStream();
         appendSys('⚠ 推送无响应，已切换为轮询');
         startPollFallback();
-      }
+      });
     }, 8000);
     return true;
   } catch (_) {
@@ -1799,16 +1777,14 @@ function startStream() {
 }
 
 function stopStream() {
-  if (state.stream && state.stream.es) { try { state.stream.es.close(); } catch (_) { /* ignore */ } }
-  state.stream = null;
-  if (state.streamWatchdog) { clearInterval(state.streamWatchdog); state.streamWatchdog = null; }
+  window.WWConnectionState.stopStreams(state, ['stream']);
 }
 
 async function poll() {
   const g = state.game;
   if (!g) return;
   try {
-    const v = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken || g.godToken}&after=${state.playerAfter}`);
+    const v = await api('GET', window.WWConnectionState.viewUrl(g.gameId, g.playerToken || g.godToken, state.playerAfter));
     applyView(v);
   } catch (e) { appendSys(`⚠ 拉取失败：${e.message}`); }
 }
@@ -1964,7 +1940,7 @@ async function resumePausedGame() {
   try {
     const r = await api('POST', `/api/games/${g.gameId}/resume`, { token: g.playerToken || g.godToken });
     state.game = { ...g, gameId: r.gameId, playerToken: r.playerToken, godToken: r.godToken };
-    localStorage.setItem('mww_current', JSON.stringify(state.game)); // 本端句柄 key 是 mww_current（曾误写 ww_current，恢复后句柄丢失）
+    window.WWGameDraft.writeHandle(localStorage, 'mww_current', state.game); // 本端句柄 key 是 mww_current（曾误写 ww_current，恢复后句柄丢失）
     state.playerAfter = 0;
     $('#m-flow').innerHTML = '';
     const box = $('#m-paused-banner');
@@ -2444,7 +2420,7 @@ async function initAnnotations() {
   // mergeLegacyTags 返回 { fill, pending }：pending 是候选/备注都放不下的座位 ——
   // 保留在本地 key 里待确认并弹提示，绝不静默丢弃，也绝不靠截断原备注腾位置。
   let legacy = null;
-  try { legacy = JSON.parse(localStorage.getItem(`mww_tags_${gid}`)) || null; } catch (_) {}
+  try { legacy = window.WWGameDraft.readLegacyTags(localStorage, 'mww_tags_', gid); } catch (_) {}
   if (legacy && Object.keys(legacy).length) {
     let migrated = false;
     try {
@@ -2462,11 +2438,11 @@ async function initAnnotations() {
       state.anno.seats = seats;
       if (Object.keys(pending).length) {
         // 待确认：本地 key 只保留未解决的座位，下次迁移仍会尝试
-        try { localStorage.setItem(`mww_tags_${gid}`, JSON.stringify(pending)); } catch (_) {}
+        try { window.WWGameDraft.writeTags(localStorage, 'mww_tags_', gid, pending); } catch (_) {}
         state.tags = pending;
         openLegacyPendingPrompt(pending);
       } else {
-        localStorage.removeItem(`mww_tags_${gid}`); // 全部落盘确认后才清理
+        window.WWGameDraft.clearTags(localStorage, 'mww_tags_', gid); // 全部落盘确认后才清理
         state.tags = {};
       }
       migrated = true;
@@ -2517,8 +2493,8 @@ function openLegacyPendingPrompt(pending) {
     drop.addEventListener('click', () => {
       delete pending[seat];
       try {
-        if (Object.keys(pending).length) localStorage.setItem(`mww_tags_${state.game.gameId}`, JSON.stringify(pending));
-        else localStorage.removeItem(`mww_tags_${state.game.gameId}`);
+        if (Object.keys(pending).length) window.WWGameDraft.writeTags(localStorage, 'mww_tags_', state.game.gameId, pending);
+        else window.WWGameDraft.clearTags(localStorage, 'mww_tags_', state.game.gameId);
       } catch (_) {}
       closeModalTop();
       if (Object.keys(pending).length) openLegacyPendingPrompt(pending);
@@ -2813,7 +2789,7 @@ function openLegacyTagModal(seat) {
   openModal(wrap);
 }
 
-function saveTags() { try { localStorage.setItem(`mww_tags_${state.game.gameId}`, JSON.stringify(state.tags)); } catch (_) {} }
+function saveTags() { try { window.WWGameDraft.writeTags(localStorage, 'mww_tags_', state.game.gameId, state.tags); } catch (_) {} }
 function openModal(inner) {
   const root = $('#m-modal');
   const wasOpen = overlayAlive('modal'); // 弹窗换弹窗（齿轮→设置/确认）：同一层换内容，返回深度不变
@@ -2917,7 +2893,7 @@ function updateActionbar(v) {
       : '现在轮不到你操作。轮到你会在这里出现输入框或技能键。'));
     if (v.finished) {
       keys.appendChild(keyEl('📊 查看本局总结', 'on', () => openSummarySheet()));
-      keys.appendChild(keyEl('🏠 回到首页', '', () => { localStorage.removeItem('mww_current'); location.reload(); }));
+      keys.appendChild(keyEl('🏠 回到首页', '', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }));
       // 结算后自动弹一次总结（用户反馈"手机端结束后什么都没有"）；只弹一次，关掉不再打扰
       if (state.summaryShownFor !== state.game.gameId) {
         state.summaryShownFor = state.game.gameId;
