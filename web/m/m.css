@@ -30,6 +30,26 @@ html, body { height: 100%; overscroll-behavior: none; }
 /* 处理中：保持宽度（不用更短的文案把按钮缩掉），吞掉点击避免双击双提交的观感 */
 #m-app .m-busy { pointer-events: none; opacity: var(--state-loading-opacity); }
 
+/* M1 / §3 行75（手机常用触区至少 48×48、主要确认按钮高 52）：#m-app 之外还有三个同级容器 ——
+   翻牌页 #m-flip、贴底弹层 #m-sheet、中部弹窗 #m-modal（index.html:209 闭合 #m-app，
+   :211 / :213 / :215 才是这三个容器的起点）。上面 #m-app .btn 那组兜底够不到它们，
+   所以每个容器就地建立同形下限 —— 这是**建立下限**，不是"压住别的东西"的补丁：
+   成对写完以后，每个容器里声明 min-height 的规则只有这一对，没有和谁比优先级。
+   令牌必须用全局的 --h-touch-min / --h-touch-main：--hctl-m / --hctl-main-m 是 :12-13
+   在 #m-app 作用域里定义的别名，容器外解析不到（会退化成 undefined）。
+   #m-sheet 里原有的两条窄兜底（.pm-ops .btn / .pm-trash-entry，:616 / :620）值同为 48，保留不动。 */
+.flip-tools .btn { min-height: var(--h-touch-min); }              /* 翻牌页常用触区（🔍 检视）实测 44 → 48 */
+.flip-tools .btn.primary { min-height: var(--h-touch-main); }     /* 翻牌页主确认（开始游戏）实测 44 → 52 */
+#m-sheet .btn { min-height: var(--h-touch-min); }                 /* 弹层按钮（头部 ✕、档案 选用/编辑/…）实测 40 → 48 */
+#m-sheet .btn.primary { min-height: var(--h-touch-main); }        /* 弹层主确认（保存笔记/保存/创建/切回并恢复）实测 48 → 52 */
+#m-modal .btn { min-height: var(--h-touch-min); }                 /* 中部弹窗按钮（齿轮菜单关闭/设置/结束本局/总结）实测 40 → 48 */
+#m-modal .btn.primary { min-height: var(--h-touch-main); }        /* 中部弹窗主确认（保存/继续对局）实测 44 → 52 */
+/* 齿轮菜单/对局内设置菜单的条目（openGear / openSettingsModal 都走 openModal → #m-modal）。
+   它们是 <button class="gear-item">，不带 .btn，上面那条够不到；style.css:1803 的 .gear-item
+   只给 padding/边框/底色、**没有 min-height**（实测塌到 45px）。
+   这条是 .gear-item 在移动端唯一声明 min-height 的规则 —— 建立下限，不是压优先级。 */
+#m-modal .gear-item { min-height: var(--h-touch-min); }           /* 菜单条目 实测 45 → 48 */
+
 .m-head {
   padding: calc(env(safe-area-inset-top, 0px) + var(--sp-3)) var(--sp-4) var(--sp-3);
   border-bottom: 1px solid var(--gold-dim);
@@ -579,7 +599,8 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: var(--sp-3) var(--sp-4); }
 .m-sheet-foot { flex: none; padding: var(--sp-2) var(--sp-4) var(--sp-3); border-top: 1px solid var(--gold-dim); background: var(--ink-800); }
 .m-sheet-foot .btnrow { margin: 0; flex-wrap: nowrap; }
-.m-sheet-foot .btn { flex: 1 1 0; min-height: var(--h-touch-min); justify-content: center; }
+/* §3 行81：这里的 min-height 已被上面 #m-sheet .btn（同容器、同值 48）取代，故只留排布声明 */
+.m-sheet-foot .btn { flex: 1 1 0; justify-content: center; }
 .m-sheet h4 { margin: var(--sp-2) 0 var(--sp-1); color: var(--gold); font-size: var(--fs-md); letter-spacing: 1px; }
 
 /* 弹层内表单：镜像 style.css 的 .modal .mbody 控件样式（style.css 不许动，只能在这里补） */

@@ -205,14 +205,26 @@ const TOUCH_WIRING = [
   ['web/m/m.css', '#m-app .btn.primary, #m-app .btn.big', '--h-touch-main', 52],
   ['web/m/m.css', '.m-keys .key', '--h-touch-min', 48],
   ['web/m/m.css', '.m-keys .key[data-confirm]', '--h-touch-main', 52],
-  // M1 手机触区收口（计划书 §3 行75）：下面 4 条是实测真的 <48 的触区，且各自就是胜出规则。
+  // M1 手机触区收口（计划书 §3 行75）：下面 3 条是实测真的 <48 的触区，且各自就是胜出规则。
   // 另外 5 处（.key / .key.seat / .m-keys .btn / .m-dialog .btnrow .btn / .m-profile-row .btn）
   // 的收小声明已被上面 #m-app .btn / .m-keys .key 这类更高优先级的规则压住（实测已 48），
   // 生效规则已在本表内，故不重复接线（避免"钉住死规则"造成的假安心）。
-  ['web/m/m.css', '.m-sheet-foot .btn', '--h-touch-min', 48],
+  // .m-sheet-foot .btn 原先也在这张表里；它的 min-height 已被 #m-sheet .btn 取代并删除（§3 行81），
+  // 触区下限由下面 #m-sheet .btn 那条守卫直接守住，故不再保留指向已删声明的接线。
   ['web/m/m.css', '.cdx-pager button', '--h-touch-min', 48],
   ['web/m/m.css', '.m-tabs .m-tab-btn', '--h-touch-min', 48],
   ['web/m/m.css', '.m-to-bottom', '--h-touch-min', 48],
+  // M1 第二组（#m-app 之外的三个同级容器：翻牌页 / 贴底弹层 / 中部弹窗）：
+  // 实测这些容器的按钮只有 40/44（#m-app .btn 那组兜底够不到），各自就地建立下限后的接线。
+  // 用全局令牌 --h-touch-min(48) / --h-touch-main(52)；--hctl-m 是 #m-app 作用域别名，容器外解析不到。
+  // 每条都是所在容器里**胜出**的那条（成对写：容器 .btn + 容器 .btn.primary）。
+  ['web/m/m.css', '.flip-tools .btn', '--h-touch-min', 48],
+  ['web/m/m.css', '.flip-tools .btn.primary', '--h-touch-main', 52],
+  ['web/m/m.css', '#m-sheet .btn', '--h-touch-min', 48],
+  ['web/m/m.css', '#m-sheet .btn.primary', '--h-touch-main', 52],
+  ['web/m/m.css', '#m-modal .btn', '--h-touch-min', 48],
+  ['web/m/m.css', '#m-modal .btn.primary', '--h-touch-main', 52],
+  ['web/m/m.css', '#m-modal .gear-item', '--h-touch-min', 48],
 ];
 
 /** 取某个选择器的规则体（行首 `sel {` 起、按大括号配对收；允许缩进，@media 里的规则也能取到） */
