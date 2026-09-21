@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const vm = require('node:vm');
-const { cacheControlFor, etagOf, looksLikeAsset, serveStatic } = require('../src/static');
+const { cacheControlFor, etagOf, looksLikeAsset, serveStatic, ICON_MAX_AGE } = require('../src/static');
 
 const WEB = path.join(__dirname, '..', 'web');
 const read = (p) => fs.readFileSync(path.join(WEB, p), 'utf8');
@@ -184,13 +184,20 @@ test('样式：离线横幅/更新提示/跳转链接都有样式，且尊重"�
 
 // ---------- 静态服务（真实 HTTP） ----------
 
-test('静态服务：缓存策略——sw.js 绝不缓存，资源长缓存', () => {
+test('静态服务：缓存策略——sw.js 绝不缓存，图标族短缓存可失效，字体长缓存', () => {
   assert.strictEqual(cacheControlFor('.js', 'sw.js'), 'no-cache', 'sw.js 必须 no-cache，否则更新永远收不到');
   for (const [ext, base] of [['.html', 'index.html'], ['.js', 'app.js'], ['.css', 'style.css'], ['.webmanifest', 'manifest.webmanifest']]) {
     assert.strictEqual(cacheControlFor(ext, base), 'no-cache', `${base} 需要每次校验（配合 ETag）`);
   }
-  assert.match(cacheControlFor('.png', 'icon-512.png'), /max-age=\d+/, '图标等不变资源应长缓存');
-  assert.match(cacheControlFor('.svg', 'icon.svg'), /max-age=\d+/);
+  // FIX-13：图标/品牌图的 URL **不版本化**（HTML 改写只覆盖 .js/.css），长缓存会让"换了图标用户看不到"。
+  // 策略改为短 max-age + must-revalidate：过期必须回源，ETag 变了就 200 拿到新图。
+  for (const [ext, base] of [['.png', 'icon-512.png'], ['.svg', 'icon.svg'], ['.ico', 'favicon.ico']]) {
+    assert.strictEqual(
+      cacheControlFor(ext, base), `public, max-age=${ICON_MAX_AGE}, must-revalidate`,
+      `${base} 必须可失效（URL 不版本化，只能靠短缓存 + 协商校验）`,
+    );
+  }
+  assert.strictEqual(cacheControlFor('.woff2', 'font.woff2'), 'public, max-age=86400', '字体等其余资源仍长缓存');
 });
 
 test('静态服务：有扩展名的路径缺失时 404，只有"路由"才回落 SPA', () => {
@@ -221,10 +228,10 @@ test('静态服务（真实请求）：MIME、缓存头、ETag 304、缺失资�
     const mf = await get('/manifest.webmanifest');
     assert.strictEqual(mf.headers.get('content-type'), 'application/manifest+json; charset=utf-8');
 
-    // 图标：长缓存
+    // 图标：FIX-13 短缓存 + 强制回源（URL 不版本化，长缓存会让新图标看不到）
     const icon = await get('/assets/icon-192.png');
     assert.strictEqual(icon.status, 200);
-    assert.match(icon.headers.get('cache-control'), /max-age=\d+/);
+    assert.strictEqual(icon.headers.get('cache-control'), `public, max-age=${ICON_MAX_AGE}, must-revalidate`);
 
     // ETag 协商：带 If-None-Match 必须 304
     const etag = sw.headers.get('etag');

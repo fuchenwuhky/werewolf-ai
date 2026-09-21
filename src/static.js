@@ -30,11 +30,28 @@ const MIME = {
 /** 需要每次校验新鲜度的类型：前端资源与清单（配合 ETag，改动立刻生效） */
 const NO_CACHE_EXT = new Set(['.html', '.js', '.css', '.webmanifest', '.json']);
 
+/**
+ * FIX-13：图标/位图这类资源**URL 不版本化**，不能给长缓存。
+ *
+ * 背景：`/favicon.ico`、`/assets/icon-192.png`、`/m/icon.svg` 的 URL 里没有内容指纹
+ * （HTML 改写只覆盖被引用的 .js/.css，图标引用散落在 HTML、manifest、CSS、SW 清单四处），
+ * 给 `max-age=86400` 就等于"换了图标，用户最长一天看不到新的"。
+ *
+ * 两个可选方向里选了后者（改动面小、不动前端契约）：
+ *   · 版本化 URL：更彻底，但要同时改 HTML/manifest/CSS/SW 的引用形态（前端契约改动，且
+ *     C08 用例明确钉住"非脚本资源不走 HTML 改写"的现状）；
+ *   · **缩短缓存 + 协商校验**：短 max-age + must-revalidate，过期后必须回源，
+ *     ETag（size+mtime）变了就 200 拿到新图 ⇒ 改动最长 ICON_MAX_AGE 秒后生效。
+ */
+const REVALIDATE_EXT = new Set(['.png', '.svg', '.ico']);
+const ICON_MAX_AGE = 300;
+
 /** 静态资源的 Cache-Control 值（导出以便单测直接断言策略，不必起服务） */
 function cacheControlFor(ext, basename) {
   if (basename === 'sw.js') return 'no-cache'; // service worker：绝不缓存，否则更新永远收不到
   if (NO_CACHE_EXT.has(ext)) return 'no-cache';
-  return 'public, max-age=86400'; // 图片/图标等不变资源
+  if (REVALIDATE_EXT.has(ext)) return `public, max-age=${ICON_MAX_AGE}, must-revalidate`; // FIX-13：图标类
+  return 'public, max-age=86400'; // 字体等其余资源
 }
 
 /** 弱 ETag：文件大小 + mtime，足够用于协商缓存（普通静态资源继续用它） */
@@ -154,7 +171,7 @@ function serveStatic(req, res, pathname, opts) {
 // FIN-01：_htmlCache 旧键只有 HTML mtime——只改 app.js 不改 HTML 时，
 // 缓存里的旧 `?v=` 哈希继续下发（C03 缺陷）。新键覆盖：源内容标识 +
 // 改写规则版本 + 每个被引用 JS/CSS 的内容版本；任一变化即重建。
-const _htmlCache = new Map(); // target -> { srcKey, deps: Map<path,ver>, out, etag }
+const _htmlCache = new Map(); // target -> { srcKey, deps: Map<path,{ver,size,mtimeMs}>, out, etag }
 
 /** 引用文件的版本号：内容 sha256 前 12 位；读不到返回 null（保持原样，不改写） */
 function assetVersionOf(fullPath) {
@@ -163,9 +180,23 @@ function assetVersionOf(fullPath) {
   } catch (_) { return null; }
 }
 
+/**
+ * FIX-13：依赖指纹 = 内容版本 + stat（size/mtimeMs）。
+ * 为什么必须带上 stat：depsUnchanged() 每次导航都要判断依赖有没有变，而旧实现只能**读全文算 sha256**
+ * （首页引用十几个 JS/CSS ⇒ 每次导航十几遍全量读盘）。有了 stat 才能先比 stat、只有 stat 变了才重读。
+ * @returns {{ver: string, size: number, mtimeMs: number}|null}
+ */
+function depFingerprintOf(fullPath) {
+  let stat = null;
+  try { stat = fs.statSync(fullPath); } catch (_) { return null; }
+  const ver = assetVersionOf(fullPath);
+  if (!ver) return null;
+  return { ver, size: stat.size, mtimeMs: stat.mtimeMs };
+}
+
 /** 解析 HTML 里的本地 .js/.css 引用（外部/内联引用原样保留）。
  *  相对引用（"m.js"、("../shared/a.js"）按 HTML 所在目录解析；根引用（"/style.css"）按站点根解析。
- *  @returns {{ out: string, deps: Map<string, string> }} deps: 绝对路径 → 内容版本 */
+ *  @returns {{ out: string, deps: Map<string, {ver: string, size: number, mtimeMs: number}> }} deps: 绝对路径 → 依赖指纹 */
 function renderHtmlDocument(html, baseDir, webDir) {
   const deps = new Map();
   const out = html.replace(/(src|href)="([^"#?]+?)\.(js|css)"/gi, (m, attr, ref, ext) => {
@@ -174,9 +205,9 @@ function renderHtmlDocument(html, baseDir, webDir) {
     const full = relFile.startsWith('/')
       ? path.join(webDir, relFile.slice(1))
       : path.resolve(baseDir, relFile);
-    const v = assetVersionOf(full);
-    if (v) deps.set(path.normalize(full), v);
-    return v ? `${attr}="${ref}.${ext}?v=${v}"` : m;
+    const fp = depFingerprintOf(full);
+    if (fp) deps.set(path.normalize(full), fp);
+    return fp ? `${attr}="${ref}.${ext}?v=${fp.ver}"` : m;
   });
   return { out, deps };
 }
@@ -186,12 +217,27 @@ function rewriteHtmlAssets(html, baseDir, webDir) {
   return renderHtmlDocument(html, baseDir, webDir).out;
 }
 
-/** 当前缓存键下的依赖是否都未变化（stat 快速路径：内容变化必然伴随 stat 变化；
- *  stat 未变即视为未变——键中已包含各依赖上次的内容版本，stat 变化才重读重哈希） */
+/**
+ * 当前缓存键下的依赖是否都未变化（FIX-13：stat 短路）。
+ *
+ * 旧实现（注释里写着"stat 快速路径"，代码里却只有读全文哈希）：
+ *   for (const [full, ver] of deps) { if (assetVersionOf(full) !== ver) return false; }
+ * 即**每次导航**对每个被引用的 JS/CSS 都 readFileSync + sha256；首页十几个依赖 = 十几遍全量读盘。
+ *
+ * 现在：
+ *   · stat 的 size+mtimeMs 都没动 ⇒ 直接判定未变（内容变**必然**伴随 stat 变），一次盘都不读；
+ *   · stat 变了才重读重哈希：哈希不同 ⇒ 需要重建（false）；哈希相同（touch/同内容重写）
+ *     ⇒ 把新 stat 记回指纹，避免下次导航又白读一次。
+ */
 function depsUnchanged(deps) {
-  for (const [full, ver] of deps) {
+  for (const [full, dep] of deps) {
+    let stat = null;
+    try { stat = fs.statSync(full); } catch (_) { return false; } // 依赖没了：必须重建
+    if (dep.size === stat.size && dep.mtimeMs === stat.mtimeMs) continue; // stat 短路
     const v = assetVersionOf(full);
-    if (v !== ver) return false;
+    if (!v || v !== dep.ver) return false;
+    dep.size = stat.size;
+    dep.mtimeMs = stat.mtimeMs;
   }
   return true;
 }
@@ -233,5 +279,7 @@ function _resetHtmlCache() { _htmlCache.clear(); }
 module.exports = {
   MIME, cacheControlFor, etagOf, contentEtag, looksLikeAsset, serveStatic,
   rewriteHtmlAssets, renderHtmlDocument, assetVersionOf, HTML_REWRITE_RULE_VERSION,
+  // FIX-13 测试钩子：直接断言"stat 未变就不读盘"的短路行为，不必起服务
+  depFingerprintOf, depsUnchanged, ICON_MAX_AGE, REVALIDATE_EXT,
   _resetHtmlCache,
 };

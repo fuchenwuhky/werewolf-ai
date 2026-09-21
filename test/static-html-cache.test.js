@@ -142,12 +142,14 @@ test('C07 表示稳定且引用完整：反复请求同值，版本化引用的�
   });
 });
 
-test('C08 非脚本资源（品牌 SVG）按既有策略长缓存、不走 HTML 改写（版本化范围如实）', async () => {
+test('C08 非脚本资源（品牌 SVG）不走 HTML 改写、靠缓存策略失效（版本化范围如实）', async () => {
   const web = makeWeb();
   await withServer(web, async ({ get }) => {
     const svg = await get('/assets/wolf-emblem.svg');
     assert.strictEqual(svg.status, 200);
-    assert.match(svg.headers.get('cache-control'), /max-age=\d+/, '品牌图属于不变资源 → 长缓存');
+    // FIX-13：SVG 不参与版本化改写 ⇒ 不能长缓存，改短 max-age + must-revalidate（过期回源、ETag 变了即换新）
+    assert.match(svg.headers.get('cache-control'), /max-age=\d+/, '品牌图仍带 max-age（具体策略见 static-cache-invalidation.test.js）');
+    assert.match(svg.headers.get('cache-control'), /must-revalidate/, '不版本化的资源必须强制回源校验，否则换了图用户看不到');
     const body = await (await get('/')).text();
     assert.match(body, /src="assets\/wolf-emblem\.svg"/, '<img> 引用保持原样（文档化行为）');
   });
