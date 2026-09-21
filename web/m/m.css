@@ -611,6 +611,9 @@ html, body { height: 100%; overscroll-behavior: none; }
    手机上档案管理按钮（选用/编辑/归档/导出/删除）是高频误触点，弹层内一律抬到 48px。 */
 #m-sheet .pm-ops .btn { min-height: 48px; padding: 0 14px; }
 #m-sheet .pm-row { align-items: center; }
+/* 回收区入口（FIX-04）：与上面那条同一触区约定（≥48px）。注意 #m-sheet 在 #m-app **之外**，
+   `#m-app .btn{min-height:48px}` 够不到它 —— 不在这里兜住，弹层里的按钮就只有 40px。 */
+#m-sheet .pm-trash-entry { min-height: 48px; padding: 0 14px; }
 
 /* 标注摘要角标（NOTE-04）：座位号下方一枚小金签。座位列只有 52px 宽：
    单行截断，全文点开座位看。真身公开后由角色 emoji 覆盖，不再渲染。 */

@@ -70,7 +70,9 @@ const PLANNED_SECTIONS = [
   '中英文切换',
   '离线',
   '离线能力',
+  '档案回收区（删除后可恢复）',
   '手机版',
+  '手机端档案回收区（390×844）',
   ...(FULL ? ['观战 Mock 局跑到终局（--full）'] : []),
   'P4-1 恢复卡片详情',
   'P4-4 终止后刷新',
@@ -478,6 +480,199 @@ class Browser {
     const sw = await b.eval(`(async () => { if(!navigator.serviceWorker) return 'unsupported'; const r = await navigator.serviceWorker.getRegistration(); return { registered: !!r, active: r?.active?.state }; })()`);
     check('service worker 注册并激活', sw && sw.registered === true && sw.active === 'activated', JSON.stringify(sw));
 
+    // ---- 5.5 档案回收区（FIX-04）：删除后的恢复入口必须真的存在、真的能点、真的能恢复 ----
+    // 「归档代替删除」以前删掉就找不回来（没有任何恢复入口）。这里用真档案走完整条路：
+    // 建 → 归档 → 删除 → 在回收区面板里点「恢复」→ 档案回到列表。
+    // 造数据走服务端 API（ui:check 的服务端是本机模式：不带 Origin 的 node 请求按管理会话放行），
+    // 但**点按钮、量高度、读提示**一律走真实浏览器。断言的强度要求：几何 + 服务端证据，不接受"文字在 DOM 里"。
+    log('\n=== 档案回收区（删除后可恢复）===');
+    {
+      const j = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let d = null;
+        try { d = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: d };
+      };
+      // 建 → 归档 → 删除（删除只对已归档档案开放）
+      const mkTrashed = async (nickname) => {
+        const c = await j('POST', '/api/profiles', { nickname });
+        if (c.code !== 200) throw new Error(`建档案失败 ${nickname}：${JSON.stringify(c.body)}`);
+        const id = c.body.profile.id;
+        const a = await j('PATCH', `/api/profiles/${id}`, { expectedRevision: c.body.profile.revision, archive: true });
+        if (a.code !== 200) throw new Error(`归档失败：${JSON.stringify(a.body)}`);
+        const d = await j('DELETE', `/api/profiles/${id}`);
+        if (d.code !== 200) throw new Error(`删除失败：${JSON.stringify(d.body)}`);
+        return { id, archiveId: d.body.archiveId };
+      };
+
+      // 入口一：首页「管理档案…」（可见尺寸 + 真实鼠标点击，走命中测试）
+      const entry = await b.eval(`(() => {
+        const e = document.getElementById('btn-profiles-entry');
+        if (!e) return null;
+        const r = e.getBoundingClientRect();
+        return { w: Math.round(r.width), h: Math.round(r.height), text: e.textContent.trim() };
+      })()`);
+      check('档案管理入口可见（真实尺寸非 0）', !!entry && entry.w > 0 && entry.h > 0, JSON.stringify(entry));
+      await b.realClick('#btn-profiles-entry');
+      await sleep(600);
+      // 入口二：弹层里的回收区按钮
+      const entryBtn = await b.eval(`(() => {
+        const e = document.getElementById('pm-trash-entry');
+        if (!e) return null;
+        const r = e.getBoundingClientRect();
+        const cs = getComputedStyle(e);
+        return { w: Math.round(r.width), h: Math.round(r.height), text: e.textContent.trim(),
+          visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' };
+      })()`);
+      check('档案管理弹层里有回收区入口且可点（尺寸非 0、非隐藏）', !!entryBtn && entryBtn.visible === true && entryBtn.h >= 20, JSON.stringify(entryBtn));
+
+      // 空态先测：ui:check 用的是全新临时数据目录，回收区此刻真的是空的。
+      // 空态必须是**有文案的面板**，不能是一块空白（"内容在、盒子 0 高"是本项目的真实事故）。
+      await b.realClick('#pm-trash-entry');
+      for (let i = 0; i < 40; i++) {
+        const st = await b.eval(`document.getElementById('pm-trash-list')?.dataset.state || ''`);
+        if (st === 'empty' || st === 'items' || st === 'error') break;
+        await sleep(150);
+      }
+      const emptyPanel = await b.eval(`(() => {
+        const modal = document.querySelector('#modal-root .modal');
+        const list = document.getElementById('pm-trash-list');
+        return {
+          modalH: modal ? Math.round(modal.getBoundingClientRect().height) : -1,
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1,
+          // 量的必须是**回收区面板**的高度：只写 modalH 的话，面板压根没打开时它会量到
+          // 后面那层档案管理弹层而照样通过（反向验证 A 实测到过这个洞）。
+          ownsList: !!(modal && list && modal.contains(list)),
+          state: list ? list.dataset.state : '',
+          rows: document.querySelectorAll('#pm-trash-list .pm-row').length,
+          text: (list?.querySelector('.hint') || {}).textContent || '',
+        };
+      })()`);
+      check('空回收区渲染明确空态文案（不是空白面板）',
+        emptyPanel.state === 'empty' && emptyPanel.rows === 0 && emptyPanel.text.length > 8, JSON.stringify({ state: emptyPanel.state, rows: emptyPanel.rows, text: emptyPanel.text.slice(0, 30) }));
+      check('空态下面板与列表容器仍有真实高度',
+        emptyPanel.modalH >= 120 && emptyPanel.listH >= 16 && emptyPanel.ownsList === true,
+        `面板高度=${emptyPanel.modalH}px 列表高度=${emptyPanel.listH}px 面板持有列表=${emptyPanel.ownsList}`);
+      await b.shot(path.join(SHOTS, '09-trash-empty.png'));
+
+      // 造两条"已删除"档案（建 → 归档 → 删除），再进回收区看列表项
+      await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => /返回档案列表/.test(x.textContent))?.click()`);
+      await sleep(400);
+      const first = await mkTrashed('回收区测试甲');
+      const second = await mkTrashed('回收区测试乙');
+      await b.realClick('#pm-trash-entry');
+      for (let i = 0; i < 40; i++) {
+        const st = await b.eval(`document.getElementById('pm-trash-list')?.dataset.state || ''`);
+        if (st === 'items' || st === 'error') break;
+        await sleep(150);
+      }
+      const panel = await b.eval(`(() => {
+        const modal = document.querySelector('#modal-root .modal');
+        const list = document.getElementById('pm-trash-list');
+        const rows = [...document.querySelectorAll('#pm-trash-list .pm-row')];
+        return {
+          modalH: modal ? Math.round(modal.getBoundingClientRect().height) : -1,
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1,
+          ownsList: !!(modal && list && modal.contains(list)),
+          state: list ? list.dataset.state : '',
+          rows: rows.length,
+          restoreBtns: document.querySelectorAll('#pm-trash-list .pm-restore').length,
+          names: rows.map((r) => (r.querySelector('.pm-name') || {}).textContent || ''),
+          metas: rows.map((r) => (r.querySelector('.hint') || {}).textContent || ''),
+        };
+      })()`);
+      // 几何断言：面板与列表都必须有真实高度 —— 文字在 DOM 里、盒子 0 高，玩家什么都看不到（本项目真实事故）
+      check('回收区面板有真实高度（不是塌成一条线）', panel.modalH >= 120 && panel.ownsList === true,
+        `面板高度=${panel.modalH}px 面板持有列表=${panel.ownsList}`);
+      check('回收区列表容器有真实高度（内容真的撑开了）', panel.listH >= 40, `列表高度=${panel.listH}px`);
+      check('回收区列出刚删除的档案（列表项真渲染）', panel.state === 'items' && panel.rows >= 2 && panel.restoreBtns === panel.rows,
+        JSON.stringify({ state: panel.state, rows: panel.rows, btns: panel.restoreBtns }));
+      check('回收区每项显示昵称 + 删除时间/状态', panel.names.includes('回收区测试甲')
+        && panel.metas.some((t) => /已删除/.test(t) && /删除于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(t)), JSON.stringify(panel.metas));
+      await b.shot(path.join(SHOTS, '09b-trash-list.png'));
+
+      // 恢复（真实鼠标点那一行的「恢复」）：提示、列表、服务端数据三者都要跟着变
+      await b.realClick(`#pm-trash-list .pm-restore[data-archive-id=${JSON.stringify(first.archiveId)}]`);
+      let okMsg = '';
+      for (let i = 0; i < 40; i++) {
+        okMsg = await b.eval(`document.getElementById('pm-trash-msg')?.textContent || ''`);
+        if (/已恢复|恢复失败/.test(okMsg)) break;
+        await sleep(150);
+      }
+      const afterOk = await b.eval(`(() => {
+        const list = document.getElementById('pm-trash-list');
+        const rows = [...document.querySelectorAll('#pm-trash-list .pm-row')];
+        return { state: list ? list.dataset.state : '', rows: rows.length,
+          ids: rows.map((r) => r.dataset.archiveId),
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1 };
+      })()`);
+      const restored = ((await j('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === first.id);
+      check('点「恢复」后给出可读成功提示（明确"可以直接使用"）',
+        /已恢复/.test(okMsg) && /回收区测试甲/.test(okMsg) && /可以直接使用/.test(okMsg), okMsg.slice(0, 70));
+      // FIX-04b：恢复一步到位（搬回目录 + 取消归档），archivedAt 必须已经是 null
+      check('点「恢复」后档案真的可用（服务端证据：archivedAt 已清空）',
+        !!restored && restored.archivedAt === null, JSON.stringify(restored || null));
+      // 「刷新了回收区列表」的可观测证据：该条从回收站**消失**（服务端 listTrash 只返回目录还在的条目），
+      // 而且不是靠前端隐藏 —— 前端不做任何过滤，渲染的就是接口返回的东西。
+      check('恢复后回收站里不再有该条（2 条刷成 1 条，且剩下的不是它）',
+        afterOk.state === 'items' && afterOk.rows === 1
+        && !afterOk.ids.includes(first.archiveId) && afterOk.ids.includes(second.archiveId),
+        JSON.stringify({ rows: afterOk.rows, ids: afterOk.ids, listH: afterOk.listH }));
+      await b.shot(path.join(SHOTS, '09c-trash-restored.png'));
+
+      // 返回档案列表：恢复出来的档案必须出现在列表里且已是可用态（证明 loadProfiles 真跑了）
+      await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => /返回档案列表/.test(x.textContent))?.click()`);
+      await sleep(500);
+      const backList = await b.eval(`[...document.querySelectorAll('#modal-root .pm-row')].map((r) => ({ name: (r.querySelector('.pm-name') || {}).textContent || '', archived: r.classList.contains('archived') }))`);
+      check('恢复后的档案出现在档案列表（列表已刷新）', backList.some((r) => r.name.includes('回收区测试甲')), JSON.stringify(backList.map((r) => r.name)));
+      check('恢复回来的档案在列表里是可用态（不再带"已归档"）',
+        backList.some((r) => r.name.includes('回收区测试甲') && !r.archived), JSON.stringify(backList.filter((r) => r.name.includes('回收区测试甲'))));
+
+      // 失败路径（不静默）：回收区目录消失后再点「恢复」→ 服务端 404 → 面板必须给出可读原因。
+      // 场景就是"另一个窗口已经把它恢复了"：那条随即从回收站消失，但本窗口手里还捏着一个可点的按钮。
+      await b.realClick('#pm-trash-entry');
+      for (let i = 0; i < 40; i++) {
+        if (await b.eval(`document.getElementById('pm-trash-list')?.dataset.state || ''`) === 'items') break;
+        await sleep(150);
+      }
+      fs.rmSync(path.join(DIR, 'profiles', 'trash', second.archiveId), { recursive: true, force: true });
+      await b.realClick(`#pm-trash-list .pm-restore[data-archive-id=${JSON.stringify(second.archiveId)}]`);
+      let failMsg = '';
+      for (let i = 0; i < 40; i++) {
+        failMsg = await b.eval(`document.getElementById('pm-trash-msg')?.textContent || ''`);
+        if (/恢复失败/.test(failMsg)) break;
+        await sleep(150);
+      }
+      const afterFail = await b.eval(`(() => {
+        const list = document.getElementById('pm-trash-list');
+        return { state: list ? list.dataset.state : '', rows: document.querySelectorAll('#pm-trash-list .pm-row').length,
+          text: (list?.querySelector('.hint') || {}).textContent || '',
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1 };
+      })()`);
+      check('恢复失败给出可读原因（不静默失败）', /恢复失败/.test(failMsg) && /找不到|已恢复/.test(failMsg), failMsg.slice(0, 80));
+      check('恢复失败后列表跟着回到真实状态（空态文案 + 面板没塌）',
+        afterFail.state === 'empty' && afterFail.rows === 0 && afterFail.text.length > 8 && afterFail.listH >= 16, JSON.stringify(afterFail));
+      check('恢复失败按 400/404/409 都能翻成人话',
+        await b.eval(`(() => {
+          const t = [restoreFailReason({ status: 400, message: '非法 archiveId' }),
+            restoreFailReason({ status: 404, message: '回收区没有该档案' }),
+            restoreFailReason({ status: 409, message: '档案位置已被占用，无法恢复（可能上次恢复未清理）' })];
+          return t.every((x) => typeof x === 'string' && x.length > 6) && new Set(t).size === 3;
+        })()`));
+      await b.shot(path.join(SHOTS, '09d-trash-after-fail.png'));
+
+      // 收尾：✕ 回档案列表 → 关弹层，别把模态留给后面的段落
+      await b.eval(`document.querySelector('#modal-root .mhead .btn')?.click()`);
+      await sleep(400);
+      check('回收区面板 ✕ 返回档案列表', await b.eval(`!!document.getElementById('pm-trash-entry')`));
+      await b.eval(`closeModal()`);
+      await sleep(200);
+    }
+
     // ---- 6. 手机版 ----
     log('\n=== 手机版 ===');
     await b.setViewport(390, 844, true);
@@ -581,6 +776,136 @@ class Browser {
     await b.click('#m-codex-back');
     await sleep(400);
     check('手机版图鉴：返回回到板子页', await b.eval(`[...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id).join(',')`) === 'm-boards');
+
+    // ---- 6.5 手机端档案回收区（FIX-04，390×844）：与桌面端同一能力，同样只认几何 + 真实点击 ----
+    // 手机端档案管理走**底部弹层**（openSheet → #m-sheet / .m-sheet + .m-sheet-body），不是 #m-modal/.mbody；
+    // 这台设备上弹层塌成"一条线"出过真实事故，所以这里量真实高度，而不是"文字在不在 DOM 里"。
+    log('\n=== 手机端档案回收区（390×844）===');
+    {
+      const j = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let d = null;
+        try { d = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: d };
+      };
+      const del = async (nickname) => {
+        const c = await j('POST', '/api/profiles', { nickname });
+        if (c.code !== 200) throw new Error(`建档案失败：${JSON.stringify(c.body)}`);
+        const id = c.body.profile.id;
+        const a = await j('PATCH', `/api/profiles/${id}`, { expectedRevision: c.body.profile.revision, archive: true });
+        const d = await j('DELETE', `/api/profiles/${id}`);
+        if (a.code !== 200 || d.code !== 200) throw new Error(`归档/删除失败：${JSON.stringify({ a: a.body, d: d.body })}`);
+        return { id, archiveId: d.body.archiveId };
+      };
+      // 清掉桌面段落留下的回收区残渣（服务端恢复成功后会清墓碑；这里兜一层，让手机段落状态可判定）
+      fs.rmSync(path.join(DIR, 'profiles', 'trash'), { recursive: true, force: true });
+
+      await b.realClick('#m-profile-chip');
+      await sleep(700);
+      const mEntry = await b.eval(`(() => {
+        const e = document.getElementById('m-pm-trash-entry');
+        if (!e) return null;
+        const r = e.getBoundingClientRect();
+        const cs = getComputedStyle(e);
+        return { w: Math.round(r.width), h: Math.round(r.height), text: e.textContent.trim(),
+          visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' };
+      })()`);
+      check('手机端：档案管理弹层里有回收区入口且可点（≥44px 触区、非隐藏）', !!mEntry && mEntry.visible === true && mEntry.h >= 44, JSON.stringify(mEntry));
+
+      // 空态先测（此刻回收区真的是空的）
+      await b.realClick('#m-pm-trash-entry');
+      for (let i = 0; i < 40; i++) {
+        const st = await b.eval(`document.getElementById('m-pm-trash-list')?.dataset.state || ''`);
+        if (st === 'empty' || st === 'items' || st === 'error') break;
+        await sleep(150);
+      }
+      const mEmpty = await b.eval(`(() => {
+        const sheet = document.querySelector('#m-sheet .m-sheet');
+        const list = document.getElementById('m-pm-trash-list');
+        return { sheetH: sheet ? Math.round(sheet.getBoundingClientRect().height) : -1,
+          ownsList: !!(sheet && list && sheet.contains(list)),
+          state: list ? list.dataset.state : '', rows: document.querySelectorAll('#m-pm-trash-list .pm-row').length,
+          text: (list?.querySelector('.hint') || {}).textContent || '' };
+      })()`);
+      check('手机端回收区：空态有明确文案（不是空白面板）',
+        mEmpty.state === 'empty' && mEmpty.rows === 0 && mEmpty.text.length > 8, JSON.stringify({ state: mEmpty.state, text: mEmpty.text.slice(0, 30) }));
+      check('手机端回收区：空态下弹层仍有真实高度', mEmpty.sheetH >= 120 && mEmpty.ownsList === true,
+        `弹层高度=${mEmpty.sheetH}px 弹层持有列表=${mEmpty.ownsList}`);
+
+      // 返回列表 → 造一条真的"已删除"档案 → 再进回收区
+      await b.eval(`[...document.querySelectorAll('#m-sheet .btn')].find((x) => /返回档案列表/.test(x.textContent))?.click()`);
+      await sleep(500);
+      const rec = await del('手机回收区丙');
+      await b.realClick('#m-pm-trash-entry');
+      for (let i = 0; i < 40; i++) {
+        const st = await b.eval(`document.getElementById('m-pm-trash-list')?.dataset.state || ''`);
+        if (st === 'items' || st === 'error') break;
+        await sleep(150);
+      }
+      const mPanel = await b.eval(`(() => {
+        const sheet = document.querySelector('#m-sheet .m-sheet');
+        const bodyEl = document.querySelector('#m-sheet .m-sheet-body');
+        const list = document.getElementById('m-pm-trash-list');
+        const rows = [...document.querySelectorAll('#m-pm-trash-list .pm-row')];
+        return {
+          sheetH: sheet ? Math.round(sheet.getBoundingClientRect().height) : -1,
+          bodyH: bodyEl ? Math.round(bodyEl.getBoundingClientRect().height) : -1,
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1,
+          ownsList: !!(sheet && list && sheet.contains(list)),
+          state: list ? list.dataset.state : '',
+          rows: rows.length,
+          name: (rows[0]?.querySelector('.pm-name') || {}).textContent || '',
+          meta: (rows[0]?.querySelector('.hint') || {}).textContent || '',
+          nestedModal: document.querySelectorAll('#m-sheet .modal').length,
+          vpH: window.innerHeight,
+        };
+      })()`);
+      check('手机端回收区：弹层有真实高度（不是塌成一条线）',
+        mPanel.sheetH >= 120 && mPanel.sheetH <= mPanel.vpH && mPanel.ownsList === true,
+        `弹层高度=${mPanel.sheetH}px（视口 ${mPanel.vpH}px）弹层持有列表=${mPanel.ownsList}`);
+      check('手机端回收区：正文与列表容器都有真实高度',
+        mPanel.bodyH >= 60 && mPanel.listH >= 40 && mPanel.nestedModal === 0, `正文=${mPanel.bodyH}px 列表=${mPanel.listH}px`);
+      check('手机端回收区：列出被删除的档案（昵称 + 删除时间，内容真渲染）',
+        mPanel.state === 'items' && mPanel.rows === 1 && mPanel.name.includes('手机回收区丙') && /删除于 \d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(mPanel.meta),
+        JSON.stringify({ state: mPanel.state, rows: mPanel.rows, name: mPanel.name, meta: mPanel.meta }));
+      await b.shot(path.join(SHOTS, '06e-mobile-profile-trash.png'));
+
+      await b.realClick(`#m-pm-trash-list .pm-restore[data-archive-id=${JSON.stringify(rec.archiveId)}]`);
+      let mMsg = '';
+      for (let i = 0; i < 40; i++) {
+        mMsg = await b.eval(`document.getElementById('m-pm-trash-msg')?.textContent || ''`);
+        if (/已恢复|恢复失败/.test(mMsg)) break;
+        await sleep(150);
+      }
+      const mAfter = await b.eval(`(() => {
+        const list = document.getElementById('m-pm-trash-list');
+        return { state: list ? list.dataset.state : '', rows: document.querySelectorAll('#m-pm-trash-list .pm-row').length,
+          ids: [...document.querySelectorAll('#m-pm-trash-list .pm-row')].map((r) => r.dataset.archiveId),
+          text: (list?.querySelector('.hint') || {}).textContent || '',
+          listH: list ? Math.round(list.getBoundingClientRect().height) : -1 };
+      })()`);
+      const mRestored = ((await j('GET', '/api/profiles')).body.profiles || []).find((x) => x.id === rec.id);
+      check('手机端回收区：恢复成功给出可读提示（含"可以直接使用"）',
+        /已恢复/.test(mMsg) && /手机回收区丙/.test(mMsg) && /可以直接使用/.test(mMsg), mMsg.slice(0, 70));
+      check('手机端回收区：恢复后该条从回收站消失（回到空态且空态文案非空）',
+        mAfter.state === 'empty' && mAfter.rows === 0 && !mAfter.ids.includes(rec.archiveId)
+        && mAfter.text.length > 8 && mAfter.listH >= 16, JSON.stringify(mAfter));
+      check('手机端回收区：恢复后档案立即可用（服务端证据：archivedAt 已清空）',
+        !!mRestored && mRestored.archivedAt === null, JSON.stringify(mRestored || null));
+
+      await b.eval(`[...document.querySelectorAll('#m-sheet .btn')].find((x) => /返回档案列表/.test(x.textContent))?.click()`);
+      await sleep(600);
+      const mBack = await b.eval(`[...document.querySelectorAll('#m-sheet .pm-row')].map((r) => ({ name: (r.querySelector('.pm-name') || {}).textContent || '', archived: r.classList.contains('archived') }))`);
+      check('手机端回收区：恢复后的档案出现在档案列表且是可用态',
+        mBack.some((r) => r.name.includes('手机回收区丙') && !r.archived), JSON.stringify(mBack));
+      await b.eval(`document.querySelector('#m-sheet .m-sheet-head .btn')?.click()`); // 关掉底部弹层，别留给后续段落
+      await sleep(400);
+      check('手机端回收区：弹层可关闭', await b.eval(`document.querySelectorAll('#m-sheet > *').length`) === 0);
+    }
 
     // ---- 7. 完整对局（观战 + Mock，无需人类作答）----
     if (FULL) {

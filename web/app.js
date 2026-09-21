@@ -1177,7 +1177,19 @@ function openProfileManager() {
   const imp = el('button', 'btn ghost', '📥 导入档案包');
   imp.addEventListener('click', () => openProfileImport());
   btnrow.appendChild(imp);
+  // 回收区入口（FIX-04）：「删除＝归档代替删除」以前删掉就找不回来，这里是唯一的恢复入口。
+  const trashBtn = el('button', 'btn ghost', '🗑 回收站');
+  trashBtn.id = 'pm-trash-entry';
+  trashBtn.addEventListener('click', openProfileTrash);
+  btnrow.appendChild(trashBtn);
   body.appendChild(btnrow);
+  // 计数异步补：失败不静默（标签直接写"读取失败"、title 给出原因），也不影响档案管理本身可用。
+  api('GET', '/api/profiles/trash').then((r) => {
+    trashBtn.textContent = `🗑 回收站（${((r && r.items) || []).length}）`;
+  }).catch((e) => {
+    trashBtn.textContent = '🗑 回收站（读取失败）';
+    trashBtn.title = (e && e.message) || '回收区不可用';
+  });
   body.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。能读本地文件或管理本服务的人就能看到所有档案。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
   wrap.append(head, body);
   openModal(wrap);
@@ -1267,6 +1279,141 @@ function openProfileImport() {
     } catch (e) { alert(`导入失败：${e.message}`); }
   });
   inp.click();
+}
+
+// ---------------- 回收区（FIX-04）：删除后的恢复入口 ----------------
+// 背景：删除是「归档代替删除」——目录搬进回收区、数据不丢，但此前**没有任何恢复入口**，
+// 删掉就找不回来。服务端补齐了 GET /api/profiles/trash 与 POST /api/profiles/trash/<id>/restore，
+// 这里是最小可用入口（桌面端 / 手机端各一份同源实现，字段与文案保持一致）。
+const TRASH_STATE_LABEL = { trashed: '已删除', failed: '删除未完成（数据仍在回收区）' };
+
+/** 回收区条目状态文案：未知状态如实回显，不假装正常 */
+const trashStateLabel = (s) => TRASH_STATE_LABEL[s] || `状态未知（${s || '?'}）`;
+
+/** 删除时间：只取到分钟；解析不了就说"未知"，不渲染 Invalid Date */
+function formatTrashTime(iso) {
+  const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  return m ? `删除于 ${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : '删除时间未知';
+}
+
+/**
+ * 回收区条目的一行说明：状态 + 删除时间 +（目录已不在时）为什么点不了。
+ * `restorable=false` 是**兜底**：服务端的 listTrash() 只返回目录还在的条目（恢复成功的墓碑不再返回），
+ * 所以正常路径不会走到这里；万一收到，如实标注原因 —— 既不假装它还能恢复，也不偷偷藏起来。
+ */
+function trashMetaText(it) {
+  const base = `${trashStateLabel(it.state)} · ${formatTrashTime(it.trashedAt)}`;
+  return it.restorable ? base : `${base} · 数据目录已不在回收区，无法恢复`;
+}
+
+/**
+ * 恢复失败的可读原因（400 非法 archiveId / 404 回收区没有该档案 / 409 目标位置被占用）。
+ * 这个项目刚因为"空刀被拒没有可读提示"被记为已知缺口 F5 —— 这里不允许静默失败：
+ * 三种错误码都要翻成"发生了什么"，让用户知道下一步该做什么。
+ */
+function restoreFailReason(e) {
+  const raw = (e && e.message) || '未知错误';
+  if (e && e.status === 404) return `回收区里已经找不到这条记录（${raw}）；可能是另一个窗口先恢复了，列表已刷新`;
+  if (e && e.status === 409) return `目标档案位置已被占用，恢复已中止以免覆盖数据（${raw}）`;
+  if (e && e.status === 400) return `请求被拒绝（${raw}）`;
+  return raw;
+}
+
+/**
+ * 渲染回收区列表。只负责列表容器；msgEl 仅在**读取失败或首次进入**时写入 ——
+ * 恢复成功/失败的提示由调用方写，刷新列表时不能被冲掉（否则又是一次"静默"）。
+ */
+async function renderProfileTrash(listEl, msgEl) {
+  const message = (text, color) => { if (msgEl) { msgEl.textContent = text; msgEl.style.color = color || ''; } };
+  listEl.textContent = '';
+  listEl.dataset.state = 'loading';
+  listEl.appendChild(elText('p', 'hint', '正在读取回收区…'));
+  message('');
+  let items = [];
+  try {
+    items = ((await api('GET', '/api/profiles/trash')) || {}).items || [];
+  } catch (e) {
+    listEl.textContent = '';
+    listEl.dataset.state = 'error';
+    // 读取失败也必须说出来：空面板会被误读成"回收区是空的"（等于骗用户数据没了）
+    listEl.appendChild(elText('p', 'hint', `回收区读取失败：${(e && e.message) || '未知错误'}`));
+    return;
+  }
+  listEl.textContent = '';
+  listEl.dataset.state = items.length ? 'items' : 'empty';
+  if (!items.length) {
+    listEl.appendChild(elText('p', 'hint', '回收区是空的。在档案列表里点「删除…」的档案会移到这里，数据不会丢，随时可以搬回来。'));
+    return;
+  }
+  for (const it of items) {
+    const row = el('div', 'pm-row' + (it.restorable ? '' : ' archived'));
+    row.dataset.archiveId = it.archiveId;
+    const main = el('div', 'pm-main');
+    main.appendChild(elText('div', 'pm-name', it.nickname || '（昵称已丢失）'));
+    main.appendChild(elText('div', 'hint', trashMetaText(it)));
+    row.appendChild(main);
+    const ops = el('div', 'pm-ops');
+    const btn = el('button', 'btn small pm-restore', it.restorable ? '恢复' : '不可恢复');
+    btn.dataset.archiveId = it.archiveId;
+    if (it.restorable) {
+      btn.addEventListener('click', () => doRestoreProfile(it, btn, listEl, msgEl));
+    } else {
+      // 目录已不在（已恢复过 / 上次删除失败被对账搬回）：如实说明为什么点不了，不给一个点了没反应的按钮
+      btn.disabled = true;
+      btn.title = '回收区里已经没有该档案目录，无法恢复';
+    }
+    ops.appendChild(btn);
+    row.appendChild(ops);
+    listEl.appendChild(row);
+  }
+}
+
+/**
+ * 点「恢复」：调恢复路由 → 成功后刷新档案列表 + 回收区列表并给可读提示；失败给可读原因（绝不静默）。
+ * 服务端 FIX-04b：恢复**一步到位** —— 搬回目录的同时取消归档（响应带 unarchived）。
+ * 所以这里恢复完即可用，前端不需要、也不应该再补一次 PATCH restore（那是多余的第二次写）。
+ */
+async function doRestoreProfile(it, btn, listEl, msgEl) {
+  const message = (text, color) => { if (msgEl) { msgEl.textContent = text; msgEl.style.color = color || ''; } };
+  btn.disabled = true;
+  message(`正在恢复「${it.nickname || '档案'}」…`);
+  try {
+    const r = await api('POST', `/api/profiles/trash/${encodeURIComponent(it.archiveId)}/restore`);
+    await loadProfiles(); // 档案列表刷新：恢复后的档案已经是可用态（archivedAt=null，可直接开局）
+    await renderProfileTrash(listEl, null); // 只刷列表，保住下面这条成功提示
+    const nick = (r && r.profile && r.profile.nickname) || it.nickname || '档案';
+    message(`✓ 已恢复「${nick}」：档案已回到列表并可以直接使用（战绩、笔记、经验池都在）。`, '#8ee08e');
+  } catch (e) {
+    message(`✗ 恢复失败：${restoreFailReason(e)}`, '#ff8080');
+    await renderProfileTrash(listEl, null); // 404（别处已恢复）等情形下让列表回到真实状态
+  }
+}
+
+/** 回收区面板：列出被删除（进回收区）的档案，每项带「恢复」 */
+function openProfileTrash() {
+  const wrap = el('div');
+  const head = el('div', 'mhead', '<h2>🗑 回收站</h2>');
+  const close = el('button', 'btn ghost small', '✕');
+  close.addEventListener('click', () => { closeModal(); openProfileManager(); });
+  head.appendChild(close);
+  const body = el('div', 'mbody');
+  body.appendChild(el('p', 'hint', '删除档案只是把它移进回收区，战绩、笔记与经验池都还在。点「恢复」即可一步搬回档案列表，恢复后立刻可用。'));
+  const msg = el('p', 'hint');
+  msg.id = 'pm-trash-msg';
+  msg.setAttribute('role', 'status');
+  body.appendChild(msg);
+  const list = el('div', 'pm-list');
+  list.id = 'pm-trash-list';
+  list.dataset.state = 'loading';
+  body.appendChild(list);
+  const backRow = el('div', 'btnrow');
+  const back = el('button', 'btn ghost', '← 返回档案列表');
+  back.addEventListener('click', () => { closeModal(); openProfileManager(); });
+  backRow.appendChild(back);
+  body.appendChild(backRow);
+  wrap.append(head, body);
+  openModal(wrap);
+  renderProfileTrash(list, msg);
 }
 
 // ---------------- 游戏页 ----------------
