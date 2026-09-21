@@ -807,9 +807,11 @@ test('分支：view 的玩家/上帝双令牌、pruneGames 不回收运行中局
   const dropped = api.pruneGames({ ttlMs: 30 * 60 * 1000 });
   assert.ok(api.games.has(gid), '运行中的局必须跳过清理');
   entry.running = false;
-  api.pruneGames({ ttlMs: 30 * 60 * 1000 });
+  // ⚠ 这里必须接收本次调用的返回值：第一次调用时局还在 running（被跳过，返回 0），
+  // 若沿用上面那个 dropped，断言永远看的是 0（验收时收紧断言才发现这个测试自身的问题）。
+  const dropped2 = api.pruneGames({ ttlMs: 30 * 60 * 1000 });
   api.games.delete(gid);
-  assert.ok(dropped >= 0);
+  assert.ok(dropped2 >= 1, `过期且非运行中的局应被清理（实际清理 ${dropped2} 个）`);
 });
 
 test('分支角落：畸形 Origin 解析失败、坏 Cookie、本机模式下 pair 报错', async () => {

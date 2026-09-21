@@ -139,7 +139,8 @@ test('档案路由：创建/列表/PATCH 409/stats/games/annotations/删除 全�
   const del = await call(api, 'DELETE', `/api/profiles/${pid}`);
   assert.strictEqual(del.status, 200, `删除应成功：${JSON.stringify(del.body)}`);
   const gone = await call(api, 'GET', `/api/profiles/${pid}/stats`);
-  assert.ok(gone.status === 404 || gone.status === 500, `已删除档案的 stats 不应 200（实际 ${gone.status}）`);
+  // 验收收紧：原先写 404 || 500，路由崩成 500 也算通过 —— 那恰好放过了最该拦的错误路径。只认 404。
+  assert.strictEqual(gone.status, 404, `已删除档案的 stats 应 404（实际 ${gone.status}）`);
 });
 
 test('导入路由：preview 校验坏包 400 / 合法包返回预览；apply 落地档案与对局', async () => {
@@ -183,7 +184,7 @@ test('导出路由：不存在的档案 id 返回 404/500 语义，绝不 200', 
     const miss = await call(api, 'GET', '/api/profiles/00000000-0000-4000-8000-000000000000/export');
     // 语义上应是 404；当前实现 profileExport 的 catch 吞掉 NotFoundError.code 固定回 500
     // （与"删除后 stats"用例同一容断言口径：404 或 500 都不算回归，但绝不能 200）
-    assert.ok(miss.status === 404 || miss.status === 500, `不存在的档案导出不应 200（实际 ${miss.status}）`);
+    assert.strictEqual(miss.status, 404, `不存在的档案导出应 404（实际 ${miss.status}）`);
     assert.ok(miss.body && miss.body.error, '错误响应必须带 error 说明');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
@@ -306,7 +307,7 @@ test('档案管理链：归档→列表可见→恢复→再归档→删除→st
     assert.strictEqual(del1.status, 200, `删除失败：${JSON.stringify(del1.body)}`);
     assert.ok(del1.body.ok === true && del1.body.archiveId, '删除返回 ok 与回收区 archiveId');
     const gone1 = await call(api, 'GET', `/api/profiles/${pid1}/stats`);
-    assert.ok(gone1.status === 404 || gone1.status === 500, `已删除档案的 stats 不应 200（实际 ${gone1.status}）`);
+    assert.strictEqual(gone1.status, 404, `已删除档案的 stats 应 404（实际 ${gone1.status}）`);
 
     // 链路②：把可用档案压到只剩 pid2 → 归档被拒；未归档删除被拒；补一份档案后放行
     const arDef = await call(api, 'PATCH', `/api/profiles/${def.id}`, { archive: true });
@@ -324,7 +325,7 @@ test('档案管理链：归档→列表可见→恢复→再归档→删除→st
     const del2 = await call(api, 'DELETE', `/api/profiles/${pid2}`);
     assert.strictEqual(del2.status, 200, `删除失败：${JSON.stringify(del2.body)}`);
     const gone2 = await call(api, 'GET', `/api/profiles/${pid2}/stats`);
-    assert.ok(gone2.status === 404 || gone2.status === 500, `已删除档案的 stats 不应 200（实际 ${gone2.status}）`);
+    assert.strictEqual(gone2.status, 404, `已删除档案的 stats 应 404（实际 ${gone2.status}）`);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
