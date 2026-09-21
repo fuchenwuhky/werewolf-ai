@@ -176,6 +176,7 @@ const PLANNED_SECTIONS = [
   'P4-3 空刀拦截（真实点击）',
   'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
+  '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
   '浏览器控制台',
 ];
 
@@ -691,6 +692,22 @@ class Browser {
     checkGeometry('FIX-17 设置页：复选框可见且中心点命中它自己（上面那次真实点击点的就是这里）', cacheProbe, { minW: 12, minH: 12 });
     const startProbe = await b.probe('#btn-start', { scroll: true });
     checkGeometry('FIX-17 设置页：开始游戏按钮可见、非零尺寸、中心点未被遮挡', startProbe, { minW: 120, minH: 40 });
+
+    // ---- 计划书第 83 行：桌面端「玩家中心」代表截图（1440×900）----
+    // 位置有讲究：必须在这个时刻取。稍后一开局，桌面端会**异步自动进入对局屏**并把 #screen-setup 整个隐藏，
+    // 到那时再探只会拿到 w=0/h=0 —— 实测到的形态正是"等待表达式成立（当时确有宽度）→ 紧接着 probe 归零"，
+    // 换选择器治不了（诊断已确认当时 screen=screen-game、隐藏祖先是 #screen-setup 本身）。
+    // 元素出处：首屏 #home-hero 内的 #home-profile / #home-avatar / #home-nick（web/index.html:107/111/112/114）。
+    {
+      await waitExpr('第 83 行 1440×900：桌面端首屏当前档案卡已渲染（截图前置条件）', `(() => { const s = document.getElementById('screen-setup'); const p = document.getElementById('home-profile'); const a = document.getElementById('home-avatar'); const rp = p ? p.getBoundingClientRect() : null; const ra = a ? a.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!rp && rp.width > 100 && rp.height > 20 && !!ra && ra.width > 0, profileW: rp ? Math.round(rp.width) : -1, profileH: rp ? Math.round(rp.height) : -1, avatarW: ra ? Math.round(ra.width) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const dProf = await b.probe('#home-profile');
+      checkGeometry('第 83 行 1440×900：桌面端玩家中心（当前档案卡 #home-profile）可见、非零尺寸', dProf, { minW: 100, minH: 20, requireCenter: false, requireHitSelf: false });
+      const dAvatar = await b.probe('#home-avatar');
+      checkGeometry('第 83 行 1440×900：当前档案头像可见、非零尺寸（M1 自定义头像的展示位）', dAvatar, { minW: 16, minH: 16 });
+      const dNick = await b.probe('#home-nick');
+      checkGeometry('第 83 行 1440×900：当前档案昵称可见、中心点未被遮挡', dNick, { minW: 24, minH: 12 });
+      await b.shot(path.join(SHOTS, '18-1440x900-desktop-profile.png'));
+    }
 
     // 设置页下半（板子编辑器 / 玩家昵称 / 底部操作条）在 1440×900 里落在首屏之外，
     // 而这几张卡恰好是改动最频繁的部分 —— 滚到底单独留一张。
@@ -2393,7 +2410,58 @@ class Browser {
       check('手机端总结：得分构成每行都有内容（不许渲染成空行）', sumDet.header && sumDet.rows.length > 0 && sumDet.blank === 0, JSON.stringify(sumDet).slice(0, 120));
       await b.shot(path.join(SHOTS, '13c-mobile-summary.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
+
+      // ---- 计划书第 83 行：320×568 小屏的"局中"检查 ----
+      // 此刻手机端正停在对局屏，做这一档不需要额外开一局（这也是把它放在这里的原因）。
+      // 判据沿用 FIX-17 那四条（宽高 > 0 / 中心点在视口内 / elementFromPoint 命中自己或子孙）；
+      // 时序一律条件等待，不用固定 sleep。
+      await b.setViewport(320, 568, true);
+      await waitCheck('第 83 行 320×568：手机端局中已按新视口重排（截图前置条件）', async () => await b.eval(
+        `(() => { const g = document.getElementById('m-game'); const r = (g && !g.classList.contains('hidden')) ? g.getBoundingClientRect() : null; return { ok: !!r && r.width >= 300 && r.height >= 480, hidden: g ? g.classList.contains('hidden') : null, w: r ? Math.round(r.width) : -1, h: r ? Math.round(r.height) : -1 }; })()`), { timeout: 5000, interval: 100 });
+      const game320 = await b.probe('#m-game');
+      checkGeometry('第 83 行 320×568：手机端局中本体可见、非零尺寸、与视口相交', game320, { minW: 300, minH: 480, requireCenter: false, requireHitSelf: false });
+      const sw320 = await b.eval('document.documentElement.scrollWidth');
+      check('第 83 行 320×568：局中在 320 宽下没有横向溢出', sw320 <= 321, `scrollWidth=${sw320}`);
+      await b.shot(path.join(SHOTS, '14-320x568-mobile-game.png'));
+
       await b.setViewport(1280, 900, false);
+    }
+
+    // ---- 计划书第 83 行：截图矩阵 —— 补 320×568 小屏与"玩家中心"两档代表截图 ----
+    // 开工前核对过现状：1440×900 / 390×844 的首页与局中**已经**有截图，缺的是 320×568 全部与玩家中心两档。
+    // 页面归属全部按真实 id（不猜，逐处都有出处）：
+    //   手机首页 = #m-boards（web/m/index.html:50）、手机首页上的档案头像 = #m-profile-avatar（:61）、
+    //   手机玩家中心 = #m-profile-chip（:60）点开的底部弹层 #m-sheet / .m-sheet-body（web/m/m.js:379 接线、
+    //   :1084-1095 建层）、手机局中 = #m-game（:160，上面那段已覆盖 320×568）；
+    //   桌面首页第一屏 = #screen-setup 的 #home-hero（web/index.html:107），
+    //   桌面玩家中心 = 同一屏的 #home-profile / #home-avatar / #home-nick（:111/:112/:114）。
+    log('\n=== 截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）===');
+    {
+      await b.goto(base + '/m/', 0);
+      await b.setViewport(320, 568, true);
+      await waitExpr('截图矩阵：手机端首页已渲染（320×568）', `(() => { const s = document.getElementById('m-boards'); const a = document.getElementById('m-profile-avatar'); const rs = s ? s.getBoundingClientRect() : null; const ra = a ? a.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!rs && rs.width >= 300 && rs.height >= 300 && !!ra && ra.width > 0, hidden: s ? s.classList.contains('hidden') : null, w: rs ? Math.round(rs.width) : -1, h: rs ? Math.round(rs.height) : -1, avatarW: ra ? Math.round(ra.width) : -1 }; })()`, { timeout: 15000, interval: 150 });
+      const mHome320 = await b.probe('#m-boards');
+      checkGeometry('第 83 行 320×568：手机端首页可见、非零尺寸', mHome320, { minW: 300, minH: 300, requireCenter: false, requireHitSelf: false });
+      const mAvatar320 = await b.probe('#m-profile-avatar');
+      checkGeometry('第 83 行 320×568：首页上的当前档案头像可见、非零尺寸（M1 自定义头像的展示位）', mAvatar320, { minW: 16, minH: 16 });
+      const mSw320 = await b.eval('document.documentElement.scrollWidth');
+      check('第 83 行 320×568：首页在 320 宽下没有横向溢出', mSw320 <= 321, `scrollWidth=${mSw320}`);
+      await b.shot(path.join(SHOTS, '15-320x568-mobile-home.png'));
+
+      // 玩家中心（手机端 = 首页档案 chip 点开的底部弹层）：用**真实点击**进入，再做几何判定
+      await b.realClick('#m-profile-chip');
+      await waitExpr('截图矩阵：手机端玩家中心弹层已展开（320×568）', `(() => { const root = document.getElementById('m-sheet'); const panel = root ? root.querySelector('.m-sheet') : null; const r = panel ? panel.getBoundingClientRect() : null; return { ok: !!panel && r.width > 200 && r.height > 100, panelW: r ? Math.round(r.width) : -1, panelH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const mSheet320 = await b.probe('#m-sheet .m-sheet');
+      checkGeometry('第 83 行 320×568：手机端玩家中心弹层可见、非零尺寸、中心点未被遮挡（上面那次真实点击点的就是它的入口 chip）', mSheet320, { minW: 200, minH: 100 });
+      const mSheetHead320 = await b.probe('#m-sheet .m-sheet-head');
+      checkGeometry('第 83 行 320×568：玩家中心弹层标题栏非零尺寸（不是塌成一条线）', mSheetHead320, { minW: 80, minH: 16, requireHitSelf: false });
+      await b.shot(path.join(SHOTS, '16-320x568-mobile-profile.png'));
+
+      await b.setViewport(390, 844, true);
+      await waitCheck('截图矩阵：切回 390×844 后玩家中心弹层仍是同一层（截图前置条件）', async () => await b.eval(
+        `(() => { const panel = document.querySelector('#m-sheet .m-sheet'); const r = panel ? panel.getBoundingClientRect() : null; return { ok: !!r && r.width > 200 && r.height > 100, panelW: r ? Math.round(r.width) : -1 }; })()`), { timeout: 5000, interval: 100 });
+      await b.shot(path.join(SHOTS, '17-390x844-mobile-profile.png'));
+
     }
 
     // ---- 8. 控制台必须干净 ----
