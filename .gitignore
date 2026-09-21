@@ -38,5 +38,8 @@ desktop/dist/
 # 系统
 .DS_Store
 Thumbs.db
-profiles/
-migrations/
+# 运行时数据目录（档案仓根与迁移目录）。**必须锚定到仓库根**：
+# 不锚定的 `profiles/` 会连同源码目录 `src/profiles/` 一起忽略 —— 已跟踪的文件不受影响，
+# 所以表面上一切正常，但**往 src/profiles/ 新增文件会被静默忽略、永远不会进提交**。
+/profiles/
+/migrations/
