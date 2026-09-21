@@ -1663,11 +1663,13 @@ test('断点恢复：锚点快照 + fromJSON 重建 + resume 继续运行', asyn
 test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接口续跑', async () => {
   const fs = require('fs');
   const path = require('path');
-  const os = require('os');
   const { Api } = require('../src/api');
-  // 整改（计划阶段 0）：存档目录注入临时目录 —— 不写正式 saves/，也根除并行测试
-  // 进程通过共享 saves/ 目录互相干扰导致的偶发失败。
-  const saveDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-resume-'));
+  // 独占 dataDir（saveDir = <dataDir>/saves）：原来 saveDir 直接落在 os.tmpdir()，会让 api.js 用
+  // dirname(saveDir) 推出**全机共享**的 <tmp>/profiles 与 <tmp>/migrations（并行测试 rename 竞态 +
+  // 垃圾堆积）；本用例虽只读共享根，但与其它文件进程争抢同一份 index.json 会互相拖累。
+  const dataDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'ww-resume-'));
+  const saveDir = path.join(dataDir, 'saves');
+  fs.mkdirSync(saveDir, { recursive: true });
   const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger, saveDir });
   const g = makeGame({ id: 'resume-api-test', humanSeat: null });
   assignRoles(g, { 1: 'wolf', 2: 'seer', 3: 'villager', 4: 'witch', 5: 'villager' });
@@ -1700,8 +1702,10 @@ test('API 断点恢复：存档含锚点、列表标记 resumable、resume 接�
     }
     assert.ok(api.games.get('resume-api-test').game.finished, '恢复对局应已结算');
   } finally {
-    fs.rmSync(saveFile, { force: true });
-    fs.rmSync(saveDir, { recursive: true, force: true });
+    // 先等构造期的档案迁移收尾（它仍会写 <dataDir>/profiles/index.json），再删独占根，
+    // 否则是"删目录 ↔ 迁移写文件"的竞态；刚写完的文件可能被杀软短暂占用，故按错误码有限退避重试。
+    const { terminateApi } = require('./helpers-tmpdir');
+    await terminateApi(api, dataDir);
   }
 });
 
