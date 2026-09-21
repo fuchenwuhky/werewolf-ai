@@ -266,12 +266,17 @@ test('静态服务：ETag 由大小与修改时间决定（可复现且随改动
 test('service worker：静态资源必须网络优先（缓存优先会让老用户无限期运行旧脚本，审核 P1-3）', () => {
   const src = read('sw.js');
   assert.match(src, /async function networkFirstAsset/, '必须存在网络优先的资源策略');
-  assert.match(src, /event\.respondWith\(networkFirstAsset\(req\)\)/, 'fetch 处理器必须对静态资源走 networkFirstAsset');
+  // 验收 P1：event 必须传进去（供 cache.put 挂 waitUntil，否则 SW 可能在写盘前被终止）
+  assert.match(src, /event\.respondWith\(networkFirstAsset\(req, event\)\)/, 'fetch 处理器必须对静态资源走 networkFirstAsset 并传入 event');
   assert.doesNotMatch(src, /cacheFirst/, '缓存优先实现必须删除（防回归）');
   // 网络失败必须回退缓存（离线还能看牌局），缓存也没有才抛错
   const fn = src.slice(src.indexOf('async function networkFirstAsset'));
   assert.match(fn, /catch \(_\)/, '网络失败必须被捕获');
   assert.match(fn, /cache\.match\(req\)/, '失败时回退缓存');
+  // 验收 P1：预缓存清单是无查询串 URL，而 HTML 里的 js/css 被改写成 ?v=<哈希>，
+  // 少了 ignoreSearch 兜底，预缓存条目永远命中不了（"装完 SW 还没联网就断网，脚本全 miss"）。
+  assert.match(fn, /cache\.match\(req, \{ ignoreSearch: true \}\)/, '离线兜底必须忽略查询串');
+  assert.match(fn, /event\.waitUntil\(cache\.put/, '资源落盘必须挂 waitUntil');
 });
 
 test('静态服务：HTML 引用的本地 js/css 必须带内容哈希版本 URL（复审 P1-2 升级安全）', async () => {
