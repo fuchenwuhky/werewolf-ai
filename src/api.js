@@ -28,6 +28,11 @@ const crypto = require('crypto');
 // CPU（构造次数）与延迟才是，所以这个方向是对的。
 const STREAM_TICK_MS = 500;
 const STREAM_PING_TICKS = 32; // ≈16s 一次心跳：足够让前端发现断线，也不浪费带宽
+/**
+ * 自定义头像的缓存策略（M1 §4.3「私有缓存」）：URL 带内容哈希 ⇒ 内容变了 URL 必变，
+ * 因此可长缓存；`private` 是因为它属于本机玩家的私人资料，不得被共享缓存留存。
+ */
+const AVATAR_CACHE_CONTROL = 'private, max-age=31536000, immutable';
 const { ROLES, BOARDS, validateBoard } = require('./engine/roles');
 const { DEFAULT_RULES, RULE_META, mergeRules } = require('./engine/rules');
 const { Game } = require('./engine/game');
@@ -48,9 +53,10 @@ const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require(
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
 const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
-const { ProfileStore, isValidId } = require('./profiles/store');
+const { ProfileStore, isValidId, avatarUrlOf } = require('./profiles/store');
 const { AnnotationStore, hasMeaningfulAnnotations } = require('./annotations/store');
 const { ProfileMigration, readLegacyExperienceOwner } = require('./profiles/migration');
+const { AVATAR_MIME, MAX_AVATAR_BYTES } = require('./profiles/avatar');
 const transfer = require('./profiles/transfer');
 const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('./tmp-files');
 
@@ -94,6 +100,30 @@ function keyBindingOf(cfg) {
   return crypto.createHash('sha256').update(
     [`${cfg.baseUrl || ''}`, String(cfg.apiKey || ''), (cfg.apiKeys || []).join('|')].join('§')
   ).digest('hex');
+}
+
+/**
+ * `X-Profile-Revision`（M1 §4.3）：头像三接口的乐观并发凭据，语义与 PATCH body 的
+ * `expectedRevision` 完全一致——**只有给了一个合法整数才是校验意图**；缺省不校验（与 PATCH 相同，
+ * 兼容"不知道 revision 的旧客户端"）。给了但不是整数则 400：静默忽略等于悄悄放弃并发保护。
+ */
+function parseProfileRevisionHeader(req) {
+  const raw = req.headers && req.headers['x-profile-revision'];
+  if (raw === undefined || raw === null || String(raw).trim() === '') return undefined;
+  const n = Number(String(raw).trim());
+  if (!Number.isInteger(n) || n < 0) {
+    throw Object.assign(new Error('X-Profile-Revision 必须是整数'), { code: 400 });
+  }
+  return n;
+}
+
+/** If-None-Match 是否命中给定 ETag（逗号分隔列表、`*` 均按 HTTP 语义处理） */
+function etagMatches(ifNoneMatch, etag) {
+  if (!ifNoneMatch || !etag) return false;
+  return String(ifNoneMatch).split(',').some((t) => {
+    const s = t.trim();
+    return s === '*' || s === etag || s === `W/${etag}`;
+  });
 }
 
 // ---------- 原子写的临时文件命名（FIX-12：判据唯一，见 src/tmp-files.js）----------
@@ -319,6 +349,41 @@ class Api {
     const e = this.games.get(id);
     if (e) e.lastAccess = Date.now();
     return e;
+  }
+
+  /**
+   * 读取**原始 PNG** 请求体（M1 §4.3 头像上传专用）。
+   *
+   * 与 readBody 的区别（不能复用）：readBody 只收 JSON/纯文本且会 JSON.parse，头像是二进制。
+   * 服务端不信任扩展名，也不信任客户端声明的类型 —— 这里只做两件它能做的事：
+   *   · `Content-Type` **精确**等于 `image/png`（带参数如 `image/png; charset=utf-8` 也拒绝，
+   *     §4.3 原文"精确为 image/png"；宁可 415 也不猜）；
+   *   · 0 < 长度 ≤ 2MiB（超限 413、空 body 400）；上限在**流式读取时**就生效，不会把超大 body 收进内存。
+   * PNG 结构/尺寸/色彩类型的判定不在这里，全部在 src/profiles/avatar.js（唯一判据）。
+   */
+  async readAvatarBody(req) {
+    const ctype = String((req.headers && req.headers['content-type']) || '').trim().toLowerCase();
+    if (ctype !== AVATAR_MIME) {
+      throw Object.assign(new Error(`Content-Type 必须是 ${AVATAR_MIME}`), { code: 415 });
+    }
+    return new Promise((resolve, reject) => {
+      let size = 0; const chunks = []; let over = false;
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > MAX_AVATAR_BYTES && !over) {
+          over = true; // 不 destroy 连接（与 readBody 同策略）：让 413 真正写回客户端
+          reject(Object.assign(new Error(`头像超过上限 ${MAX_AVATAR_BYTES / 1048576} MiB`), { code: 413 }));
+          return;
+        }
+        if (!over) chunks.push(c);
+      });
+      req.on('end', () => {
+        if (over) return; // 已因超限 reject
+        if (!size) return reject(Object.assign(new Error('头像数据为空（0 字节）'), { code: 400 }));
+        resolve(Buffer.concat(chunks));
+      });
+      req.on('error', reject);
+    });
   }
 
   /** 存档元数据：**不含 events**——事件流只在 anchor 里存一份（旧实现两边都存，46.5% 的体积是纯重复）。
@@ -881,6 +946,21 @@ class Api {
         if (method === 'PATCH') {
           if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
           return this.updateProfile(res, pid, await this.readBody(req));
+        }
+        // M1 §4.3 自定义头像三接口。⚠ 必须排在下面「任意 DELETE = 移入回收站」之前，
+        // 否则 DELETE /api/profiles/<id>/avatar 会被当成"删除整个档案"吃掉（与回收站路由同一类顺序陷阱）。
+        if (psub === 'avatar') {
+          if (method === 'GET') {
+            if (!mgmt) return this._denyManagement(res);
+            return this.getProfileAvatar(req, res, pid, query);
+          }
+          if (method === 'PUT' || method === 'DELETE') {
+            if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+            if (!this._rateAllow(req, 'profavatar', 20)) return this.json(res, 429, { error: '头像操作过于频繁，请稍后再试' });
+            return method === 'PUT'
+              ? this.putProfileAvatar(res, req, pid)
+              : this.deleteProfileAvatar(res, req, pid);
+          }
         }
         if (method === 'DELETE') {
           if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
@@ -1814,6 +1894,9 @@ class Api {
       // 与 GET /api/profiles 的摘要字段保持一致（不把内部存储细节泄漏成新契约）
       const summary = {
         id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, bio: prof.bio,
+        // M1 §4.2：恢复后前端拿到的摘要字段与 GET /api/profiles 完全一致（含自定义头像与取图 URL）
+        customAvatar: prof.customAvatar || null,
+        avatarUrl: avatarUrlOf(prof),
         preferences: prof.preferences || { fontScale: 1, layout: 'reading', reducedMotion: false },
         createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
         archivedAt: prof.archivedAt || null, lastUsedAt: prof.lastUsedAt || prof.updatedAt,
@@ -1823,6 +1906,70 @@ class Api {
     } catch (e) {
       return this.json(res, this.statusOf(e, 400), { error: e.message });
     }
+  }
+
+  // ---------- 自定义头像（M1 §4.3：三个窄接口）----------
+
+  /**
+   * `PUT /api/profiles/:id/avatar`：原始 PNG body（Content-Type 精确 image/png）+ `X-Profile-Revision`
+   * → `{ profile, avatarUrl }`。
+   *
+   * 落盘顺序与失败语义全部在 ProfileStore.setAvatar 里（先写图 → 校验 → 原子替换 → 再更新 profile.json）；
+   * 本方法只做 HTTP 层的事：读取并发凭据、读原始字节、把语义码原样透传。
+   */
+  async putProfileAvatar(res, req, pid) {
+    try {
+      const expectedRevision = parseProfileRevisionHeader(req);
+      const buffer = await this.readAvatarBody(req);
+      const out = await this.profiles.setAvatar(pid, buffer, { expectedRevision });
+      return this.json(res, 200, { profile: out.profile, avatarUrl: out.avatarUrl });
+    } catch (e) {
+      // 415（类型）/413（超限）/400（PNG 判定或 revision 非法）/404/409 原样透传；fs 字符串码 → 500
+      return this.json(res, this.statusOf(e, 400), { error: e.message });
+    }
+  }
+
+  /**
+   * `DELETE /api/profiles/:id/avatar`（+ `X-Profile-Revision`）→ `{ profile, avatarUrl: null }`。
+   * 语义是"改用内置头像"：档案的 `avatarId` 一个字节都不动，删除后前端按 avatarId 显示内置徽记
+   * （不回退成破图 —— 判据就是响应里的 avatarUrl 为 null、且 GET 该 URL 明确 404）。
+   */
+  async deleteProfileAvatar(res, req, pid) {
+    try {
+      const expectedRevision = parseProfileRevisionHeader(req);
+      const out = await this.profiles.clearAvatar(pid, { expectedRevision });
+      return this.json(res, 200, { profile: out.profile, avatarUrl: out.avatarUrl });
+    } catch (e) {
+      return this.json(res, this.statusOf(e, 400), { error: e.message });
+    }
+  }
+
+  /**
+   * `GET /api/profiles/:id/avatar?v=<sha256>`：PNG 字节 + **强 ETag**（内容哈希，无 W/ 前缀）+ 私有缓存。
+   *  · 只服务本机管理会话（路由层门禁，与其它档案 GET 一致）；
+   *  · 三重核对（档案有元数据 / 文件在 / 结构与哈希都对）见 ProfileStore.readAvatar：
+   *    404 = 没有该头像、文件缺失、URL 版本过期；500 = 文件损坏或与元数据不一致；
+   *  · **绝不返回 HTML 冒充图片**：任何失败都是 JSON 错误体，前端据此回落 `avatarId` 内置徽记。
+   */
+  getProfileAvatar(req, res, pid, query) {
+    let av;
+    try {
+      av = this.profiles.readAvatar(pid, { expectedSha: query.get('v') || null });
+    } catch (e) {
+      return this.json(res, this.statusOf(e, 404), { error: e.message });
+    }
+    if (etagMatches(req.headers && req.headers['if-none-match'], av.etag)) {
+      res.writeHead(304, { ETag: av.etag, 'Cache-Control': AVATAR_CACHE_CONTROL });
+      return void res.end();
+    }
+    res.writeHead(200, {
+      'Content-Type': av.mime,
+      'Content-Length': String(av.data.length),
+      ETag: av.etag, // 强 ETag：内容哈希，绝不用 W/ 弱标签
+      'Cache-Control': AVATAR_CACHE_CONTROL, // URL 已由内容哈希版本化 ⇒ 私有长缓存
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return void res.end(av.data);
   }
 
   importPreviewRes(pkg) {
@@ -1886,6 +2033,10 @@ class Api {
       // 任何一条不合法都在**写盘之前**整体拒绝。写入循环里的错误只剩真实 I/O 故障。
       const retry = await this._retryImportRecoveries(); // 先清理上一次失败的残留（若失败未清理完会保留记录）
       const checked = transfer.validateImportPackage(pkg);
+      // M1 §4.4：头像的 Base64/体积/PNG 结构/尺寸/哈希校验在 validateImportPackage 里已经做过一次；
+      // 这里再解一次只为拿到要写入的字节。**必须在 profiles.create 之前**：任何头像问题都不得
+      // 先建出一份档案再回滚（"校验失败不写盘"是整次导入的承诺）。
+      const avatarPayload = transfer.decodeAvatarPayload(checked.profile.customAvatar);
       const prof = await this.profiles.create({
         nickname: checked.profile.nickname + '（导入）',
         avatarId: checked.profile.avatarId || 'scholar',
@@ -1896,6 +2047,10 @@ class Api {
       const written = []; // 已 rename 成功的存档：回滚清单
       const tmps = [];    // 已写出的 .tmp-*（rename 失败时会残留）：同样必须回收（复审 P2-3）
       try {
+        // M1 §4.4：自定义头像落在**新档案目录**（prof.newId 由 create 生成的新 UUID），走与上传
+        // 完全相同的存储路径（tmp → 校验 → 原子 rename → 更新 profile.json）。这一步失败参与
+        // 下面整次导入的回滚（档案进回收站 + 已写存档/临时文件清理 + 恢复记录）。
+        if (avatarPayload) await this.profiles.setAvatar(prof.id, avatarPayload.data);
         const notes = checked.notes || {};
         let importedNotes = 0;
         for (const g of checked.games) {
@@ -2076,6 +2231,16 @@ class Api {
     try {
       const prof = this.profiles.get(pid);
       const games = transfer.collectExportableGames(this.saveDir, pid);
+      // M1 §4.4：导出前**重新读盘并重新计算哈希**与档案元数据核对（ProfileStore.readAvatar 内部三重核对）。
+      // 文件丢失、结构损坏或被换过 ⇒ 整次导出失败（500 + 指明头像问题），绝不静默导出一份看似完整的包。
+      let avatar = null;
+      if (prof.customAvatar) {
+        try {
+          avatar = this.profiles.readAvatar(pid);
+        } catch (e) {
+          return this.json(res, 500, { error: `导出失败：${e.message}` });
+        }
+      }
       const notes = {};
       for (const g of games) {
         try {
@@ -2086,7 +2251,7 @@ class Api {
           if (doc && hasMeaningfulAnnotations(doc)) notes[g.id] = doc;
         } catch (_) { /* 单局笔记读取失败不阻断导出 */ }
       }
-      const pkg = transfer.buildExportPackage({ profile: prof, games, notes, hostLabel: '本机导出' });
+      const pkg = transfer.buildExportPackage({ profile: prof, games, notes, hostLabel: '本机导出', avatar });
       const body = JSON.stringify(pkg, null, 2);
       if (Buffer.byteLength(body) > transfer.MAX_BYTES) {
         return this.json(res, 413, { error: `导出包超过上限（${Math.round(transfer.MAX_BYTES / 1048576)} MiB），请减少可导出对局后重试` });

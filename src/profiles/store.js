@@ -20,6 +20,9 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { STALE_TMP_MS, tmpPathFor, cleanupStaleTmp } = require('../tmp-files');
+const {
+  AVATAR_FILE, AVATAR_MIME, AVATAR_VERSION, prepareAvatar, validateAvatarBuffer,
+} = require('./avatar');
 
 const SCHEMA_VERSION = 1;
 const MAX_NICKNAME = 20;
@@ -57,6 +60,21 @@ function cleanAvatar(raw) {
   if (!s) return 'scholar';
   if (!AVATARS.includes(s)) throw new ValidationError(`未知头像：${s}`);
   return s;
+}
+
+/**
+ * 自定义头像的取图 URL（§4.3）：**内容哈希版本化**，改了头像 URL 必变，缓存不可能串味。
+ * 没有自定义头像 → null（前端按 avatarId 显示内置徽记；"不回退成破图"的判据就是这个 null）。
+ */
+function avatarUrlOf(prof) {
+  const ca = prof && prof.customAvatar;
+  if (!ca || !ca.sha256) return null;
+  return `/api/profiles/${prof.id}/avatar?v=${ca.sha256}`;
+}
+
+/** 读文件，不存在返回 null（区分"没有旧文件"与"读失败"由调用方决定） */
+function readFileOrNull(file) {
+  try { return fs.readFileSync(file); } catch (e) { if (e && e.code === 'ENOENT') return null; throw e; }
 }
 
 class ProfileStore {
@@ -175,6 +193,9 @@ class ProfileStore {
       if (!includeArchived && prof.archivedAt) continue;
       out.push({
         id: prof.id, nickname: prof.nickname, avatarId: prof.avatarId, bio: prof.bio,
+        // M1 §4.2：自定义头像元数据随档案摘要一起下发（旧档案没有该字段 → null，前端按 avatarId 工作）
+        customAvatar: prof.customAvatar || null,
+        avatarUrl: avatarUrlOf(prof),
         preferences: prof.preferences || { fontScale: 1, layout: 'reading', reducedMotion: false },
         createdAt: prof.createdAt, updatedAt: prof.updatedAt, revision: prof.revision,
         archivedAt: prof.archivedAt || null,
@@ -280,6 +301,165 @@ class ProfileStore {
     if (row) { row.nickname = prof.nickname; row.avatarId = prof.avatarId; row.archivedAt = prof.archivedAt || null; row.updatedAt = now; }
     await this._writeIndex(idx);
     return prof;
+  }
+
+  // ---------- 自定义头像（M1 §4.2/§4.3）----------
+
+  /**
+   * 自定义头像的二进制落点：profiles/<profileId>/avatar.png（§4.2 固定的**唯一**路径）。
+   * 顺带做 profileId 白名单校验（profileDir 内），非法 id 在碰盘之前就抛 400。
+   */
+  avatarFile(id) { return path.join(this.profileDir(id), AVATAR_FILE); }
+
+  /**
+   * 保存自定义头像（§4.2 写入顺序：**先写图片，再更新 profile.json**；任一步失败保留旧文件与旧元数据）。
+   *
+   * 完整步骤与每一步失败的后果：
+   *   ① 预校验（体积/签名/结构/尺寸/色彩类型）——失败：一个字节都没写；
+   *   ② 同目录临时文件（src/tmp-files.js 的 tmpPathFor，启动清理据此识别）写入最终字节；
+   *   ③ **读回临时文件**逐字节比对并重算哈希——磁盘上真正落下的东西才是可信的（"校验完成后原子替换"）；
+   *   ④ rename → avatar.png（同目录 rename，原子替换）；
+   *   ⑤ 更新 profile.json 的 customAvatar（走 _atomicWrite，tmp→rename）。
+   *
+   * ④之后⑤之前失败（元数据没写成）必须把图片**回滚成旧字节**，否则"新图片 + 旧元数据"会让
+   * GET/导出按旧哈希读新图（可检测，但用户看到的是莫名其妙的坏头像）。旧字节 ≤2MiB，留在内存里回滚，
+   * 不额外产生需要清理的中间文件。
+   *
+   * 进程在④与⑤之间被杀是唯一的不可恢复窗口：磁盘上留下"新图片 + 旧元数据"。
+   * 这一状态**不静默**——GET 与导出都按元数据哈希核对文件，核对失败会明确报错走 avatarId 兜底。
+   *
+   * @returns {Promise<{profile: object, avatarUrl: string}>}
+   */
+  async setAvatar(id, buffer, { expectedRevision } = {}) {
+    return this._serialize(() => this._setAvatarInner(id, buffer, { expectedRevision }));
+  }
+
+  async _setAvatarInner(id, buffer, { expectedRevision } = {}) {
+    const file = this.avatarFile(id); // 非法 id → ValidationError（不碰盘）
+    const prof = this.get(id);        // 不存在 → NotFoundError
+    if (prof.archivedAt) throw new ValidationError('已归档档案需先恢复才能编辑');
+    this._checkRevision(prof, expectedRevision);
+    const prepared = prepareAvatar(buffer); // ①（含 SHA-256：先算哈希再落盘）
+    const oldBytes = readFileOrNull(file);  // 回滚用旧字节（不存在 → null）
+    const tmp = tmpPathFor(file);
+    let replaced = false;
+    try {
+      await fs.promises.writeFile(tmp, prepared.data);                          // ②
+      const onDisk = await fs.promises.readFile(tmp);                           // ③
+      // ③ 校验的是**从磁盘读回来的字节**（不是内存里那份 buffer）：结构再过一遍，并与内存校验
+      //    得到的哈希逐位比对 —— 内容被篡改、只写了一半、写到了别处，都会在这里被抓住，随后才允许
+      //    原子替换（④）。刻意**只保留这一条判据**：早先同时写了 `onDisk.equals(prepared.data)`
+      //    与这行哈希比对，而"字节相等"成立时哈希必然相等 ⇒ 哈希那行是**永远不可达的死分支**
+      //    （对它注入 if(false) 全绿，等于没有断言）。现在两条语义合成一条可被测试钉住的判据。
+      let verified;
+      try {
+        verified = validateAvatarBuffer(onDisk);
+      } catch (e) {
+        throw new Error(`头像落盘校验失败：临时文件读回后结构不合法（${e.message}）`);
+      }
+      if (verified.sha256 !== prepared.sha256) {
+        throw new Error('头像落盘校验失败：临时文件读回的字节与校验通过的字节不一致（SHA-256 不符）');
+      }
+      await fs.promises.rename(tmp, file);                                      // ④
+      replaced = true;
+      prof.customAvatar = {
+        version: AVATAR_VERSION, mime: AVATAR_MIME,
+        bytes: prepared.bytes, sha256: prepared.sha256,
+        updatedAt: new Date().toISOString(),
+      };
+      prof.revision += 1;
+      prof.updatedAt = prof.customAvatar.updatedAt;
+      await this._atomicWrite(this.profileFile(id), JSON.stringify(prof, null, 2)); // ⑤
+    } catch (e) {
+      if (replaced) await this._rollbackAvatarFile(file, oldBytes);
+      else { try { await fs.promises.unlink(tmp); } catch (_) { /* 临时文件已被启动清理兜底 */ } }
+      throw e;
+    }
+    if (this.logger) this.logger.info('profiles', `自定义头像已更新（${id}，${prepared.bytes} 字节，sha256 ${prepared.sha256.slice(0, 12)}…）`);
+    return { profile: prof, avatarUrl: avatarUrlOf(prof) };
+  }
+
+  /**
+   * 删除自定义头像（§4.1「删除自定义头像」/§4.2 切回内置）：
+   * **先原子更新档案元数据，再清理不再引用的图片**；清理失败只记可恢复告警，不让资料更新失败
+   * （元数据已经指回 avatarId，残留文件不再被任何 URL 引用，删不掉只是占一块盘）。
+   */
+  async clearAvatar(id, { expectedRevision } = {}) {
+    return this._serialize(() => this._clearAvatarInner(id, { expectedRevision }));
+  }
+
+  async _clearAvatarInner(id, { expectedRevision } = {}) {
+    const file = this.avatarFile(id);
+    const prof = this.get(id);
+    if (prof.archivedAt) throw new ValidationError('已归档档案需先恢复才能编辑');
+    this._checkRevision(prof, expectedRevision);
+    if (!prof.customAvatar) return { profile: prof, avatarUrl: null }; // 幂等：本就没有自定义头像
+    delete prof.customAvatar;
+    prof.revision += 1;
+    prof.updatedAt = new Date().toISOString();
+    await this._atomicWrite(this.profileFile(id), JSON.stringify(prof, null, 2)); // 先更新元数据
+    try {
+      await fs.promises.unlink(file); // 再清理不再被引用的图片
+    } catch (e) {
+      if (e && e.code !== 'ENOENT' && this.logger) {
+        this.logger.warn('profiles', `自定义头像文件清理失败（可恢复：${path.relative(this.root, file)}）：${e.message}`);
+      }
+    }
+    return { profile: prof, avatarUrl: null };
+  }
+
+  /**
+   * 读取自定义头像字节（GET 出图与导出共用）。三重核对，任何一环不过都不出图：
+   *   ① 档案存在且带 customAvatar 元数据；② 文件在磁盘上；③ 文件结构合法 **且** 哈希等于元数据。
+   * 语义码：404 = 没有/找不到/版本不匹配（前端据此回落 avatarId）；500 = 文件损坏或与元数据不一致。
+   * @param {string} id profileId
+   * @param {{expectedSha?: string|null}} opts expectedSha = URL 上的 ?v=（内容哈希）
+   */
+  readAvatar(id, { expectedSha = null } = {}) {
+    const prof = this.get(id); // 不存在 → NotFoundError(404)
+    const ca = prof.customAvatar;
+    if (!ca || !ca.sha256) throw new NotFoundError('该档案没有自定义头像');
+    if (expectedSha && expectedSha !== ca.sha256) throw new NotFoundError('该头像版本已过期（URL 内容哈希与当前头像不一致）');
+    let data;
+    try {
+      data = fs.readFileSync(this.avatarFile(id));
+    } catch (e) {
+      if (e && e.code === 'ENOENT') throw new NotFoundError('自定义头像文件缺失');
+      throw e;
+    }
+    let checked;
+    try {
+      checked = validateAvatarBuffer(data);
+    } catch (e) {
+      throw Object.assign(new Error(`自定义头像文件损坏：${e.message}`), { code: 500 });
+    }
+    if (checked.sha256 !== ca.sha256) {
+      throw Object.assign(new Error(
+        `自定义头像与档案元数据不一致（文件 ${checked.sha256.slice(0, 12)}… ≠ 档案记录 ${ca.sha256.slice(0, 12)}…）`
+      ), { code: 500 });
+    }
+    return { data, mime: AVATAR_MIME, sha256: checked.sha256, bytes: checked.bytes, etag: `"${checked.sha256}"` };
+  }
+
+  /** expectedRevision 乐观并发（与 update 同语义：只有数字才是校验意图，缺省不校验） */
+  _checkRevision(prof, expectedRevision) {
+    if (typeof expectedRevision === 'number' && expectedRevision !== prof.revision) {
+      throw new ConflictError(`另一窗口已更新该档案（当前 revision ${prof.revision}）`);
+    }
+  }
+
+  /** 把头像文件回滚成旧字节（oldBytes=null ⇒ 旧状态是"没有文件"）。回滚失败必须留告警，不静默。 */
+  async _rollbackAvatarFile(file, oldBytes) {
+    try {
+      if (oldBytes === null) { await fs.promises.unlink(file); return; }
+      const tmp = tmpPathFor(file);
+      await fs.promises.writeFile(tmp, oldBytes);
+      await fs.promises.rename(tmp, file);
+    } catch (e) {
+      if (this.logger) {
+        this.logger.warn('profiles', `头像回滚失败（${path.relative(this.root, file)}）：${e.message}；元数据未更新，GET 会按哈希核对失败并回落内置头像`);
+      }
+    }
   }
 
   /**
@@ -472,4 +652,7 @@ class ProfileStore {
   }
 }
 
-module.exports = { ProfileStore, ValidationError, ConflictError, NotFoundError, AVATARS, MAX_NICKNAME, MAX_BIO, SCHEMA_VERSION, newId, isValidId };
+module.exports = {
+  ProfileStore, ValidationError, ConflictError, NotFoundError, AVATARS, MAX_NICKNAME, MAX_BIO, SCHEMA_VERSION,
+  newId, isValidId, avatarUrlOf,
+};

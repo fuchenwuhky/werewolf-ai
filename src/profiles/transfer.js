@@ -12,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { AVATAR_MIME, sha256Hex, decodeAvatarPayload } = require('./avatar');
 
 const MAX_BYTES = 20 * 1024 * 1024;
 const EXPORT_VERSION = 1;
@@ -49,8 +50,16 @@ function collectExportableGames(savesDir, ownerProfileId) {
   return out;
 }
 
-/** 生成导出包（对象）。notes: {gameId: annotationDoc} */
-function buildExportPackage({ profile, games, notes = {}, hostLabel = '' }) {
+/**
+ * 生成导出包（对象）。notes: {gameId: annotationDoc}
+ *
+ * M1 §4.4：档案带自定义头像时，包内 `profile.customAvatar` = { mime, sha256, dataBase64 }。
+ *  · `avatar` 由调用方（api.profileExport）用 ProfileStore.readAvatar **读盘并核对过**后传入；
+ *  · 这里仍**重新计算哈希**并与档案元数据对账（要求原文："导出前重新计算文件哈希并与元数据核对"）——
+ *    文件丢失/损坏/被换过时抛错让整次导出失败，绝不静默导出一份"看起来完整"的包；
+ *  · 只放这三个字段：不含原始文件名、EXIF（服务端落盘前已剥离，见 avatar.js）、本机绝对路径。
+ */
+function buildExportPackage({ profile, games, notes = {}, hostLabel = '', avatar = null }) {
   const manifest = {
     exportVersion: EXPORT_VERSION,
     packageId: newId(),
@@ -58,18 +67,28 @@ function buildExportPackage({ profile, games, notes = {}, hostLabel = '' }) {
     source: hostLabel,
     counts: { games: games.length, notes: Object.keys(notes).length },
   };
-  return {
-    manifest,
-    profile: {
-      nickname: profile.nickname,
-      avatarId: profile.avatarId,
-      bio: profile.bio || '',
-      preferences: profile.preferences || {},
-      createdAt: profile.createdAt || null,
-    },
-    games,
-    notes,
+  const outProfile = {
+    nickname: profile.nickname,
+    avatarId: profile.avatarId,
+    bio: profile.bio || '',
+    preferences: profile.preferences || {},
+    createdAt: profile.createdAt || null,
   };
+  const ca = profile.customAvatar || null;
+  if (ca) {
+    const data = avatar && Buffer.isBuffer(avatar.data) ? avatar.data : null;
+    if (!data) {
+      throw Object.assign(new Error('导出失败：档案记录了自定义头像，但没有读到头像文件（文件丢失或不可读）'), { code: 500 });
+    }
+    const digest = sha256Hex(data);
+    if (digest !== ca.sha256) {
+      throw Object.assign(new Error(
+        `导出失败：自定义头像哈希与档案元数据不一致（文件 ${digest.slice(0, 12)}… ≠ 记录 ${String(ca.sha256).slice(0, 12)}…），文件可能已被替换或损坏`
+      ), { code: 500 });
+    }
+    outProfile.customAvatar = { mime: AVATAR_MIME, sha256: digest, dataBase64: data.toString('base64') };
+  }
+  return { manifest, profile: outProfile, games, notes };
 }
 
 /** 校验并规范化导入包。失败抛 ValidationError 语义（code 400）；返回规范化后的包。
@@ -88,6 +107,9 @@ function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
   if (pkg.profile.preferences !== undefined && (typeof pkg.profile.preferences !== 'object' || pkg.profile.preferences === null || Array.isArray(pkg.profile.preferences))) {
     throw Object.assign(new Error('导入包 preferences 必须是对象'), { code: 400 });
   }
+  // M1 §4.4：自定义头像必须在这里**完整校验**（Base64 规范性 → 字节上限 → PNG 结构 → 尺寸 → 哈希），
+  // 因为整个导入的承诺是"校验失败不写盘"。写在导入循环里校验就等于已经建了档案、已经落了盘。
+  decodeAvatarPayload(pkg.profile.customAvatar);
   if (!Array.isArray(pkg.games)) throw Object.assign(new Error('导入包缺少对局列表'), { code: 400 });
   // 重复 gameId 必须在这里就拒绝：`buildGameIdMap` 按 id 建表，两局同 id 会映射到**同一个新 id**，
   // 后写的那局静默覆盖先写的（用户看到 200 + "1 局已归入新档案"，实际丢了一局）。
@@ -150,6 +172,8 @@ function previewImport(pkg) {
     games: pkg.games.length,
     finishedOnly: true,
     notes: Object.keys(pkg.notes || {}).length,
+    // M1 §4.4：预览要能让用户看清"这个包带自定义头像"，否则导入后头像凭空出现
+    avatar: !!(pkg.profile && pkg.profile.customAvatar),
   };
 }
 
@@ -163,4 +187,4 @@ function buildGameIdMap(pkg) {
   return map;
 }
 
-module.exports = { EXPORT_VERSION, MAX_BYTES, collectExportableGames, buildExportPackage, validateImportPackage, previewImport, buildGameIdMap };
+module.exports = { EXPORT_VERSION, MAX_BYTES, collectExportableGames, buildExportPackage, validateImportPackage, previewImport, buildGameIdMap, decodeAvatarPayload };

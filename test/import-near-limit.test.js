@@ -135,7 +135,9 @@ test('预览与导入同一上限：恰好等于上限的包预览也必须成�
     assert.strictEqual(res.status, 200, `预览必须与导入同一上限（实际 ${res.status}：${JSON.stringify(res.body).slice(0, 200)}）`);
     assert.deepStrictEqual(
       res.body.preview,
-      { nickname: '近上限', games: 1, finishedOnly: true, notes: 1 },
+      // M1 §4.4：previewImport 新增了 avatar 标记（这个包带不带自定义头像），期望键集随之更新；
+      // 本用例的原意（"预览与导入同一上限、恰好等于上限也必须成功、且绝不写盘"）一个字都没改。
+      { nickname: '近上限', games: 1, finishedOnly: true, notes: 1, avatar: false },
       '预览内容必须来自包本身',
     );
     assert.strictEqual(fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') || f.startsWith('.tmp-')).length, 0, '预览绝不写盘');
