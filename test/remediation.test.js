@@ -586,9 +586,75 @@ test('覆盖率补强：createGame 校验链、stats/tokens/action/review 分支
     const rv = await call(`/api/games/${gameId}/review?token=${encodeURIComponent(ok1.body.godToken)}`);
     assert.strictEqual(rv.code, 200);
     assert.strictEqual(rv.body.review, null);
-    // explode/duel：未开局 409
-    const ex = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: 'ptok' } });
-    assert.ok(ex.code >= 400, '未开局自爆必须报错');
+    // explode/duel 与 action 不同：**授权检查在最前**（令牌不对一律 403，连"已结束/已出局/身份不符"都不透出），
+    // 令牌正确时未开局（未发牌 ⇒ role=null）落到"身份"守卫 → 409。
+    // 下列状态码与理由全部为真实 Api 探针逐状态实测值（未开局 / 已开局非你的回合 / 轮到你 / 已结束 / 已出局）。
+    // 注意"不是你的回合"并不报错：随时自爆/决斗就是设计成入队，由引擎在最近的发言间隙执行（实测 200 queued）。
+    const exNoAuth = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(exNoAuth.code, 403, `非玩家令牌自爆必须 403，实际 ${exNoAuth.code}`);
+    assert.match(exNoAuth.body.error, /仅玩家本人可自爆/, '未授权一律走 token 守卫，不暴露对局是否在等待操作');
+    const ex = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: ok1.body.playerToken } });
+    assert.strictEqual(ex.code, 409, `未开局自爆必须 409，实际 ${ex.code}`);
+    assert.match(ex.body.error, /你的身份不能自爆/, '未发牌时 role=null，命中的是身份守卫而不是阶段守卫');
+    const duNoAuth = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(duNoAuth.code, 403, `非玩家令牌决斗必须 403，实际 ${duNoAuth.code}`);
+    assert.match(duNoAuth.body.error, /仅玩家本人可发起决斗/);
+    const du = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: ok1.body.playerToken } });
+    assert.strictEqual(du.code, 409, `未开局决斗必须 409，实际 ${du.code}`);
+    assert.match(du.body.error, /只有骑士能发起决斗/);
+
+    // 已开局：人类是狼/骑士时的"轮到你"硬闸与"不是你的回合 → 入队"成功路径（同为探针实测值）
+    const covGame = entry.game;
+    covGame.deal();
+    covGame.started = true;
+    covGame.phase = 'speech';
+    const me = covGame.players.find((p) => p.isHuman);
+    const otherSeat = covGame.players.find((p) => p.seat !== me.seat && p.alive).seat;
+    me.role = 'wolf';
+    me.alive = true;
+    covGame.pending = null;
+    covGame.explodeRequest = null;
+    covGame.duelRequest = null;
+    // 授权先于状态/身份：错令牌 + 已结束/已出局/身份不符都必须是 403，而不是 409
+    // —— 否则未授权调用者能用状态码差异探测对局内部状态（这正是 action() 的问题，见报告）
+    covGame.finished = true;
+    const exAuthFinished = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(exAuthFinished.code, 403, `已结束时错令牌仍必须 403（授权先于状态），实际 ${exAuthFinished.code}`);
+    const duAuthFinished = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(duAuthFinished.code, 403, `已结束时错令牌仍必须 403（授权先于状态），实际 ${duAuthFinished.code}`);
+    covGame.finished = false;
+    me.alive = false;
+    const exAuthDead = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(exAuthDead.code, 403, `已出局时错令牌仍必须 403（授权先于状态），实际 ${exAuthDead.code}`);
+    me.alive = true;
+    me.role = 'villager';
+    const duAuthRole = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: 'ptok' } });
+    assert.strictEqual(duAuthRole.code, 403, `身份不符时错令牌仍必须 403（授权先于身份），实际 ${duAuthRole.code}`);
+    me.role = 'wolf';
+    // 不是你的回合（pending 为空或属于别人）⇒ 不拒绝，而是入队等引擎在发言间隙执行
+    const exOk = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: ok1.body.playerToken } });
+    assert.strictEqual(exOk.code, 200, `不是你的回合时自爆应入队，实际 ${exOk.code}`);
+    assert.strictEqual(exOk.body.queued, true);
+    covGame.explodeRequest = null;
+    // 轮到你发言 ⇒ 明确拒绝并指路（引擎在等你自己的操作时，打断请求永远不会被消费）
+    covGame.pending = { seat: me.seat, request: { task: 'speech' }, resolve() {}, reject() {} };
+    const exMyTurn = await call(`/api/games/${gameId}/explode`, { method: 'POST', body: { token: ok1.body.playerToken } });
+    assert.strictEqual(exMyTurn.code, 409, `轮到你发言时自爆必须 409，实际 ${exMyTurn.code}`);
+    assert.match(exMyTurn.body.error, /轮到你发言了/);
+    // 骑士决斗同构：轮到你了 409 / 不是你的回合且目标合法 → 200 入队
+    me.role = 'knight';
+    covGame.explodeRequest = null;
+    const duMyTurn = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: ok1.body.playerToken, target: otherSeat } });
+    assert.strictEqual(duMyTurn.code, 409, `轮到你时决斗必须 409，实际 ${duMyTurn.code}`);
+    assert.match(duMyTurn.body.error, /轮到你了：请先完成当前操作，之后再发起决斗/);
+    covGame.pending = null;
+    covGame.duelRequest = null;
+    const duOk = await call(`/api/games/${gameId}/duel`, { method: 'POST', body: { token: ok1.body.playerToken, target: otherSeat } });
+    assert.strictEqual(duOk.code, 200, `不是你的回合时决斗应入队，实际 ${duOk.code}`);
+    assert.strictEqual(duOk.body.queued, true);
+    covGame.duelRequest = null;
+    covGame.explodeRequest = null;
+    covGame.pending = null;
 
     // LRU 淘汰分支：maxEntries 压到 1 → 旧的被挤出
     api.games.clear();
