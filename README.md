@@ -96,6 +96,13 @@ werewolf-ai/
 | `npm run gen-docs` | 从 roles.js 重新生成 docs/roles.md |
 | `npm run app:sync` | 把服务端+前端打进 Capacitor 工程 |
 | `npm run app:apk` | 一键出 APK 并尝试 adb 安装（需 JDK21 + Android SDK） |
+| `npm run guards` | 防忘记守卫（秒级）：pin 静态复核（CSP 白名单/品牌 SHA-256）+ pin 敏感用例 + 断言卫生；已进 `gate` |
+| `npm run hooks:install` | 安装 pre-push 钩子：每次 push 先跑守卫，改动涉及 `web/`、`src/static.js`、`app/`、`design/brand/`、`desktop/` 时再跑全量 `npm test`（`WW_SKIP_GUARD=1` 紧急绕过） |
+
+> 改 `web/**` 后最容易漏的三处 pin：① `web/*/index.html` 内联守卫脚本的 sha256 → `src/static.js` 的 CSP 白名单；
+> ② `design/brand/v2/**` → `npm run brand:apply` 重新 pin；③ `web/sw.js` 的 SHELL 清单 → 升 `VERSION` 并在
+> `test/sw-shell.test.js` 登记新指纹。守卫按 CI 字节（LF）复核，Windows 的 CRLF 不会假红；详见
+> [docs/fix-plan-2026-09-21.md](docs/fix-plan-2026-09-21.md) 第六节。
 
 
 ## 安全与网络（2026-09 整改）
