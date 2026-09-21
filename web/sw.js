@@ -97,6 +97,14 @@ async function networkFirstAsset(req, event) {
     if (exact) return exact;
     const loose = await cache.match(req, { ignoreSearch: true });
     if (loose) return loose;
+    // 还要查 SHELL_CACHE：install 的预缓存写进的正是那个仓（见本文件顶部 SHELL_CACHE），
+    // 只查 ASSET_CACHE 的话，「只在预缓存里、从没联网加载过」这条路径依然整片 miss ——
+    // 上面注释宣称修好的那条 P1 在这条路径上并不成立（FIX-21 用一条用例抓出来的真缺口，此处补齐）。
+    const shell = await caches.open(SHELL_CACHE);
+    const shellExact = await shell.match(req);
+    if (shellExact) return shellExact;
+    const shellLoose = await shell.match(req, { ignoreSearch: true });
+    if (shellLoose) return shellLoose;
     throw new Error('offline and not cached: ' + req.url);
   }
 }
