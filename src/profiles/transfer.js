@@ -74,7 +74,9 @@ function buildExportPackage({ profile, games, notes = {}, hostLabel = '' }) {
 
 /** 校验并规范化导入包。失败抛 ValidationError 语义（code 400）；返回规范化后的包。
  *  审核 P2-4：**写入前完整校验所有记录**——任何一局/一份笔记不合法都整体拒绝，
- *  绝不允许"第一局合法第二局坏"留下半份数据。 */
+ *  绝不允许"第一局合法第二局坏"留下半份数据。
+ *  NEW-08 附带：**对局 id 必须两两不同**——重复 id 在 buildGameIdMap 后会映射到同一个新 id，
+ *  后写的静默覆盖先写的（接口还报 200），属于"能判定的丢数据"故与坏记录同等对待。 */
 function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
   if (!pkg || typeof pkg !== 'object') throw Object.assign(new Error('导入包不是合法 JSON 对象'), { code: 400 });
   if (!pkg.manifest || Number(pkg.manifest.exportVersion) !== EXPORT_VERSION) {
@@ -87,11 +89,19 @@ function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
     throw Object.assign(new Error('导入包 preferences 必须是对象'), { code: 400 });
   }
   if (!Array.isArray(pkg.games)) throw Object.assign(new Error('导入包缺少对局列表'), { code: 400 });
+  // 重复 gameId 必须在这里就拒绝：`buildGameIdMap` 按 id 建表，两局同 id 会映射到**同一个新 id**，
+  // 后写的那局静默覆盖先写的（用户看到 200 + "1 局已归入新档案"，实际丢了一局）。
+  // 这是能判定的坏包（id 唯一标识一局），按本模块原则整体拒绝，绝不留半份/丢局。
+  const seenGameIds = new Set();
   for (const g of pkg.games) {
     if (!g || typeof g !== 'object') throw Object.assign(new Error('导入包含非法对局记录'), { code: 400 });
     if (typeof g.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(g.id)) {
       throw Object.assign(new Error(`导入包含非法对局 id：${String(g.id).slice(0, 20)}`), { code: 400 });
     }
+    if (seenGameIds.has(g.id)) {
+      throw Object.assign(new Error(`导入包内对局 id 重复：${g.id}（重复 id 重映射后会互相覆盖，导致静默丢局）`), { code: 400 });
+    }
+    seenGameIds.add(g.id);
     if (!g.finished) throw Object.assign(new Error('导入包包含未结束对局（不允许）'), { code: 400 });
     // 记录级类型校验：players/events 必须是数组（players 里的条目必须是对象），
     // board/rules/winner/winReason 类型受限 —— 坏类型会在写入循环里半路抛错，留下半份导入。
