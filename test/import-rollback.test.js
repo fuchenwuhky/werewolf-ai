@@ -124,7 +124,10 @@ test('R06b 目标已不存在：视为已清理，记录被消化（幂等）', 
 
 test('R06c 清理目标越界（绝对路径逃逸数据根）：拒绝删除并保留记录', async () => {
   const { api, dataDir, savesDir } = makeIsolatedApi('r06c');
-  const outside = path.join(os.tmpdir(), `ww-fin02-outside-${Date.now()}.json`);
+  // NEW-17：逃逸目标也必须落在**本用例独占**的目录里（原来是 os.tmpdir()/ww-fin02-outside-<Date.now()>.json，
+  // 仍在全机共享的 %TEMP% 根下、靠毫秒去重；并行全量撞名时会被另一个进程删掉）
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-fin02-escape-'));
+  const outside = path.join(outsideDir, 'outside.json');
   try {
     fs.writeFileSync(outside, '{}');
     fs.writeFileSync(path.join(savesDir, '.import-recovery-escape.json'),
@@ -133,7 +136,7 @@ test('R06c 清理目标越界（绝对路径逃逸数据根）：拒绝删除并
     assert.ok(fs.existsSync(outside), '数据根之外的路径绝不能被恢复逻辑删除');
     assert.ok(fs.existsSync(path.join(savesDir, '.import-recovery-escape.json')), '含越界目标的记录必须保留（dirty）');
   } finally {
-    try { fs.unlinkSync(outside); } catch {}
+    fs.rmSync(outsideDir, { recursive: true, force: true });
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

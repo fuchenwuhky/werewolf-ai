@@ -45,6 +45,8 @@ const fakeReq = (method, body) => {
 const makeApi = () => new Api({
   config: { get: () => ({ apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }), save() {} },
   logger: silentLogger,
+  // NEW-17：显式传 saveDir（= 本文件独占 TMP_DATA/saves），不再依赖 WW_DATA_DIR 的加载顺序前提
+  saveDir: path.join(TMP_DATA, 'saves'),
 });
 
 const board = (total = 12) => Array.from({ length: total }, (_, k) => ({ name: `P${k + 1}`, isHuman: false, personality: '' }));

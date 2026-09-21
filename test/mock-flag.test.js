@@ -43,6 +43,9 @@ function makeApi() {
   return new Api({
     config: (() => { const cfg = { apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }; return { get: () => cfg, save(b) { Object.assign(cfg, b); } }; })(),
     logger: silentLogger,
+    // NEW-17：显式传 saveDir（= 本文件独占的 TMP_DATA/saves）——不再依赖"环境变量必须在 require 之前设置"
+    // 这一隐性顺序；少一个隐性前提，就少一条"哪天有人把 require 提到前面 → 写进仓库根"的路。
+    saveDir: path.join(TMP_DATA, 'saves'),
   });
 }
 

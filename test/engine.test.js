@@ -585,11 +585,15 @@ test('migrateConfig：仅提升历史旧默认值，自定义值不动', () => {
   assert.strictEqual(migrateConfig({}).fastMaxTokens, DEFAULT_CONFIG.fastMaxTokens, '缺省补齐 fastMaxTokens');
 });
 
-test('createConfig：load 迁移旧配置且不覆盖 apiKey 掩码', () => {
+test('createConfig：load 迁移旧配置且不覆盖 apiKey 掩码', (t) => {
   const os = require('node:os');
   const fs = require('node:fs');
   const path = require('node:path');
-  const file = path.join(os.tmpdir(), `ww-cfg-${Date.now()}.json`);
+  const { cleanupAfter } = require('./helpers-tmpdir');
+  // NEW-17：文件名原来只靠 Date.now() 去重且与 retry.test.js 同前缀（ww-cfg-），
+  // 并行全量下可能撞名互相覆盖；改成独占 mkdtemp 目录（收尾由夹具负责，失败路径同样生效）
+  const dir = cleanupAfter(t, fs.mkdtempSync(path.join(os.tmpdir(), 'ww-cfg-')));
+  const file = path.join(dir, 'config.json');
   fs.writeFileSync(file, JSON.stringify({ baseUrl: 'https://x.example/v1', apiKey: 'sk-test-key', maxTokens: 2000, timeoutMs: 120000 }));
   const cfg = createConfig(file);
   const r = cfg.load();
@@ -599,7 +603,7 @@ test('createConfig：load 迁移旧配置且不覆盖 apiKey 掩码', () => {
   assert.strictEqual(cfg.get().apiKey, 'sk-test-key');
   cfg.save({ apiKey: 'sk-ab****cd', maxTokens: 0.1 });
   assert.strictEqual(cfg.get().apiKey, 'sk-test-key', '掩码 key 不覆盖');
-  fs.rmSync(file, { force: true });
+  // 收尾（删独占目录）由 cleanupAfter 挂到 t.after，断言失败/抛错也会执行
 });
 
 test('公共前缀：全场 AI 的 system 公共段逐字节一致且位于最前', () => {
@@ -1448,9 +1452,14 @@ test('llm：外部终止信号立即中断在途请求且不重试', async () =>
   }
 });
 
-test('API 硬闸：pending 属于玩家时打断被拒；阶段口径与 queued 下发', () => {
+test('API 硬闸：pending 属于玩家时打断被拒；阶段口径与 queued 下发', (t) => {
   const { Api } = require('../src/api');
-  const api = new Api({ config: { get: () => ({}), save() {} }, logger: silentLogger });
+  // NEW-17：不传 saveDir 会落到默认 SAVE_DIR=<repo>/saves，dirname 推导出的 <repo>/profiles、
+  // <repo>/migrations 是全机共享写点（并行跑文件时互相抢写 / 污染检出目录）
+  const { makeDataDir, savesOf, terminateAfter } = require('./helpers-tmpdir');
+  const dataDir = makeDataDir('api-hardstop');
+  const api = new Api({ config: { get: () => ({}), save() {} }, logger: silentLogger, saveDir: savesOf(dataDir) });
+  terminateAfter(t, api, dataDir);
   const g = makeGame({ humanSeat: 2, board: { wolf: 2, whitewolfking: 1, seer: 1, villager: 3 } });
   assignRoles(g, { 2: 'whitewolfking', 3: 'seer' });
   g.started = true;

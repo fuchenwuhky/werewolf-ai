@@ -283,15 +283,21 @@ test('狼队投刀：先收完所有票再公布（人类狼与 AI 狼的信息�
   }
 });
 
-test('局终经验：多通道时各 AI 并行复盘，但经验池仍按顺序串行入库', async () => {
+test('局终经验：多通道时各 AI 并行复盘，但经验池仍按顺序串行入库', async (t) => {
   const { Api } = require('../src/api');
+  // NEW-17：必须显式给独占存档目录 —— 不传 saveDir 会落到默认 <repo>/saves，
+  // 构造函数用 dirname 推导出的 <repo>/profiles、<repo>/migrations 是全机共享写点
+  const { makeDataDir, savesOf, terminateAfter } = require('./helpers-tmpdir');
+  const dataDir = makeDataDir('keypool-lessons');
   const added = [];
   // keyBinding 必须按服务端同一算法计算（baseUrl|apiKey|apiKeys 的 SHA-256）
   const kb = require('crypto').createHash('sha256').update('§k§').digest('hex');
   const api = new Api({
     config: { get: () => ({ apiKey: 'k', journal: false, keyBinding: kb }), save() {} },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
+    saveDir: savesOf(dataDir),
   });
+  terminateAfter(t, api, dataDir);
   // Api 构造时会自建经验池（要落盘），测试里换成内存假实现 —— 只验证调用时序
   api.experience = { add: (l) => { added.push(l[0]); return l.length; } };
   let started = 0;

@@ -40,6 +40,8 @@ const fakeReq = (method, body) => {
 const makeApi = () => new Api({
   config: { get: () => ({ apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }), save() {} },
   logger: silentLogger,
+  // NEW-17：显式传 saveDir（= 本文件独占 TMP_DATA/saves），不再依赖 WW_DATA_DIR 的加载顺序前提
+  saveDir: path.join(TMP_DATA, 'saves'),
 });
 
 /** 造一局"人类 + AI"的 mock 对局，并等到它真的开跑 */

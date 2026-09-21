@@ -29,8 +29,12 @@ function listSrcFiles(dir = path.join(ROOT, 'src')) {
   return out.sort();
 }
 
-test('FIX-14：AnnotationStore 不再暴露 putSync（绕开串行队列的同步写入口）', () => {
-  const store = new AnnotationStore({ profilesRoot: path.join(require('os').tmpdir(), 'ww-fix14-unused') });
+test('FIX-14：AnnotationStore 不再暴露 putSync（绕开串行队列的同步写入口）', (t) => {
+  // NEW-17：原来把 profilesRoot 钉成 os.tmpdir()/ww-fix14-unused —— 那是**全机共享固定路径**，
+  // 并行全量下的同形态写点会互相抢写。改成用例独占 dataDir（本用例只查原型，不落盘，属预防性隔离）。
+  const { cleanupAfter, makeDataDir } = require('./helpers-tmpdir');
+  const dataDir = cleanupAfter(t, makeDataDir('fix14-unused'));
+  const store = new AnnotationStore({ profilesRoot: path.join(dataDir, 'profiles') });
   assert.strictEqual(typeof store.putSync, 'undefined', 'putSync 必须已删除：它在队列外同步写，复用即带回 P2-6 竞态');
   assert.strictEqual('putSync' in store, false, 'putSync 不得以任何形式留在原型链上（含继承/别名）');
   // 正向对照：入队的异步入口必须在（否则就是"删过头"，两种写语义都没了）

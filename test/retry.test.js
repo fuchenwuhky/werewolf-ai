@@ -196,7 +196,7 @@ test('限流仍走退避：429 + Retry-After 必须真的等待（不能把死�
 });
 
 // ---------- 配置 ----------
-test('配置：keepAlive 默认 true，且旧配置迁移时会补上', () => {
+test('配置：keepAlive 默认 true，且旧配置迁移时会补上', (t) => {
   const { DEFAULT_CONFIG, migrateConfig, createConfig } = require('../src/config');
   assert.strictEqual(DEFAULT_CONFIG.keepAlive, true, '默认必须开（否则每次调用都白花一次握手）');
   const old = { maxTokens: 2000 };
@@ -208,7 +208,10 @@ test('配置：keepAlive 默认 true，且旧配置迁移时会补上', () => {
   // 设置页能保存：config.save() 只接受 DEFAULT_CONFIG 里存在的键，keepAlive 必须在白名单内
   const os = require('os');
   const path = require('path');
-  const file = path.join(os.tmpdir(), `ww-cfg-${Date.now()}.json`);
+  const { cleanupAfter } = require('./helpers-tmpdir');
+  // NEW-17：文件名原来只靠 Date.now() 去重且与 engine.test.js 同前缀（ww-cfg-），并行全量下可能撞名；
+  // 改成独占 mkdtemp 目录（收尾由夹具负责，失败路径同样生效）
+  const file = path.join(cleanupAfter(t, require('fs').mkdtempSync(path.join(os.tmpdir(), 'ww-cfg-'))), 'config.json');
   try {
     const c = createConfig(file);
     c.load();

@@ -39,7 +39,7 @@ function tmpConfig() {
 /** 起一个真实服务；返回 { url, api, close } */
 async function startServer() {
   const config = tmpConfig();
-  const api = new Api({ config, logger: silent });
+  const api = new Api({ config, logger: silent, saveDir: path.join(TMP_DATA, 'saves') });
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://localhost');
     if (u.pathname.startsWith('/api/')) {

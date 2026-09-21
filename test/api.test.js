@@ -15,6 +15,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { Api } = require('../src/api');
 const { Game } = require('../src/engine/game');
+// NEW-17：每个用例一份独占 dataDir（saveDir = <dataDir>/saves）。
+// 不传 saveDir 会落到 api.js 的默认 SAVE_DIR=<repo>/saves，于是 dirname 推导出的
+// <repo>/profiles、<repo>/migrations 成了**全机共享**写点：node --test 并行跑文件时
+// 多个进程（乃至同一进程的多个文件）会互相抢写档案仓与迁移游标。
+const { makeDataDir, savesOf, terminateAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
 
@@ -33,10 +38,16 @@ function makeGame(id) {
   return g;
 }
 
-const makeApi = () => new Api({ config: { get: () => ({ apiKey: 'k', journal: false }), save() {} }, logger: silentLogger });
+/** 建一个"独占数据目录"的 Api：saveDir = <独占 dataDir>/saves，用例结束由夹具删根目录 */
+function makeApi(t, config = { get: () => ({ apiKey: 'k', journal: false }), save() {} }) {
+  const dataDir = makeDataDir('api-contract');
+  const api = new Api({ config, logger: silentLogger, saveDir: savesOf(dataDir) });
+  terminateAfter(t, api, dataDir);
+  return api;
+}
 
-test('/view：inMemory 是布尔、live 是流式缓冲，两者不得混用（曾发生静默覆盖导致丢档）', () => {
-  const api = makeApi();
+test('/view：inMemory 是布尔、live 是流式缓冲，两者不得混用（曾发生静默覆盖导致丢档）', (t) => {
+  const api = makeApi(t);
   const g = makeGame('api-view-contract');
   const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
   api.games.set(g.id, entry);
@@ -66,14 +77,14 @@ test('/view：inMemory 是布尔、live 是流式缓冲，两者不得混用（�
   assert.strictEqual(gone.body.inMemory, false);
 });
 
-test('/api/games 列表：用 inMemory 而不是 live 表示"是否还在内存"（同一含义全链路同名）', async () => {
+test('/api/games 列表：用 inMemory 而不是 live 表示"是否还在内存"（同一含义全链路同名）', async (t) => {
   const fs = require('fs');
   const path = require('path');
-  const api = makeApi();
+  const api = makeApi(t);
   const g = makeGame('api-list-contract');
   const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
   api.games.set(g.id, entry);
-  const file = path.join(__dirname, '..', 'saves', `${g.id}.json`);
+  const file = path.join(api.saveDir, `${g.id}.json`);
   try {
     await api.saveGame(entry, { force: true }); // listSaves 读的是磁盘上的存档
     const box = capture();
@@ -97,13 +108,10 @@ test('/api/games 列表：用 inMemory 而不是 live 表示"是否还在内存"
  * 这类"只能写、读不回来"的字段，根因是白名单要和 DEFAULT_CONFIG、前端提交字段三处手工同步。
  * 现在改成从 DEFAULT_CONFIG 派生，本用例负责防止再次漂移。
  */
-test('/api/config：GET 必须能读回全部配置项（除密钥），PUT 的值必须能原样读回', async () => {
+test('/api/config：GET 必须能读回全部配置项（除密钥），PUT 的值必须能原样读回', async (t) => {
   const { DEFAULT_CONFIG } = require('../src/config');
   const data = { ...DEFAULT_CONFIG, apiKey: 'sk-secret-value' };
-  const api = new Api({
-    config: { get: () => data, save(partial) { Object.assign(data, partial); return data; } },
-    logger: silentLogger,
-  });
+  const api = makeApi(t, { get: () => data, save(partial) { Object.assign(data, partial); return data; } });
 
   // ① GET：DEFAULT_CONFIG 的每个键都必须出现，**凭据字段除外**
   //    apiKey / apiKeys 都是密钥，只能出掩码或"有几把"的数量；连数量都不给也不行 ——
@@ -148,8 +156,8 @@ test('/api/config：GET 必须能读回全部配置项（除密钥），PUT 的�
   }
 });
 
-test('/view：流式缓冲里的 JSON 壳子不得下发（用户反馈"先出现 text 标签，输出完才消失"）', () => {
-  const api = makeApi();
+test('/view：流式缓冲里的 JSON 壳子不得下发（用户反馈"先出现 text 标签，输出完才消失"）', (t) => {
+  const api = makeApi(t);
   const g = makeGame('api-live-shell');
   const entry = { game: g, running: false, error: null, mock: true, tokens: { player: 'pt', god: 'gt' }, createdAt: Date.now(), lastAccess: Date.now() };
   api.games.set(g.id, entry);

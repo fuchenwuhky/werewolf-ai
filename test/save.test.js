@@ -14,12 +14,19 @@ const { Api } = require('../src/api');
 const { Game } = require('../src/engine/game');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
-const SAVE_DIR = path.join(__dirname, '..', 'saves');
-const saveFile = (id) => path.join(SAVE_DIR, `${id}.json`);
+// NEW-17：存档目录必须落在**本用例独占**的 dataDir 下，绝不能用仓库的 <repo>/saves ——
+// 同一批固定 id（'save-dirty-a' …）在两个并行全量里会互相覆盖/互删，跑崩还会污染真实存档目录。
+const { makeDataDir, savesOf, terminateAfter } = require('./helpers-tmpdir');
 
-function makeApi() {
-  return new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger });
+/** 建独占 dataDir 的 Api（saveDir = <dataDir>/saves）；用例结束由夹具删根目录（失败路径同样生效） */
+function makeApi(t) {
+  const dataDir = makeDataDir('save');
+  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger, saveDir: savesOf(dataDir) });
+  terminateAfter(t, api, dataDir);
+  return api;
 }
+/** 本用例独占存档目录下的存档文件路径（目录来自 api.saveDir，不再是仓库 <repo>/saves） */
+const saveFile = (api, id) => path.join(api.saveDir, `${id}.json`);
 function makeGame(id, seats = 5) {
   const board = seats === 5
     ? { wolf: 1, seer: 1, witch: 1, villager: 2 }
@@ -33,13 +40,13 @@ function makeGame(id, seats = 5) {
 function entryFor(g, extra = {}) {
   return { game: g, tokens: { player: 'p', god: 'g' }, running: false, mock: true, createdAt: Date.now(), lastAccess: Date.now(), ...extra };
 }
-const cleanup = (ids) => { for (const id of ids) { fs.rmSync(saveFile(id), { force: true }); fs.rmSync(saveFile(id) + '.tmp', { force: true }); } };
+const cleanup = (api, ids) => { for (const id of ids) { fs.rmSync(saveFile(api, id), { force: true }); fs.rmSync(saveFile(api, id) + '.tmp', { force: true }); } };
 
 // ---------- 脏标记 ----------
-test('脏标记：状态没变就不再写盘（4s 定时器在长 LLM 调用期间基本全是空转）', async () => {
+test('脏标记：状态没变就不再写盘（4s 定时器在长 LLM 调用期间基本全是空转）', async (t) => {
   const ids = ['save-dirty-a'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     const entry = entryFor(g);
     assert.strictEqual(await api.saveGame(entry), true, '首次应写入');
@@ -53,13 +60,13 @@ test('脏标记：状态没变就不再写盘（4s 定时器在长 LLM 调用期
     let pauseOk = false;
     for (let i = 0; !pauseOk && i < 3; i++) { pauseOk = await api.saveGame(entry); if (!pauseOk) await new Promise(r => setTimeout(r, 100)); }
     assert.ok(pauseOk, '暂停状态变化应落盘');
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
-test('脏标记：force 强制写入（终局/暂停等关键节点用）', async () => {
+test('脏标记：force 强制写入（终局/暂停等关键节点用）', async (t) => {
   const ids = ['save-force'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     const entry = entryFor(g);
     await api.saveGame(entry);
@@ -68,66 +75,66 @@ test('脏标记：force 强制写入（终局/暂停等关键节点用）', asyn
     let forced = false;
     for (let i = 0; !forced && i < 3; i++) forced = await api.saveGame(entry, { force: true });
     assert.strictEqual(forced, true, 'force 必须无视脏标记');
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
 // ---------- 去重 ----------
-test('去重：events 只在 anchor 里存一份（旧实现两处都存，46.5% 体积是纯重复）', async () => {
+test('去重：events 只在 anchor 里存一份（旧实现两处都存，46.5% 体积是纯重复）', async (t) => {
   const ids = ['save-dedup'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     for (let i = 0; i < 40; i++) g.emit('speech', { actor: 1, data: { text: `发言${i}`, context: 'day' } });
     g.markAnchor('speech');
     const entry = entryFor(g);
     await api.saveGame(entry, { force: true });
-    const doc = JSON.parse(fs.readFileSync(saveFile(ids[0]), 'utf8'));
+    const doc = JSON.parse(fs.readFileSync(saveFile(api, ids[0]), 'utf8'));
     assert.strictEqual(doc.game.events, undefined, '存档元数据里不应再有 events');
     assert.ok(Array.isArray(doc.anchor.events) && doc.anchor.events.length > 0, 'anchor 必须保留事件流（恢复要用）');
     // listSaves 依赖的元数据字段一个都不能少
     for (const k of ['id', 'day', 'phase', 'finished', 'started', 'winner', 'winReason', 'players']) {
       assert.ok(k in doc.game, `存档元数据缺少 listSaves 需要的字段：${k}`);
     }
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
-test('去重：事件越多，省下的体积比例越接近一半', async () => {
+test('去重：事件越多，省下的体积比例越接近一半', async (t) => {
   const ids = ['save-dedup-size'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0], 8);
     for (let i = 0; i < 300; i++) g.emit('speech', { actor: 1, data: { text: `这是一条比较长的发言内容${i}`, context: 'day' } });
     g.markAnchor('speech');
     const entry = entryFor(g);
     await api.saveGame(entry, { force: true });
-    const saved = fs.statSync(saveFile(ids[0])).size;
+    const saved = fs.statSync(saveFile(api, ids[0])).size;
     const withDup = JSON.stringify({ tokens: entry.tokens, mock: true, game: g.toJSON(), anchor: g._anchor }).length;
     const ratio = 1 - saved / withDup;
     console.log(`      → 存档 ${(saved / 1024).toFixed(1)}KB vs 旧实现 ${(withDup / 1024).toFixed(1)}KB，省了 ${(ratio * 100).toFixed(1)}%`);
     assert.ok(ratio > 0.4, `事件流占大头时去重应省下 40% 以上，实际 ${(ratio * 100).toFixed(1)}%`);
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
 // ---------- 异步 + 原子 ----------
-test('异步原子写：不留 .tmp 残留文件、内容始终是完整 JSON', async () => {
+test('异步原子写：不留 .tmp 残留文件、内容始终是完整 JSON', async (t) => {
   const ids = ['save-atomic'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     const entry = entryFor(g);
     await api.saveGame(entry, { force: true });
-    assert.ok(fs.existsSync(saveFile(ids[0])), '主文件应存在');
-    assert.ok(!fs.existsSync(saveFile(ids[0]) + '.tmp'), '不应留下 .tmp');
-    const doc = JSON.parse(fs.readFileSync(saveFile(ids[0]), 'utf8'));
+    assert.ok(fs.existsSync(saveFile(api, ids[0])), '主文件应存在');
+    assert.ok(!fs.existsSync(saveFile(api, ids[0]) + '.tmp'), '不应留下 .tmp');
+    const doc = JSON.parse(fs.readFileSync(saveFile(api, ids[0]), 'utf8'));
     assert.strictEqual(doc.game.id, ids[0]);
     assert.ok(doc.savedAt > 0, '应记录落盘时间');
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
-test('并发保护：同一对局不会并发写（避免两个 .tmp 互相覆盖），但会补一次写', async () => {
+test('并发保护：同一对局不会并发写（避免两个 .tmp 互相覆盖），但会补一次写', async (t) => {
   const ids = ['save-concurrent'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     const entry = entryFor(g);
     const p1 = api.saveGame(entry, { force: true });   // 在飞
@@ -141,13 +148,13 @@ test('并发保护：同一对局不会并发写（避免两个 .tmp 互相覆�
     await p1;
     await new Promise((r) => setTimeout(r, 20)); // 等 pendingSave 的补写落地
     assert.strictEqual(entry.saving, false);
-    assert.ok(fs.existsSync(saveFile(ids[0])));
-  } finally { cleanup(ids); }
+    assert.ok(fs.existsSync(saveFile(api, ids[0])));
+  } finally { cleanup(api, ids); }
 });
 
 // ---------- 内存治理 ----------
-test('内存治理：TTL 清掉久未访问的对局', () => {
-  const api = makeApi();
+test('内存治理：TTL 清掉久未访问的对局', (t) => {
+  const api = makeApi(t);
   api.games.clear();
   const now = Date.now();
   api.games.set('old', entryFor(makeGame('mem-old'), { lastAccess: now - 60 * 60 * 1000 }));
@@ -158,8 +165,8 @@ test('内存治理：TTL 清掉久未访问的对局', () => {
   assert.ok(api.games.has('fresh'));
 });
 
-test('内存治理：正在跑的对局绝不能被清（驱动循环还持有它，丢掉会让前端 404）', () => {
-  const api = makeApi();
+test('内存治理：正在跑的对局绝不能被清（驱动循环还持有它，丢掉会让前端 404）', (t) => {
+  const api = makeApi(t);
   api.games.clear();
   api.games.set('running', entryFor(makeGame('mem-running'), { running: true, lastAccess: 0 }));
   const dropped = api.pruneGames({ maxEntries: 1, ttlMs: 1 });
@@ -167,8 +174,8 @@ test('内存治理：正在跑的对局绝不能被清（驱动循环还持有�
   assert.ok(api.games.has('running'), '运行中的对局必须保留');
 });
 
-test('内存治理：LRU 上限按最后访问时间淘汰（已结束的优先）', () => {
-  const api = makeApi();
+test('内存治理：LRU 上限按最后访问时间淘汰（已结束的优先）', (t) => {
+  const api = makeApi(t);
   api.games.clear();
   const now = Date.now();
   for (let i = 0; i < 5; i++) api.games.set('lru' + i, entryFor(makeGame('mem-lru' + i), { lastAccess: now - (5 - i) * 1000 }));
@@ -178,10 +185,10 @@ test('内存治理：LRU 上限按最后访问时间淘汰（已结束的优先�
   assert.ok(api.games.has('lru4') && api.games.has('lru3'), '应留下最近访问的两个');
 });
 
-test('内存治理：被清掉的对局仍能从磁盘存档恢复（内存只是缓存）', async () => {
+test('内存治理：被清掉的对局仍能从磁盘存档恢复（内存只是缓存）', async (t) => {
   const ids = ['save-evict-resume'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     const g = makeGame(ids[0]);
     g.markAnchor('speech');
     const entry = entryFor(g);
@@ -192,14 +199,14 @@ test('内存治理：被清掉的对局仍能从磁盘存档恢复（内存只�
     const doc = api.loadSaveDoc(ids[0]);
     assert.ok(doc && doc.anchor, '存档仍在，随时可恢复');
     assert.strictEqual(doc.anchor.nextPhase, 'speech');
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });
 
 // ---------- saveActive 的整体行为 ----------
-test('saveActive：只处理进行中的对局，且无变化时一次盘都不碰', async () => {
+test('saveActive：只处理进行中的对局，且无变化时一次盘都不碰', async (t) => {
   const ids = ['save-active-live', 'save-active-done'];
+  const api = makeApi(t);
   try {
-    const api = makeApi();
     api.games.clear();
     const live = makeGame(ids[0]);
     const done = makeGame(ids[1]);
@@ -209,11 +216,11 @@ test('saveActive：只处理进行中的对局，且无变化时一次盘都不�
     api.games.set(ids[1], entryFor(done));
     api.saveActive();
     await new Promise((r) => setTimeout(r, 30));
-    assert.ok(fs.existsSync(saveFile(ids[0])), '进行中的对局应被定时落盘');
-    assert.ok(!fs.existsSync(saveFile(ids[1])), '已结束的对局不再参与定时落盘');
+    assert.ok(fs.existsSync(saveFile(api, ids[0])), '进行中的对局应被定时落盘');
+    assert.ok(!fs.existsSync(saveFile(api, ids[1])), '已结束的对局不再参与定时落盘');
     assert.strictEqual(el.savedStamp !== undefined, true, '应记录脏标记');
     api.saveActive(); // 无变化
     await new Promise((r) => setTimeout(r, 20));
     assert.strictEqual(el.saving, false);
-  } finally { cleanup(ids); }
+  } finally { cleanup(api, ids); }
 });

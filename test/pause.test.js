@@ -207,7 +207,7 @@ test('引擎：暂停后可从锚点恢复并跑到终局（记忆与天数不�
 // ---------- API 层：暂停态下发 + resume 路由 + 暂停中可终止 ----------
 test('API：暂停对局下发 paused、可从内存锚点恢复、暂停中可终止', async () => {
   const { Api } = require('../src/api');
-  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger });
+  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger, saveDir: path.join(TMP_DATA, 'saves') });
   const board = { wolf: 1, seer: 1, witch: 1, villager: 3 };
   // 注意：全 AI 座位——真人座位会让引擎挂起等待输入（那是正确行为），测试无法自行推进
   const players = [];
