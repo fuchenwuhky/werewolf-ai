@@ -176,6 +176,11 @@ body {
 
 #app { height: 100%; display: flex; flex-direction: column; position: relative; z-index: 1; }
 .hidden { display: none !important; }
+/* 层叠浮层打开时的滚动锁（FIX-08）：桌面 openModal/closeModal 与手机 openSheet/closeModalTop
+   成对开合。锁上之后背景不再跟着滚，浮层自身的滚动区（.mbody/.m-sheet-body）不受影响。
+   ⚠ 每条关闭路径都必须释放（✕ 按钮 / 点遮罩 / Esc / 程序化 closeModal），所以释放逻辑只写在
+   统一关闭函数里；只锁不放会出现"弹窗关了但页面再也滚不动"——比不锁更糟。 */
+body.ww-layer-open { overflow: hidden; }
 .screen { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 
 /* ============================================================
@@ -1326,6 +1331,10 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   box-shadow: var(--el-4), var(--bevel);
   animation: modalIn var(--dur) var(--ease-out) both;
 }
+/* FIX-08：上面那条 display:flex 会盖掉 UA 样式表里的 [hidden]{display:none}（作者样式优先于 UA），
+   于是"用 hidden 属性隐藏弹层"这条路径完全无效——浏览器实测：手机端 Esc 之后 .modal 仍在屏幕上。
+   这里把 hidden 属性显式接回来：任何用 hidden 隐藏弹层的代码路径都真的隐藏（手机端 @import 本文件，同样生效）。 */
+.modal[hidden] { display: none; }
 @keyframes modalIn { from { opacity: 0; transform: translate(-50%, -46%) scale(.98); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
 .modal .mhead {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);

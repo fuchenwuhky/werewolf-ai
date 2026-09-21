@@ -383,6 +383,10 @@ html, body { height: 100%; overscroll-behavior: none; }
 #m-modal .modal > h3 { flex: none; }
 #m-modal .modal > .btnrow { flex: none; }
 #m-modal .modal .setinfo, #m-modal .modal .gear-list { flex: none; }
+/* FIX-08：本文件里的浮层骨架（.modal-mask / .m-sheet / .m-sheet-mask）都写了 display:flex，
+   会盖掉 UA 的 [hidden]{display:none}。凡是"用 hidden 隐藏整层"的路径（pwa.js 在页面没有统一
+   关闭入口时的兜底）必须真的隐藏，否则 Esc 之后会留下一个挡满全屏、点不动的遮罩。 */
+#m-modal .modal-mask[hidden], #m-sheet .m-sheet-mask[hidden], #m-sheet .m-sheet[hidden] { display: none; }
 
 /* 身份翻牌遮罩 */
 .m-flip {

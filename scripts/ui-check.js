@@ -66,18 +66,23 @@ const check = (label, cond, extra = '') => { if (!cond) fails++; log(`${cond ? '
 const PLANNED_SECTIONS = [
   '慢启动守卫（接口人为延迟 1.5s）',
   '设置页',
+  'FIX-08 Esc 关浮层（真实按键）',
   '角色图鉴',
   '中英文切换',
   '离线',
   '离线能力',
   '档案回收区（删除后可恢复）',
+  'FIX-10 偏好保存 409 自恢复',
   '手机版',
   '手机端档案回收区（390×844）',
+  'FIX-08 手机端 Esc 关浮层（真实按键）',
+  'FIX-10/FIX-15 手机端（409 自恢复 + 目标必选提示）',
   ...(FULL ? ['观战 Mock 局跑到终局（--full）'] : []),
   'P4-1 恢复卡片详情',
   'P4-4 终止后刷新',
   'P4-6 推送降级状态条（单例）',
   'P4-3 空刀拦截（真实点击）',
+  'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
   '浏览器控制台',
 ];
@@ -214,6 +219,46 @@ class Browser {
   setViewport(width, height, mobile) { return this.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, this.sessionId); }
   setLatency(ms) { return this.send('Network.emulateNetworkConditions', { offline: false, latency: ms, downloadThroughput: -1, uploadThroughput: -1 }, this.sessionId); }
   setOffline(on) { return this.send('Network.emulateNetworkConditions', { offline: on, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }, this.sessionId); }
+
+  /**
+   * 真实按键（走 CDP Input 域，isTrusted=true，会触发页面里的 keydown 监听）。
+   * 为什么必须真实按键：`el.dispatchEvent(new KeyboardEvent('keydown',...))` 是合成事件，
+   * 只能证明"监听器被调用"，证明不了"按键真的能关掉弹层"（命中测试、默认行为、preventDefault
+   * 的影响都在真实输入管线里）。Esc 关弹层这条修复需要后者。
+   */
+  async pressKey(key) {
+    const map = {
+      Escape: { code: 'Escape', keyCode: 27 },
+      Enter: { code: 'Enter', keyCode: 13 },
+      Tab: { code: 'Tab', keyCode: 9 },
+    };
+    const k = map[key];
+    if (!k) throw new Error(`pressKey 不支持 ${key}（按需在 ui-check 里补键码）`);
+    const base = { key, code: k.code, windowsVirtualKeyCode: k.keyCode, nativeVirtualKeyCode: k.keyCode, modifiers: 0 };
+    await this.send('Input.dispatchKeyEvent', { ...base, type: 'rawKeyDown' }, this.sessionId);
+    await this.send('Input.dispatchKeyEvent', { ...base, type: 'keyUp' }, this.sessionId);
+    return 'OK';
+  }
+
+  /** 真实鼠标点击元素矩形内的**相对位置**（fx/fy ∈ 0..1）。
+   *  realClick 点的是元素中心，而弹窗恰好盖住遮罩中心 —— 要测"点遮罩空白处能关"，
+   *  只能点到遮罩的边角（点中心会点到弹窗上，测出来的是别的东西）。 */
+  async realClickAt(sel, fx, fy) {
+    const box = await this.eval(`(() => {
+      const el = document.querySelector(${JSON.stringify(sel)});
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left + r.width * ${Number(fx)}, y: r.top + r.height * ${Number(fy)}, w: Math.round(r.width), h: Math.round(r.height) };
+    })()`);
+    if (!box) return 'NOT_FOUND';
+    if (!(box.w > 0 && box.h > 0)) return 'ZERO_SIZE';
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent',
+        { type, x: box.x, y: box.y, button: type === 'mouseMoved' ? 'none' : 'left', clickCount: type === 'mouseMoved' ? 0 : 1 },
+        this.sessionId);
+    }
+    return 'OK';
+  }
 
   async shot(file) {
     const { data } = await this.send('Page.captureScreenshot', { format: 'png' }, this.sessionId);
@@ -451,6 +496,96 @@ class Browser {
     check('座位默认随机', seat.value === 'random', `${seat.value} / ${seat.first} / ${seat.count} 项`);
     check('随机时说明座位开局才定', /开局/.test(seat.hint), seat.hint.slice(0, 30));
 
+    // ---- 2.9 FIX-08：Esc 关浮层（真实按键）+ 遮罩 / body 滚动锁 / inert 一并清理 ----
+    // 这段的靶子**改前就红**（不是"注释说修好了"）：
+    //   · 桌面 .inspect-stage（z-index 90，压在弹窗 76 之上）没有任何 Esc 路径能关 —— Esc 按下去毫无反应；
+    //   · body 滚动锁以前根本不存在（新增行为，见报告"存疑"一节），所以"打开时锁上"同样改前就红；
+    //   · 关闭路径释放锁若只写在 ✕ 那一条上，点遮罩/程序化关闭就会把页面锁死 —— 所以四条路各断言一次。
+    // 这里量的是 computed display / getBoundingClientRect / getClientRects，**不是** hidden 属性：
+    // `.modal{display:flex}` 会盖掉 UA 的 [hidden]{display:none}，看属性会得出错误结论。
+    log('\n=== FIX-08 Esc 关浮层（真实按键）===');
+    {
+      const layerState = () => b.eval(`(() => {
+        const modal = document.querySelector('#modal-root .modal');
+        const mask = document.querySelector('#modal-root .modal-mask');
+        const insp = document.querySelector('.inspect-stage');
+        const rect = (n) => { if (!n) return null; const r = n.getBoundingClientRect(); return {
+          w: Math.round(r.width), h: Math.round(r.height), c: n.getClientRects().length, d: getComputedStyle(n).display }; };
+        const app = document.getElementById('app');
+        return {
+          modal: rect(modal), mask: rect(mask), inspect: rect(insp),
+          rootKids: document.getElementById('modal-root').children.length,
+          lock: getComputedStyle(document.body).overflow,
+          inert: !!(app && app.inert),
+        };
+      })()`);
+
+      await b.click('#entry-rulebook');
+      await sleep(600);
+      let ls = await layerState();
+      check('FIX-08 弹窗打开：弹层有真实尺寸（不是只设了 hidden 属性）',
+        !!ls.modal && ls.modal.c > 0 && ls.modal.h >= 120 && ls.modal.d !== 'none', JSON.stringify(ls.modal));
+      check('FIX-08 弹窗打开：遮罩在，且 body 上了滚动锁、背景 inert',
+        !!ls.mask && ls.mask.c > 0 && ls.lock === 'hidden' && ls.inert === true,
+        `锁=${ls.lock} inert=${ls.inert} 遮罩=${JSON.stringify(ls.mask)}`);
+
+      // 弹窗之上再叠一层"检视大卡"（z-index 90 > 弹窗 76）：Esc 必须先关它，且下面的弹窗留着
+      await b.eval(`(() => { const t = [...document.querySelectorAll('#modal-root .tabs button')].find((x) => x.textContent.trim() === '角色图鉴'); if (t) t.click(); })()`);
+      await sleep(600);
+      await b.eval(`document.querySelector('#modal-root .codex .r-card .btn')?.click()`);
+      await sleep(500);
+      ls = await layerState();
+      check('FIX-08 弹窗之上叠了检视大卡（"关最上层"的前提）',
+        !!ls.inspect && ls.inspect.c > 0 && ls.inspect.h >= 200, JSON.stringify(ls.inspect));
+
+      await b.pressKey('Escape');
+      await sleep(500);
+      ls = await layerState();
+      const inspGone = ls.inspect === null || (ls.inspect.c === 0 && ls.inspect.d === 'none');
+      check('FIX-08 Esc 只关最上层：检视大卡消失、下面的弹窗还在', inspGone && !!ls.modal && ls.modal.c > 0,
+        `inspect=${JSON.stringify(ls.inspect)} modal=${JSON.stringify(ls.modal)}`);
+      check('FIX-08 还压着一层时滚动锁保持（不能提前解锁）', ls.lock === 'hidden' && ls.inert === true,
+        `锁=${ls.lock} inert=${ls.inert}`);
+
+      await b.pressKey('Escape');
+      await sleep(500);
+      ls = await layerState();
+      check('FIX-08 Esc 关弹窗：弹层与遮罩都从 DOM 清掉（不是只改 hidden）',
+        ls.rootKids === 0 && ls.modal === null && ls.mask === null,
+        `rootKids=${ls.rootKids} modal=${JSON.stringify(ls.modal)} mask=${JSON.stringify(ls.mask)}`);
+      check('FIX-08 Esc 关弹窗后：body 滚动锁解除、背景恢复可交互',
+        ls.lock !== 'hidden' && ls.inert === false, `锁=${ls.lock} inert=${ls.inert}`);
+
+      // 其余三条关闭路径各断言一次：只修按钮那条 = 弹窗关了但页面再也滚不动（比不锁更糟）
+      const closePaths = [
+        ['点遮罩空白处', async () => b.realClickAt('#modal-root .modal-mask', 0.03, 0.04)],
+        ['点 ✕ 按钮', async () => b.realClick('#modal-root .mhead .btn')],
+        ['程序化 closeModal()', async () => b.eval('closeModal()')],
+      ];
+      for (const [name, act] of closePaths) {
+        await b.click('#entry-rulebook');
+        await sleep(500);
+        await act();
+        await sleep(500);
+        const st = await layerState();
+        check(`FIX-08 关闭路径「${name}」：弹层+遮罩清掉且滚动锁释放`,
+          st.rootKids === 0 && st.modal === null && st.mask === null && st.lock !== 'hidden' && st.inert === false,
+          `rootKids=${st.rootKids} 锁=${st.lock} inert=${st.inert}`);
+      }
+
+      // CSS 层：".modal 写了 display:flex → 盖掉 UA 的 [hidden]{display:none}" 是本缺陷的根因之一，
+      // 直接在真实页面里放一个 .modal[hidden] 探针量计算结果（改回没有这条规则 → display 会变 flex → 红）
+      const hiddenProbe = await b.eval(`(() => {
+        const d = document.createElement('div'); d.className = 'modal'; d.hidden = true;
+        document.body.appendChild(d);
+        const cs = getComputedStyle(d); const r = d.getBoundingClientRect();
+        const out = { display: cs.display, h: Math.round(r.height), c: d.getClientRects().length };
+        d.remove(); return out;
+      })()`);
+      check('FIX-08 .modal[hidden] 真的不渲染（不被 .modal{display:flex} 盖掉）',
+        hiddenProbe.display === 'none' && hiddenProbe.h === 0 && hiddenProbe.c === 0, JSON.stringify(hiddenProbe));
+    }
+
     // ---- 3. i18n 真的作用于真实 DOM ----
     log('\n=== 中英文切换 ===');
     await b.click('#btn-lang');
@@ -671,6 +806,93 @@ class Browser {
       check('回收区面板 ✕ 返回档案列表', await b.eval(`!!document.getElementById('pm-trash-entry')`));
       await b.eval(`closeModal()`);
       await sleep(200);
+    }
+
+    // ---- 5.6 FIX-10：偏好保存遇 409 必须重拉 revision 后重试恰好一次（否则永久自锁）----
+    // 原实现 409 直接放弃 → 内存里的 revision 永远停在过期值 → 之后每次保存都 409，只能刷新页面。
+    // 三段证据：① 真冲突后能自动恢复并落盘；② 之后还能继续保存（自锁已解除）；
+    //          ③ 测试侧注入"PATCH 永远 409"，钉住"恰好重试一次"（1 次=没重试，>2 次=无限重试）+ 可读文案。
+    log('\n=== FIX-10 偏好保存 409 自恢复 ===');
+    {
+      const jj = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let d = null;
+        try { d = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: d };
+      };
+      const profs = ((await jj('GET', '/api/profiles')).body.profiles || []).filter((p) => !p.archivedAt);
+      let pid = profs.length ? profs[0].id : null;
+      if (!pid) pid = (await jj('POST', '/api/profiles', { nickname: 'FIX10 自恢复' })).body.profile.id;
+      await b.eval(`loadProfiles()`); // 让页面拿最新档案列表（loadProfiles 是页面里的真实函数）
+      await sleep(600);
+      const pre = await b.eval(`(() => {
+        state.profileId = ${JSON.stringify(pid)};
+        const p = state.profiles.find((x) => x.id === state.profileId);
+        return p ? { rev: p.revision, nick: p.nickname } : null;
+      })()`);
+      check('FIX-10 前置：页面已加载该档案（有 revision 可比对）',
+        !!pre && Number.isFinite(Number(pre.rev)), JSON.stringify(pre));
+
+      // ① 造一次**真实**的过期 revision（不是 mock fetch）：服务端会真的回 409
+      const rec = await b.eval(`(async () => {
+        const p = state.profiles.find((x) => x.id === state.profileId);
+        p.revision = Number(p.revision) + 997;
+        const before = p.revision;
+        await saveProfilePrefs({ fontScale: 1.2, layout: 'compact', reducedMotion: true });
+        const after = state.profiles.find((x) => x.id === state.profileId);
+        return { before, rev: after.revision, prefs: after.preferences,
+          status: (document.getElementById('pref-status') || {}).textContent || '' };
+      })()`);
+      const srvAfter = ((await jj('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === pid);
+      check('FIX-10 409 后自动重拉 revision 并重试成功（不再永久自锁）',
+        !!srvAfter && rec.rev === srvAfter.revision && /已保存/.test(rec.status)
+        && rec.prefs && rec.prefs.layout === 'compact' && rec.prefs.reducedMotion === true,
+        `revision ${rec.before}→${rec.rev}（服务端 ${srvAfter && srvAfter.revision}）状态="${rec.status}" 偏好=${JSON.stringify(rec.prefs)}`);
+
+      // ② 紧接着再保存一次也必须成功（自锁的直接对照：旧实现第二次仍然 409）
+      const again = await b.eval(`(async () => {
+        await saveProfilePrefs({ fontScale: 1, layout: 'reading', reducedMotion: false });
+        const p = state.profiles.find((x) => x.id === state.profileId);
+        return { rev: p.revision, layout: p.preferences.layout,
+          status: (document.getElementById('pref-status') || {}).textContent || '' };
+      })()`);
+      const srvAfter2 = ((await jj('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === pid);
+      check('FIX-10 冲突恢复之后还能继续保存（revision 真的跟上了，不是一次性的）',
+        /已保存/.test(again.status) && again.layout === 'reading' && !!srvAfter2 && again.rev === srvAfter2.revision,
+        `状态="${again.status}" 服务端 revision=${srvAfter2 && srvAfter2.revision}`);
+
+      // ③ 重试次数必须**恰好一次**：注入"PATCH 一律 409"（测试侧，不改产品源码），段落结束立刻还原
+      const perm = await b.eval(`(async () => {
+        const orig = window.fetch;
+        let patches = 0;
+        window.fetch = function (u, o) {
+          if (o && o.method === 'PATCH') {
+            patches++;
+            return Promise.resolve(new Response(JSON.stringify({ error: '另一窗口已更新该档案（当前 revision 3）' }),
+              { status: 409, headers: { 'content-type': 'application/json' } }));
+          }
+          return orig.apply(this, arguments);
+        };
+        let thrown = '';
+        try { await saveProfilePrefs({ fontScale: 1.2, layout: 'compact', reducedMotion: false }); }
+        catch (e) { thrown = String(e && e.message); }
+        finally { window.fetch = orig; }
+        return { patches, restored: window.fetch === orig, thrown,
+          status: (document.getElementById('pref-status') || {}).textContent || '' };
+      })()`);
+      check('FIX-10 始终冲突时 PATCH 恰好 2 次（不重试=1 次；无限重试>2 次）',
+        perm.patches === 2, `PATCH 次数=${perm.patches}（异常=${perm.thrown || '无'}）`);
+      check('FIX-10 重试仍失败：给出可读原因（不是裸状态码/异常串，也不静默吞掉）',
+        perm.status.length >= 8 && /另一个窗口|版本|冲突|刷新/.test(perm.status) && !/^(409|Error)/.test(perm.status.trim()),
+        `状态="${perm.status}"`);
+      check('FIX-10 故障注入已还原 window.fetch（不给后面的段落串味）', perm.restored === true);
+      const srvFinal = ((await jj('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === pid);
+      check('FIX-10 永久冲突时服务端数据没被写坏（失败是干净的失败）',
+        !!srvFinal && srvFinal.preferences.layout === 'reading', JSON.stringify(srvFinal && srvFinal.preferences));
     }
 
     // ---- 6. 手机版 ----
@@ -905,6 +1127,148 @@ class Browser {
       await b.eval(`document.querySelector('#m-sheet .m-sheet-head .btn')?.click()`); // 关掉底部弹层，别留给后续段落
       await sleep(400);
       check('手机端回收区：弹层可关闭', await b.eval(`document.querySelectorAll('#m-sheet > *').length`) === 0);
+    }
+
+    // ---- 6.6 FIX-08（手机端）：Esc 关浮层 —— .m-sheet / #m-modal，遮罩与 body 滚动锁一起清 ----
+    // 改前就红的三件事：① pwa.js 的 Esc 选择器里根本没有 `.m-sheet`（弹层原地不动）；
+    // ② 就算把 .modal 设成 hidden，手机端遮罩 `#m-modal .modal-mask{display:flex}` 也不会消失
+    //    —— 屏幕上留一块挡满全屏、点不动的暗层；③ 两端都没有 body 滚动锁（新增行为）。
+    // 量 computed display / getBoundingClientRect / getClientRects，**不**看 hidden 属性。
+    log('\n=== FIX-08 手机端 Esc 关浮层（真实按键）===');
+    {
+      const mState = () => b.eval(`(() => {
+        const rect = (n) => { if (!n) return null; const r = n.getBoundingClientRect(); return {
+          w: Math.round(r.width), h: Math.round(r.height), c: n.getClientRects().length, d: getComputedStyle(n).display }; };
+        return {
+          sheet: rect(document.querySelector('#m-sheet .m-sheet')),
+          sheetMask: rect(document.querySelector('#m-sheet .m-sheet-mask')),
+          modal: rect(document.querySelector('#m-modal .modal')),
+          modalMask: rect(document.querySelector('#m-modal .modal-mask')),
+          lock: getComputedStyle(document.body).overflow,
+        };
+      })()`);
+
+      // ① 底部弹层（.m-sheet 挂在 #m-app 之外，选择器作用域写错就会漏掉它）
+      await b.realClick('#m-profile-chip');
+      await sleep(900);
+      let ms = await mState();
+      const sheetWasOpen = !!ms.sheet && ms.sheet.c > 0 && ms.sheet.h >= 120;
+      check('FIX-08 手机端底部弹层打开：.m-sheet 有真实尺寸且在遮罩里',
+        sheetWasOpen && !!ms.sheetMask && ms.sheetMask.c > 0,
+        `sheet=${JSON.stringify(ms.sheet)} mask=${JSON.stringify(ms.sheetMask)}`);
+      check('FIX-08 手机端底部弹层打开：body 上了滚动锁', ms.lock === 'hidden', `锁=${ms.lock}`);
+      await b.pressKey('Escape');
+      await sleep(700);
+      ms = await mState();
+      check('FIX-08 手机端 Esc 关底部弹层：.m-sheet 与遮罩都不再渲染',
+        sheetWasOpen && (ms.sheet === null || (ms.sheet.c === 0 && ms.sheet.h === 0)) && (ms.sheetMask === null || ms.sheetMask.c === 0),
+        `按 Esc 前已打开=${sheetWasOpen} sheet=${JSON.stringify(ms.sheet)} mask=${JSON.stringify(ms.sheetMask)}`);
+      check('FIX-08 手机端 Esc 关弹层后滚动锁释放', ms.lock !== 'hidden', `锁=${ms.lock}`);
+
+      // ② 中部弹窗（#m-modal .modal + .modal-mask）
+      await b.realClick('#m-settings-btn');
+      await sleep(900);
+      ms = await mState();
+      const modalWasOpen = !!ms.modal && ms.modal.c > 0 && ms.modal.h >= 120;
+      check('FIX-08 手机端中部弹窗打开：.modal 有真实尺寸且在遮罩里',
+        modalWasOpen && !!ms.modalMask && ms.modalMask.c > 0,
+        `modal=${JSON.stringify(ms.modal)} mask=${JSON.stringify(ms.modalMask)}`);
+      check('FIX-08 手机端中部弹窗打开：body 上了滚动锁', ms.lock === 'hidden', `锁=${ms.lock}`);
+      await b.pressKey('Escape');
+      await sleep(700);
+      ms = await mState();
+      check('FIX-08 手机端 Esc 关中部弹窗：.modal 与遮罩一起消失（改前遮罩会留在屏幕上挡全屏）',
+        modalWasOpen && (ms.modal === null || ms.modal.c === 0) && (ms.modalMask === null || ms.modalMask.c === 0),
+        `按 Esc 前已打开=${modalWasOpen} modal=${JSON.stringify(ms.modal)} mask=${JSON.stringify(ms.modalMask)}`);
+      check('FIX-08 手机端 Esc 关中部弹窗后滚动锁释放', ms.lock !== 'hidden', `锁=${ms.lock}`);
+
+      // ③ 点遮罩关闭（手机端最常用的关闭方式）：同样要清干净并解锁
+      await b.realClick('#m-settings-btn');
+      await sleep(900);
+      const modalWasOpen2 = await b.eval(`(() => { const m = document.querySelector('#m-modal .modal'); return !!m && m.getClientRects().length > 0; })()`);
+      await b.realClickAt('#m-modal .modal-mask', 0.5, 0.02); // 顶部空白：弹窗居中，点中心会点到弹窗上
+      await sleep(700);
+      ms = await mState();
+      check('FIX-08 手机端点遮罩关中部弹窗：清掉且滚动锁释放',
+        modalWasOpen2 && (ms.modal === null || ms.modal.c === 0) && ms.lock !== 'hidden',
+        `点前已打开=${modalWasOpen2} modal=${JSON.stringify(ms.modal)} 锁=${ms.lock}`);
+      await b.shot(path.join(SHOTS, '13d-mobile-esc-close.png'));
+    }
+
+    // ---- 6.7 FIX-10 / FIX-15（手机端）：手机端是独立实现，两端同款行为各验一次 ----
+    log('\n=== FIX-10/FIX-15 手机端（409 自恢复 + 目标必选提示）===');
+    {
+      const jm = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method, headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let d = null;
+        try { d = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: d };
+      };
+      const mprofs = ((await jm('GET', '/api/profiles')).body.profiles || []).filter((p) => !p.archivedAt);
+      let mpid = mprofs.length ? mprofs[0].id : null;
+      if (!mpid) mpid = (await jm('POST', '/api/profiles', { nickname: '手机 FIX10' })).body.profile.id;
+      const mrec = await b.eval(`(async () => {
+        const p = state.profiles.find((x) => x.id === ${JSON.stringify(mpid)});
+        if (!p) return { missing: true };
+        state.profileId = p.id;
+        p.revision = Number(p.revision) + 991; // 真实过期（服务端会真的回 409）
+        const before = p.revision;
+        await saveProfilePrefs({ fontScale: 1.2, layout: 'compact', reducedMotion: true });
+        const after = state.profiles.find((x) => x.id === p.id);
+        return { before, rev: after.revision, layout: after.preferences.layout,
+          flash: (document.getElementById('m-flash') || {}).textContent || '' };
+      })()`);
+      const msrvProf = ((await jm('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === mpid);
+      check('FIX-10 手机端：409 后自动重拉 revision 并重试成功（不再是永久自锁）',
+        mrec.missing !== true && !!msrvProf && mrec.rev === msrvProf.revision && mrec.layout === 'compact' && /已保存/.test(mrec.flash),
+        `revision ${mrec.before}→${mrec.rev}（服务端 ${msrvProf && msrvProf.revision}）flash="${mrec.flash}"`);
+      const mperm = await b.eval(`(async () => {
+        const orig = window.fetch;
+        let patches = 0;
+        window.fetch = function (u, o) {
+          if (o && o.method === 'PATCH') {
+            patches++;
+            return Promise.resolve(new Response(JSON.stringify({ error: '另一窗口已更新该档案' }),
+              { status: 409, headers: { 'content-type': 'application/json' } }));
+          }
+          return orig.apply(this, arguments);
+        };
+        try { await saveProfilePrefs({ fontScale: 1, layout: 'reading', reducedMotion: false }); }
+        finally { window.fetch = orig; }
+        return { patches, restored: window.fetch === orig, flash: (document.getElementById('m-flash') || {}).textContent || '' };
+      })()`);
+      check('FIX-10 手机端：始终冲突时 PATCH 恰好 2 次（不重试=1，无限重试>2）',
+        mperm.patches === 2, `PATCH 次数=${mperm.patches}`);
+      check('FIX-10 手机端：重试仍失败给出可读原因（不是裸状态码）',
+        mperm.flash.length >= 8 && /另一个窗口|版本|冲突|刷新/.test(mperm.flash) && mperm.restored === true, `flash="${mperm.flash}"`);
+
+      // FIX-15（手机端）：没选目标就点确认键，必须出可读提示、且不提交。
+      // 面板用页面里**真实的** buildActionUI 组装（不是手工造 DOM），只喂一个假的待办对象；
+      // actionState.target 保持页面当前的自然值，不人为改（改了就测不出"没选目标"这条路径）。
+      const mGuard = await b.eval(`(() => {
+        const keys = document.getElementById('m-keys');
+        const dlg = document.getElementById('m-dialog');
+        const hint = document.getElementById('m-pending-hint');
+        const natural = actionState.target;
+        keys.innerHTML = ''; dlg.innerHTML = '';
+        const v = { me: { seat: 1, role: 'wolf', alive: true }, players: [
+          { seat: 1, name: '我', alive: true }, { seat: 2, name: '甲', alive: true }, { seat: 3, name: '乙', alive: true }] };
+        buildActionUI(v, { task: 'wolf_kill', candidates: [2, 3], allowNone: true }, keys, dlg);
+        const conf = [...keys.querySelectorAll('button')].find((x) => x.textContent.trim() === '投刀');
+        const before = hint.textContent;
+        const disabled = conf ? conf.disabled : null;
+        if (conf) conf.click();
+        return { found: !!conf, disabled, natural, before, after: hint.textContent };
+      })()`);
+      check('FIX-15 手机端：确认键可用（改前是禁用键，点了彻底没反应）',
+        mGuard.found === true && mGuard.disabled === false, JSON.stringify({ found: mGuard.found, disabled: mGuard.disabled }));
+      check('FIX-15 手机端：没选目标点确认 → 可读提示（含怎么选、怎么放弃）',
+        /请先在「玩家」页点一个座位/.test(mGuard.after) && /刀口/.test(mGuard.after) && /空刀/.test(mGuard.after),
+        `自然目标=${mGuard.natural} 提示="${mGuard.after}"`);
+      await b.eval(`document.getElementById('m-keys').innerHTML = ''; document.getElementById('m-dialog').innerHTML = '';`);
     }
 
     // ---- 7. 完整对局（观战 + Mock，无需人类作答）----
@@ -1153,28 +1517,34 @@ class Browser {
             window.__f5.push(String((e.reason && e.reason.message) || e.reason || 'unknown'));
             e.preventDefault();
           });`);
-          // 关键前提：面板可能**预选**了目标，那样"空刀点击"其实是一次正常提交 →
-          // 上一轮我就是在这里得出过错误结论。先读出并清掉预选，再用服务端事件计数做证据。
+          // 关键前提：面板可能**预选**了目标（单候选时预选），那样"空刀点击"其实是一次正常提交 →
+          // 上一轮就是在这里得出过错误结论，所以先把预选目标读出来留证。
+          // ⚠ 但这里**不再人为把 actionState.target 改成 null**：真实页面里它的初值是 0，
+          // "什么都没选"与"显式点空刀"本来就是同一个值 —— 那正是 FIX-15 的根因。旧写法把状态
+          // 改成真实用户永远造不出的 null 再点，于是"提示有变化"这条结论是假的。
+          // 现在按**真实状态**点击，断言必须证明"没选目标点投刀 → 得到可读提示、且没有提交"。
           const preTarget = await b.eval(`typeof actionState === 'undefined' ? 'unavailable' : actionState.target`);
-          await b.eval(`if (typeof actionState !== 'undefined') actionState.target = null;`);
           const votesBefore = await countKnifeEvents(g3.gameId, g3.godToken);
           const emptyClick = await b.eval(`(() => {
             const hint = document.getElementById('pending-hint');
             const before = hint.textContent;
             const btns = [...document.querySelectorAll('#action-controls button')].filter((x) => !x.disabled);
             const submit = btns[btns.length - 1]; // 空刀/投刀 排在最后
+            const used = submit.textContent.trim();
             submit.click();
-            return { before, after: hint.textContent, used: submit.textContent.trim() };
+            return { before, after: hint.textContent, used };
           })()`);
           const stillPending = await b.eval(`document.getElementById('action-controls')?.dataset.task || ''`);
           const votesAfter = await countKnifeEvents(g3.gameId, g3.godToken);
-          const noFeedback = !/请先点一个座位/.test(emptyClick.after);
-          log(`  · 空刀点击：按钮="${picked.used}"（候选 ${picked.labels}）预选目标=${preTarget} 投刀事件 ${votesBefore}→${votesAfter} 提示变化=${emptyClick.before === emptyClick.after ? '无' : '有'}`);
+          log(`  · 空刀点击：按钮="${picked.used}"（候选 ${picked.labels}）真实目标=${preTarget} 投刀事件 ${votesBefore}→${votesAfter} 提示变化=${emptyClick.before === emptyClick.after ? '无' : '有'}`);
           // 服务端证据：没有新增投刀事件 = 护栏真的挡住了空提交
           check('空刀点击没有产生新的投刀事件（护栏有效）', votesAfter === votesBefore, `事件数 ${votesBefore} → ${votesAfter}｜点击后面板=${stillPending}`);
-          // 已知缺口 F5（待用户确认）：被拒时没有可读提示，玩家不知道自己为什么没投出去。
-          // 按项目约定先记录、不伪装成通过；它的定性依赖上面这条服务端证据。
-          if (noFeedback) log(`  · 已知缺口 F5：空刀被拒时无可读提示（提示仍为"${emptyClick.after}"），但未提交（证据如上）`);
+          // FIX-15（原 F5 缺口）：被拒时**必须**有可读提示 —— 这里断言页面上的提示文本，
+          // 而不是像以前那样只打印一行"已知缺口"。面板带「空刀」键时提示要点名它（礼貌地告诉玩家怎么放弃）。
+          const noneChipShown = picked.labels.includes('空刀');
+          check('空刀被拒时给出可读提示（不是静默无反应）',
+            /请先点一个座位/.test(emptyClick.after) && /刀口/.test(emptyClick.after) && (!noneChipShown || /空刀/.test(emptyClick.after)),
+            `提示="${emptyClick.after}"（面板${noneChipShown ? '有' : '无'}「空刀」键）`);
           // 空刀点击已在页面里触发未捕获拒绝（F5）：先等它落地、把本段新增的异常条目清掉，再继续取图与读取；
           // 否则 Browser 会在下一次调用时因"页面抛错"直接中断整个验收（实测就是这样被打断的）。
           await sleep(900);
@@ -1186,10 +1556,84 @@ class Browser {
         await api('POST', `/api/games/${g3.gameId}/terminate`, { token: g3.playerToken });
       }
 
+      // (F) FIX-07：「清除标注」必须走真 DELETE。
+      // 旧实现是 PUT 一份空标注：内容清空了，但座位键仍留在 doc.seats 里 —— 存储只增不减，
+      // 导出计数（src/profiles/transfer.js:59 的 counts.notes）跟着虚高。
+      // 判定用**服务端证据**（seats 里那个键在不在），因为界面列表按"有内容"过滤，改前改后都看不到行。
+      log('\n=== FIX-07 清除标注走真 DELETE ===');
+      {
+        const g5 = await mkGame('quick10', 10, 777001);
+        await api('POST', `/api/games/${g5.gameId}/start`, { token: g5.playerToken });
+        await sleep(400);
+        const put = await api('PUT', `/api/games/${g5.gameId}/annotations`, {
+          token: g5.playerToken, expectedRevision: 0, seats: { 3: { leaning: 'lean_wolf', note: '清除前先记一笔' } },
+        });
+        check('FIX-07 前置：服务端已写入座位 3 的标注',
+          put.code === 200 && !!(put.body && put.body.annotations.seats && put.body.annotations.seats['3']),
+          `PUT ${put.code} seats=${JSON.stringify(put.body && put.body.annotations && put.body.annotations.seats)}`);
+        await enter(g5);
+        await b.click('#btn-resume');
+        await sleep(1500);
+        // 真路：笔记区（宽屏是常驻右栏，窄屏是抽屉）里那条的「编辑」→ 编辑器里的「清除此座位笔记」
+        if (await b.eval(`document.getElementById('notes-drawer').classList.contains('hidden')`)) {
+          await b.click('#btn-notes');
+          await sleep(500);
+        }
+        await b.eval(`renderNotesList()`);
+        await sleep(300);
+        const beforeUi = await b.eval(`(() => {
+          const rows = [...document.querySelectorAll('#notes-list .pm-row')];
+          return {
+            drawerOpen: !document.getElementById('notes-drawer').classList.contains('hidden'),
+            rows: rows.map((r) => (r.querySelector('.pm-name') || {}).textContent || ''),
+            h: rows.length ? Math.round(rows[0].getBoundingClientRect().height) : -1,
+            seat: Object.prototype.hasOwnProperty.call(state.anno.seats || {}, '3'),
+          };
+        })()`);
+        check('FIX-07 前置：笔记列表里能看到座位 3（界面与服务端一致）',
+          beforeUi.drawerOpen === true && beforeUi.seat === true && beforeUi.rows.some((t) => /3\s*号/.test(t)) && beforeUi.h > 0,
+          JSON.stringify(beforeUi));
+        await b.eval(`(() => { const row = [...document.querySelectorAll('#notes-list .pm-row')].find((r) => /3\\s*号/.test((r.querySelector('.pm-name') || {}).textContent || '')); row?.querySelector('.pm-ops .btn')?.click(); })()`);
+        await sleep(600);
+        check('FIX-07 前置：打开了座位 3 的标注编辑器',
+          await b.eval(`!!document.querySelector('#modal-root .modal') && [...document.querySelectorAll('#modal-root .modal button')].some((x) => /清除此座位笔记/.test(x.textContent))`));
+        await b.eval(`[...document.querySelectorAll('#modal-root .modal button')].find((x) => /清除此座位笔记/.test(x.textContent))?.click()`);
+        await sleep(1200);
+        const afterUi = await b.eval(`(() => {
+          const rows = [...document.querySelectorAll('#notes-list .pm-row')];
+          return {
+            seat: Object.prototype.hasOwnProperty.call(state.anno.seats || {}, '3'),
+            rev: state.anno.rev,
+            modalOpen: !!document.querySelector('#modal-root .modal'),
+            // 「撤销」行（.current）会留一条：清除后仍可撤销，这是有意的；标注行必须消失
+            annoRows: rows.filter((r) => !r.classList.contains('current')).length,
+            undoRows: rows.filter((r) => r.classList.contains('current')).length,
+          };
+        })()`);
+        const srv2 = await api('GET', `/api/games/${g5.gameId}/annotations?token=${g5.playerToken}`);
+        const seats2 = ((srv2.body || {}).annotations || {}).seats || {};
+        check('FIX-07 清除后服务端的座位键真的没了（DELETE 语义，不是 PUT 空标注）',
+          !Object.prototype.hasOwnProperty.call(seats2, '3'), `seats=${JSON.stringify(seats2)}`);
+        check('FIX-07 清除后前端内存与服务端一致（标注行消失、计数不虚高、编辑器关闭、留下撤销）',
+          afterUi.seat === false && afterUi.annoRows === 0 && afterUi.undoRows === 1 && !afterUi.modalOpen
+          && afterUi.rev === (srv2.body || {}).revision,
+          `内存 seat=${afterUi.seat} 标注行=${afterUi.annoRows} 撤销行=${afterUi.undoRows} 编辑器已关=${!afterUi.modalOpen} revision=${afterUi.rev}/${(srv2.body || {}).revision}`);
+        await b.shot(path.join(SHOTS, '12b-annotation-deleted.png'));
+        await api('POST', `/api/games/${g5.gameId}/terminate`, { token: g5.playerToken });
+      }
+
       // (E) P5 移动端：手机版必须能进对局并把座位/流程/待办渲染出来（mock 局，零成本）
       log('\n=== P5 手机端进入对局 ===');
       const g4 = await mkGame('quick10', 10, 20260917);
       await api('POST', `/api/games/${g4.gameId}/start`, { token: g4.playerToken });
+      // FIX-07（手机端）：手机端的「清除标注」是独立实现（不是共用模块），所以两端各自端到端验一次。
+      // 这里在**进局之前**写好一条座位 3 的标注，让手机页面启动时自然拉到它。
+      const mput = await api('PUT', `/api/games/${g4.gameId}/annotations`, {
+        token: g4.playerToken, expectedRevision: 0, seats: { 3: { leaning: 'lean_wolf', note: '手机端清除前记一笔' } },
+      });
+      check('FIX-07 手机端前置：服务端已写入座位 3 的标注',
+        mput.code === 200 && !!(mput.body && mput.body.annotations.seats && mput.body.annotations.seats['3']),
+        `PUT ${mput.code} seats=${JSON.stringify(mput.body && mput.body.annotations && mput.body.annotations.seats)}`);
       await b.setViewport(390, 844, true);
       // 手机端用自己的键 `mww_current`（桌面版是 `ww_current`，两者不共用）——
       // 只写 `ww_current` 手机会一直停在板子页（实测）。这里两个都写，模拟"手机上开的局"。
@@ -1245,6 +1689,40 @@ class Browser {
       check('手机端弹层：不得出现 .modal 套 .modal', setKids === 0, `嵌套层数=${setKids}`);
       await b.shot(path.join(SHOTS, '13b-mobile-gear-settings.png'));
       await b.eval(`document.getElementById('m-modal').innerHTML = ''`);
+
+      // FIX-07（手机端续）：笔记页 → 点座位 3 → 底部弹层的「清除」→ 服务端座位键必须真的消失
+      await b.click('#m-tabbtn-notes');
+      await sleep(700);
+      const mNoteRow = await b.eval(`(() => {
+        const row = [...document.querySelectorAll('#m-notes-list > *')].find((r) => /3\\s*号/.test(r.textContent));
+        if (!row) return null;
+        const r = row.getBoundingClientRect();
+        return { text: row.textContent.replace(/\\s+/g, ' ').trim().slice(0, 24), h: Math.round(r.height) };
+      })()`);
+      check('FIX-07 手机端前置：笔记页列出座位 3（行有真实高度）',
+        !!mNoteRow && mNoteRow.h > 20, JSON.stringify(mNoteRow));
+      await b.eval(`(() => { const row = [...document.querySelectorAll('#m-notes-list > *')].find((r) => /3\\s*号/.test(r.textContent)); row?.click(); })()`);
+      await sleep(800);
+      const mClearBtn = await b.eval(`(() => {
+        const btn = [...document.querySelectorAll('#m-sheet .btn')].find((x) => x.textContent.trim() === '清除');
+        if (!btn) return null;
+        const r = btn.getBoundingClientRect();
+        return { h: Math.round(r.height), w: Math.round(r.width), zero: btn.disabled };
+      })()`);
+      check('FIX-07 手机端前置：座位 3 的标注弹层打开了「清除」键（可点、非 0 尺寸）',
+        !!mClearBtn && mClearBtn.h > 20 && mClearBtn.w > 20 && mClearBtn.zero === false, JSON.stringify(mClearBtn));
+      const mSeatBefore = await b.eval(`Object.prototype.hasOwnProperty.call(state.anno.seats || {}, '3')`);
+      await b.eval(`[...document.querySelectorAll('#m-sheet .btn')].find((x) => x.textContent.trim() === '清除')?.click()`);
+      await sleep(1400);
+      const mSeatAfter = await b.eval(`(() => ({ seat: Object.prototype.hasOwnProperty.call(state.anno.seats || {}, '3'),
+        err: (document.getElementById('m-anno-err') || {}).textContent || '' }))()`);
+      const msrv = await api('GET', `/api/games/${g4.gameId}/annotations?token=${g4.playerToken}`);
+      const mseats = ((msrv.body || {}).annotations || {}).seats || {};
+      check('FIX-07 手机端清除后服务端的座位键真的没了（DELETE 语义）',
+        mSeatBefore === true && !Object.prototype.hasOwnProperty.call(mseats, '3') && mSeatAfter.seat === false && mSeatAfter.err === '',
+        `清除前 seat=${mSeatBefore} 清除后 内存=${mSeatAfter.seat} 服务端=${JSON.stringify(mseats)} 错误行="${mSeatAfter.err}"`);
+      await b.shot(path.join(SHOTS, '13e-mobile-annotation-cleared.png'));
+      await b.eval(`document.getElementById('m-sheet').innerHTML = ''`);
       // 结算后总结（用户反馈"手机端结束后什么都没有"）：终止本局 → 自动弹总结 → 逐项核对。
       await api('POST', `/api/games/${g4.gameId}/terminate`, { token: g4.playerToken });
       await sleep(2200); // 自动弹出有 600ms 延迟，弹出后还要拉一次 /api/stats

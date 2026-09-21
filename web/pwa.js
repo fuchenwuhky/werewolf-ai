@@ -85,17 +85,46 @@
   }
 
   // ---------- 键盘与屏幕阅读器 ----------
+  /**
+   * Esc 关浮层（FIX-08）。全页**只有这一个** Esc 监听器；关闭动作交给页面自己的统一入口
+   * `window.__wwEscClose()`（web/app.js 与 web/m/m.js 各自实现），因为只有页面知道：
+   *   · 关哪个才算"最上层"（检视大卡 z-index 90 > 弹窗 76 > 笔记抽屉；手机端按返回栈 LIFO）；
+   *   · 关一层要连带清理什么（遮罩、软键盘/视口监听、返回栈深度、body 滚动锁、焦点归还）。
+   *
+   * 这里曾经自己写 `l.hidden = true`，两个问题（都在真实浏览器里复现过）：
+   *   ① `.modal{display:flex}` / `.m-sheet{display:flex}` 会盖掉 UA 的 `[hidden]{display:none}`
+   *      ——作者样式优先于 UA 样式——属性设了，弹层照样在屏幕上（手机端实测：Esc 后弹层不消失，
+   *      或只剩一个挡满全屏、点不动的遮罩）；
+   *   ② 就算隐藏成功，遮罩、body 滚动锁、返回栈这些清理全被跳过。
+   * 所以：有统一入口就交给它；没有（其它独立页面）才退回"按 hidden 隐藏整层遮罩"的兜底，
+   * 且兜底必须作用在**遮罩**上 —— 只藏 .modal 会留下一个挡满全屏、点不动的遮罩。
+   *
+   * ⚠ 有意不关的浮层：身份翻牌浮层（桌面的 #role-overlay / 手机的 #m-flip「开始游戏」）是
+   * "确认看到自己身份"的必经步骤，允许 Esc 跳过意味着玩家可能没看到身份就被推进对局；
+   * 上帝面板同理（"关面板 = 退上帝视角"，保持原入口操作）。
+   */
+  function fallbackHideLayer(l) {
+    if (l.tagName === 'DIALOG') { l.close(); return true; }
+    const box = l.closest('.modal-mask, .m-sheet-mask') || l;
+    box.hidden = true;
+    return true;
+  }
+
+  function escCloseTopLayer() {
+    if (typeof window.__wwEscClose === 'function') {
+      try { if (window.__wwEscClose() === true) return true; } catch (_) { /* 页面钩子自身出错：退回兜底 */ }
+    }
+    let closed = false;
+    for (const l of document.querySelectorAll('.overlay:not([hidden]), .modal:not([hidden]), .m-sheet:not([hidden]), dialog[open]')) {
+      closed = fallbackHideLayer(l) || closed;
+    }
+    return closed;
+  }
+
   function enhanceA11y() {
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        // 关闭可见的浮层（卡牌检视/设置弹层等统一带 .overlay 或 .modal）
-        const layers = document.querySelectorAll('.overlay:not([hidden]), .modal:not([hidden]), dialog[open]');
-        let closed = false;
-        for (const l of layers) {
-          if (l.tagName === 'DIALOG') l.close(); else l.hidden = true;
-          closed = true;
-        }
-        if (closed) e.preventDefault();
+        if (escCloseTopLayer()) e.preventDefault();
         return;
       }
       // `/` 聚焦第一个可见输入框（不动任何会输入文字的控件）

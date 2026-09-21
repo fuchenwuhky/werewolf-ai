@@ -55,14 +55,16 @@ function trackOverlay(kind, closeDom, opts) {
   const top = backStack[backStack.length - 1];
   const replace = overlayReplaceNext || o.swapIfOpen;
   overlayReplaceNext = false;
-  if (replace && top && top.kind !== 'game') { top.kind = kind; top.closeDom = closeDom; top.veto = o.veto || null; return; }
+  if (replace && top && top.kind !== 'game') { top.kind = kind; top.closeDom = closeDom; top.veto = o.veto || null; syncLayerScrollLock(); return; }
   if (top && top.kind === kind && kind !== 'game' && (o.swapIfOpen || overlayAlive(kind))) {
     top.closeDom = closeDom;
     top.veto = o.veto || null;
+    syncLayerScrollLock();
     return;
   }
   backStack.push({ kind, closeDom, veto: o.veto || null });
   try { history.pushState({ mww: backStack.length }, ''); } catch (_) { /* 无痕模式等极端环境：退化为无历史管理 */ }
+  syncLayerScrollLock(); // 开层后立刻锁上背景（与首帧一致，不依赖观察者的下一个微任务）
 }
 
 
@@ -82,6 +84,7 @@ function dismissTop() {
   while (backStack.length && !overlayAlive(backStack[backStack.length - 1].kind)) backStack.pop();
   const top = dropTopOverlay();
   if (top) { try { top.closeDom(); } catch (_) {} }
+  syncLayerScrollLock();
   return top;
 }
 
@@ -111,6 +114,7 @@ window.addEventListener('popstate', (e) => {
       return;
     }
   }
+  syncLayerScrollLock(); // 一次返回可能连关多层：循环结束后按最终状态重算滚动锁
 });
 
 /** AC-11：我的对局列表（当前档案）——可恢复局置顶可继续，已结束局只读展示 */
@@ -167,6 +171,26 @@ async function showMyGamesSheet() {
   openModal(wrap);
 }
 
+/** 关掉当前最上层的"非 game"层。返回是否真的关掉了一层。
+ *  veto 未通过（有未保存草稿）时"不关"，但返回 true —— 因为 veto 自己会弹出确认框，
+ *  对玩家来说已经是一次可读反馈，不该再让调用方去关下一层。
+ *  返回键（popstate / __mwwBack）与 Esc（__wwEscClose）共用这一份，避免两条关闭路径行为漂移。 */
+function closeTopOverlayLayer() {
+  while (backStack.length && !overlayAlive(backStack[backStack.length - 1].kind)) backStack.pop();
+  const top = backStack[backStack.length - 1];
+  if (!top || top.kind === 'game') return false;
+  if (top.veto && top.veto()) return true;
+  backStack.pop();
+  try { top.closeDom(); } catch (_) {}
+  if (top.kind === 'modal' && state.leaveAskOpen) {
+    // 关掉的是"离局确认"= 取消离局：复位标志，之后仍可再次询问（与 popstate 分支同语义）
+    state.leaveAskOpen = false;
+    try { history.replaceState({ mww: backStack.length }, ''); } catch (_) {}
+  }
+  syncLayerScrollLock(); // 关层后立刻按"还剩几层"重算滚动锁，绝不把页面锁死
+  return true;
+}
+
 /** Android 硬件返回桥（Capacitor 无 @capacitor/app，由 MainActivity 拦截返回键后调用）：
  *  与 popstate 同一条返回栈——处理一层；返回 true=已消费（留在应用），false=栈空（交给系统最小化）。
  *  计划 §10-5：关闭最上层面板 → 功能页返回（发言页签）→ 离局确认；一次返回只关一层。 */
@@ -180,19 +204,40 @@ window.__mwwBack = function () {
     if (state.leaveAskOpen) { try { history.replaceState({ mww: backStack.length }, ''); } catch (_) {} }
     return true;
   }
-  if (top.veto && top.veto()) return true;
-  backStack.pop();
-  try { top.closeDom(); } catch (_) {}
-  if (top.kind === 'modal' && state.leaveAskOpen) {
-    // 关掉的是"离局确认"= 取消离局：复位标志，之后仍可再次询问（与 popstate 分支同语义）
-    state.leaveAskOpen = false;
-    try { history.replaceState({ mww: backStack.length }, ''); } catch (_) {}
-  }
-  return true;
+  return closeTopOverlayLayer();
 };
 
-function closeModalDom() { $('#m-modal').innerHTML = ''; }
-function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; $('#m-sheet').innerHTML = ''; }
+/**
+ * Esc 关浮层（FIX-08）：监听器由 web/pwa.js 统一分发（全页只有一个 Esc 监听器）。
+ * 只关"可关闭的浮层"，**不触发离局确认** —— Esc 不该等价于"退出对局"：栈底 game 哨兵时
+ * 返回 false，pwa.js 据此认为"没有可关的层"。关闭一律走返回栈的统一关闭（遮罩、软键盘监听、
+ * 返回栈深度、滚动锁都在那里清理），不再有"直接改 hidden"的旁路。
+ */
+window.__wwEscClose = function () {
+  return closeTopOverlayLayer();
+};
+
+// ---------------- 浮层滚动锁（FIX-08） ----------------
+/** 只要还有浮层开着就把 body 锁住，全关掉立刻释放。
+ *  这里刻意**不**依赖"每条关闭路径都记得调用"这种约定——那种约定必然漏（按钮/遮罩/Esc/
+ *  返回键/程序化关闭一共五条路，漏一条就是"浮层关了但页面再也滚不动"）。
+ *  改为 MutationObserver 盯住真正的浮层容器，DOM 一变就重算；观察范围收窄到这四个容器，
+ *  不订阅整个 body 子树（手机端事件流刷新很频繁，避免每次插入都重算）。 */
+function syncLayerScrollLock() {
+  const open = overlayAlive('modal') || overlayAlive('sheet') || overlayAlive('inspect') || overlayAlive('flip');
+  document.body.classList.toggle('ww-layer-open', open);
+}
+for (const sel of ['#m-modal', '#m-sheet', '#m-flip']) {
+  const node = document.querySelector(sel);
+  if (!node) continue;
+  // #m-flip 是静态节点、靠 class 切换显隐；#m-modal/#m-sheet 靠增删子节点
+  new MutationObserver(syncLayerScrollLock).observe(node, sel === '#m-flip' ? { attributes: true, attributeFilter: ['class'] } : { childList: true });
+}
+// .inspect-stage 是直接挂在 body 上的浮层（开/关 = body 增删一个子节点）
+new MutationObserver(syncLayerScrollLock).observe(document.body, { childList: true });
+
+function closeModalDom() { $('#m-modal').innerHTML = ''; syncLayerScrollLock(); }
+function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; $('#m-sheet').innerHTML = ''; syncLayerScrollLock(); }
 /** UI 关闭中部弹窗（X / 取消 / 按钮） */
 function closeModalTop() {
   const top = backStack[backStack.length - 1];
@@ -703,7 +748,7 @@ async function requestReview() {
 }
 
 /** 点身份牌：已经发过牌就直接亮正面，否则走翻牌浮层 */
-function hideFlipDom() { $('#m-flip').classList.add('hidden'); }
+function hideFlipDom() { $('#m-flip').classList.add('hidden'); syncLayerScrollLock(); }
 function dismissFlip() {
   const top = backStack[backStack.length - 1];
   if (top && top.kind === 'flip') dropTopOverlay(); // 返回键/完成键同一条路径：只关翻牌这一层
@@ -1108,21 +1153,44 @@ function applyProfilePrefs(prefs) {
   if (m) m.checked = !!p.reducedMotion;
 }
 
-/** 偏好保存：PATCH 当前档案；失败回滚应用（计划 §11 行4） */
+/**
+ * 偏好保存：PATCH 当前档案；失败回滚应用（计划 §11 行4）。
+ * FIX-10：与桌面端同一套逻辑 —— 409（revision 过期）时重新拉取最新 revision 并重试**一次**，
+ * 而不是直接放弃（原实现会让内存 revision 永久过期 → 之后每次保存都 409，自锁到刷新页面为止）；
+ * 重试仍失败则给出可读的冲突说明，不静默吞掉、也不无限重试。
+ */
 async function saveProfilePrefs(prefs) {
+  const payload = {
+    fontScale: Number(prefs.fontScale) || 1,
+    layout: prefs.layout || 'reading',
+    reducedMotion: !!prefs.reducedMotion,
+  };
   const prof = state.profiles.find((x) => x.id === state.profileId);
   if (!prof) { applyProfilePrefs(currentProfilePrefs()); return; }
+  const patch = () => api('PATCH', `/api/profiles/${prof.id}`, { expectedRevision: prof.revision, preferences: payload });
   try {
-    const r = await api('PATCH', `/api/profiles/${prof.id}`, {
-      expectedRevision: prof.revision,
-      preferences: { fontScale: Number(prefs.fontScale) || 1, layout: prefs.layout || 'reading', reducedMotion: !!prefs.reducedMotion },
-    });
+    let r;
+    try {
+      r = await patch();
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      const fresh = await api('GET', '/api/profiles');
+      const cur = (fresh.profiles || []).find((x) => x.id === prof.id);
+      if (!cur) throw e;
+      Object.assign(prof, cur); // 用服务端最新 revision 覆盖内存那条，再重试这一次
+      r = await patch();
+    }
     prof.preferences = r.profile.preferences;
     prof.revision = r.profile.revision;
     applyProfilePrefs(prof.preferences);
+    // 成功也要有反馈（与桌面端同款文案）：手机端原来保存成功是**完全静默**的，
+    // 改了字号/布局后没有任何确认，用户不知道到底存没存进档案。
+    flash('已保存到当前档案 ✓');
   } catch (e) {
     applyProfilePrefs(prof.preferences); // 回退
-    flash(`偏好保存失败已回退：${e.message}`);
+    flash(e.status === 409
+      ? '偏好保存失败：另一个窗口改过这个档案，版本对不上（已重新读取仍未成功）。请刷新页面后再试。'
+      : `偏好保存失败已回退：${e.message}`);
   }
 }
 
@@ -1754,7 +1822,7 @@ function applyView(v) {
     const h = state.hiddenSnap;
     state.hiddenSnap = null;
     if ((v.day !== h.day) || (v.phase !== h.phase) || (((v.pending || {}).task) || '') !== h.task) {
-      actionState.target = 0;
+      actionState.target = null; // FIX-15：作废即"没选"（此前写 0，与"显式空刀"同值，判空判不出来）
       const keys = $('#m-keys');
       if (keys) keys.dataset.task = ''; // 强制动作区下一次重建（目标作废要可见）
     }
@@ -2539,6 +2607,46 @@ function saveAnnotations(seat, entry) {
     });
 }
 
+/**
+ * 清除一个座位的私人标注（FIX-07）：走服务端的 **DELETE 语义**，而不是"PUT 一份空标注"。
+ * 为什么必须删：PUT 空标注只是把内容清空，座位键仍留在 `doc.seats` 里 ——
+ *   · 导出包 `counts.notes` 按"有 seats 的游戏"计数（src/profiles/transfer.js:59），已清空的座位把计数撑高；
+ *   · 标注文件只增不减，座位键永远清不掉。
+ * 契约（src/api.js 的 gameAnnotationDelete）：`DELETE /api/games/<gid>/annotations?token=&seat=&expectedRevision=`
+ *   → 200 { annotations, revision }；seat 非数字 400、权限不足 403、revision 过期 409。
+ * 与 PUT 一样带 expectedRevision 乐观并发：409 时重拉最新版本后重试一次（不无限重试）。
+ * 失败要可读：写在弹层的错误行里（#m-anno-err），并明确笔记没丢。
+ */
+function clearSeatAnnotation(seat) {
+  const gid = state.game.gameId;
+  const token = state.game.playerToken || state.game.godToken;
+  const prev = state.anno.seats[seat] ? JSON.parse(JSON.stringify(state.anno.seats[seat])) : null;
+  const del = () => api('DELETE', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}&seat=${seat}&expectedRevision=${state.anno.rev}`);
+  return del()
+    .catch((e) => {
+      if (e.status !== 409) throw e;
+      return api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`).then((fresh) => {
+        state.anno.rev = fresh.revision;
+        state.anno.seats = fresh.annotations.seats || {};
+        return del();
+      });
+    })
+    .then((r) => {
+      state.anno.rev = r.revision;
+      state.anno.seats = r.annotations.seats || {}; // 以服务端返回为准：座位键真的没了，列表/角标才不会再显示
+      state.annoUndo = { seat, prev };
+      if (state.view) updateSeats(state.view);
+      renderNotesListM();
+      return true;
+    })
+    .catch((e) => {
+      const errBox = document.getElementById('m-anno-err');
+      if (errBox) errBox.textContent = `清除失败：${e.message}（笔记未丢失）`;
+      else alert(`清除失败：${e.message}（笔记未丢失）`);
+      return false;
+    });
+}
+
 /** 标注编辑器（NOTE-04）：底部弹层。倾向/把握/候选（≤3）/自称/笔记/依据，保存取消常驻底部 */
 function openTagModal(seat) {
   const v = state.view;
@@ -2667,7 +2775,8 @@ function openTagModal(seat) {
     const clr = el('button', 'btn danger', '清除');
     clr.addEventListener('click', async () => {
       save.disabled = true; clr.disabled = true;
-      const okFlag = await saveAnnotations(seat, A_.normalizeSeatAnnotation({}));
+      // FIX-07：真正删除（DELETE），不是写一份空标注 —— 否则座位键留在 doc.seats 里，计数只增不减
+      const okFlag = await clearSeatAnnotation(seat);
       if (okFlag) closeSheet();
       else { save.disabled = false; clr.disabled = false; }
     });
@@ -2727,7 +2836,7 @@ function openModal(inner) {
 }
 
 // ---------------- 底部坞：左（身份牌 + 技能键）| 右（对话框） ----------------
-let actionState = { target: 0, explode: false, withdraw: false, needTarget: false, candidates: [] };
+let actionState = { target: null, explode: false, withdraw: false, needTarget: false, candidates: [] };
 
 const TASK_LABEL = {
   speech: '轮到你发言', pk_speech: '平票 PK 发言', lastwords: '请留遗言',
@@ -2741,20 +2850,20 @@ const TASK_LABEL = {
   admirer_crush: '暗恋者·暗选心动对象（胜负阵营终身绑定）',
 };
 
-/** 需要"点座位选人"的任务 → 确认键文案 / 允许的免选键 */
+/** 需要"点座位选人"的任务 → 确认键文案 / 允许的免选键 / 目标名词（FIX-15 可读提示用） */
 const TARGET_TASKS = {
-  night_guard: ['确认守护', '空守'],
-  night_dream: ['确认摄梦', null],
-  wolfbeauty_charm: ['确认魅惑', null],
-  crow_curse: ['确认诅咒', null],
-  admirer_crush: ['确认心动', null],
-  wolf_kill: ['投刀', '空刀'],
-  seer_check: ['查验', null],
-  vote: ['投票', '弃票'],
-  pk_vote: ['投票', '弃票'],
-  sheriff_vote: ['投票', '弃票'],
-  shoot: ['开枪', '不开枪'],
-  badge_pass: ['移交', '撕毁警徽'],
+  night_guard: ['确认守护', '空守', '守护对象'],
+  night_dream: ['确认摄梦', null, '摄梦对象'],
+  wolfbeauty_charm: ['确认魅惑', null, '魅惑对象'],
+  crow_curse: ['确认诅咒', null, '诅咒对象'],
+  admirer_crush: ['确认心动', null, '暗恋对象'],
+  wolf_kill: ['投刀', '空刀', '刀口'],
+  seer_check: ['查验', null, '查验对象'],
+  vote: ['投票', '弃票', '投票对象'],
+  pk_vote: ['投票', '弃票', '投票对象'],
+  sheriff_vote: ['投票', '弃票', '投票对象'],
+  shoot: ['开枪', '不开枪', '开枪目标'],
+  badge_pass: ['移交', '撕毁警徽', '接任警长'],
 };
 
 /**
@@ -2825,7 +2934,10 @@ function updateActionbar(v) {
   if (keys.dataset.task === sig) return;
   keys.dataset.task = sig; dlg.dataset.task = sig;
   keys.innerHTML = ''; dlg.innerHTML = '';
-  actionState = { target: 0, explode: false, withdraw: false, needTarget: false, candidates: (p.candidates || []).slice() };
+  // FIX-15：target 初值 null = "还没选"；0 = "显式放弃"（空刀/空守/弃票，由各自的键写入）。
+  // 以前两者都是 0，"没选就提交"无法与"明确放弃"区分，于是未选目标时只能把确认键禁用 ——
+  // 点了毫无反应也没有任何文字（玩家不知道自己为什么没投出去）。
+  actionState = { target: null, explode: false, withdraw: false, needTarget: false, candidates: (p.candidates || []).slice() };
   buildActionUI(v, p, keys, dlg);
   if (p.task !== 'speech') mountExplodeBtn(v, keys);
   mountDuelBtn(v, keys);
@@ -2983,7 +3095,8 @@ function buildActionUI(v, p, keys, dlg) {
         const payload = { text: ta.value.trim() };
         if (p.canExplode && actionState.explode) {
           payload.explode = true;
-          if (me.role === 'whitewolfking') payload.target = actionState.target;
+          // FIX-15：target 初值已改为 null，白狼王自爆这里显式落成 0（与改动前发给服务端的字节一致）
+          if (me.role === 'whitewolfking') payload.target = Number(actionState.target) || 0;
         }
         if (p.task === 'sheriff_speech') payload.withdraw = actionState.withdraw;
         await submitSimple(payload);
@@ -3025,10 +3138,19 @@ function buildActionUI(v, p, keys, dlg) {
 
   // ---------- 目标类：点座位选人，确认键灰红→红 ----------
   if (TARGET_TASKS[p.task]) {
-    const [label, none] = TARGET_TASKS[p.task];
+    const [label, none, noun] = TARGET_TASKS[p.task];
     actionState.needTarget = true;
     markNeedTarget(v, p.candidates, '到「玩家」页点选目标座位');
-    const conf = keyEl(label, 'off', () => submitSimple({ target: actionState.target }), { confirm: true });
+    // FIX-15：确认键**始终可点**（原来未选目标时是 disabled → 点了毫无反应、也没有任何文字，
+    // 玩家不知道自己为什么没投出去）。现在未选目标就给出可读提示，与桌面端同款文案；
+    // 选中座位后 setTarget() 会把它点亮成"主操作红"。显式点「空刀/空守/弃票」的行为完全不变。
+    const conf = keyEl(label, 'alt', () => {
+      if (actionState.target === null || actionState.target === undefined) {
+        hint(`✗ 请先在「玩家」页点一个座位选出${noun || '目标'}${none ? `（想放弃这次操作就点「${none}」）` : ''}`);
+        return;
+      }
+      submitSimple({ target: actionState.target });
+    }, { confirm: true });
     keys.appendChild(conf);
     if (p.allowNone && none) keys.appendChild(keyEl(none, 'alt', () => submitSimple({ target: 0 })));
     // 单个候选时直接预选，省一次点击
@@ -3044,7 +3166,7 @@ function buildActionUI(v, p, keys, dlg) {
     } else {
       keys.appendChild(keyEl('💊 解药不可用', 'off', null, { sub: ex.antidoteUsed ? '已用过' : '今夜无人被刀' }));
     }
-    const poisonKey = keyEl('☠ 用毒', 'off', () => submitSimple({ antidote: false, poison: actionState.target }), { confirm: true });
+    const poisonKey = keyEl('☠ 用毒', 'off', () => submitSimple({ antidote: false, poison: Number(actionState.target) || 0 }), { confirm: true }); // FIX-15：null→0，与改动前一致
     if (ex.canPoison) {
       actionState.needTarget = true;
       markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '到「玩家」页点选要毒的人（可毒自己）');
@@ -3145,7 +3267,7 @@ function openInspect(rid, replace) {
   stage.addEventListener('click', () => {
     const top = backStack[backStack.length - 1];
     if (top && top.kind === 'inspect') dismissTop();
-    else stage.remove();
+    else { stage.remove(); syncLayerScrollLock(); }
   });
   document.body.appendChild(stage);
   if (replace) overlayReplaceNext = true; // 从齿轮/设置里进来：替换那一层，返回深度不加深

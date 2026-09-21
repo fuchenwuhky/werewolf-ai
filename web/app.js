@@ -992,23 +992,46 @@ function applyProfilePrefs(prefs) {
   if (m) m.checked = !!p.reducedMotion;
 }
 
-/** 偏好保存：PATCH 当前档案；失败回滚应用并给回退说明（计划 §11 行4） */
+/**
+ * 偏好保存：PATCH 当前档案；失败回滚应用并给回退说明（计划 §11 行4）。
+ * FIX-10：409（revision 过期）必须**重新拉取最新 revision 后重试一次**。原实现直接放弃，
+ * 于是内存里的 `prof.revision` 永远停在过期值 → 之后每次保存都 409（自锁，只能刷新页面）。
+ * 重试**恰好一次**：不无限重试、不静默吞掉；第二次仍失败就把冲突翻成人话（而不是裸状态码）。
+ */
 async function saveProfilePrefs(prefs) {
-  const prof = state.profiles.find((x) => x.id === state.profileId);
   const status = document.querySelector('#pref-status');
+  const payload = {
+    fontScale: Number(prefs.fontScale) || 1,
+    layout: prefs.layout || 'reading',
+    reducedMotion: !!prefs.reducedMotion,
+  };
+  const prof = state.profiles.find((x) => x.id === state.profileId);
   if (!prof) { applyProfilePrefs(currentProfilePrefs()); if (status) status.textContent = '尚未加载档案，偏好未保存。'; return; }
+  const patch = () => api('PATCH', `/api/profiles/${prof.id}`, { expectedRevision: prof.revision, preferences: payload });
   try {
-    const r = await api('PATCH', `/api/profiles/${prof.id}`, {
-      expectedRevision: prof.revision,
-      preferences: { fontScale: Number(prefs.fontScale) || 1, layout: prefs.layout || 'reading', reducedMotion: !!prefs.reducedMotion },
-    });
+    let r;
+    try {
+      r = await patch();
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      // 版本冲突（另一窗口/设备改过同一档案）：以服务端最新 revision 覆盖内存那条，然后重试**这一次**
+      const fresh = await api('GET', '/api/profiles');
+      const cur = (fresh.profiles || []).find((x) => x.id === prof.id);
+      if (!cur) throw e;
+      Object.assign(prof, cur);
+      r = await patch();
+    }
     prof.preferences = r.profile.preferences;
     prof.revision = r.profile.revision;
     applyProfilePrefs(prof.preferences);
     if (status) status.textContent = '已保存到当前档案 ✓';
   } catch (e) {
     applyProfilePrefs(prof.preferences); // 回滚到档案既有值
-    if (status) status.textContent = `保存失败已回退：${e.message}`;
+    if (status) {
+      status.textContent = e.status === 409
+        ? '保存失败：另一个窗口改过这个档案，版本对不上（已重新读取仍未成功）。请刷新页面后再改。'
+        : `保存失败已回退：${e.message}`;
+    }
   }
 }
 
@@ -1764,6 +1787,46 @@ function saveAnnotations(seat, entry) {
     });
 }
 
+/**
+ * 清除一个座位的私人标注（FIX-07）：走服务端的 **DELETE 语义**，而不是"PUT 一份空标注"。
+ * 为什么必须删：PUT 空标注只是把内容清空，座位键仍然留在 `doc.seats` 里 ——
+ *   · 导出包里 `counts.notes` 按"有 seats 的游戏"计数（src/profiles/transfer.js:59 +
+ *     src/api.js 收集 notes 时判 `Object.keys(doc.seats).length`），于是已清空的座位把计数撑高；
+ *   · 标注文件只增不减，座位键永远清不掉。
+ * 契约（src/api.js 的 gameAnnotationDelete，路由 DELETE /api/games/:id/annotations）：
+ *   `?token=&seat=N&expectedRevision=R` → 200 { annotations, revision }；
+ *   seat 非数字 400、令牌/权限不足 403、revision 过期 409。
+ * 与 PUT 一致带 expectedRevision 做乐观并发：409 时重新拉取最新版本后重试一次（不无限重试）。
+ * 失败要可读：把原因说出来，并明确草稿没丢。
+ */
+async function clearSeatAnnotation(seat) {
+  const gid = state.game.gameId;
+  const token = state.game.playerToken || state.game.godToken;
+  const prev = state.anno.seats[seat] ? JSON.parse(JSON.stringify(state.anno.seats[seat])) : null;
+  const del = () => api('DELETE', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}&seat=${seat}&expectedRevision=${state.anno.rev}`);
+  try {
+    let r;
+    try {
+      r = await del();
+    } catch (e) {
+      if (e.status !== 409) throw e;
+      const fresh = await api('GET', `/api/games/${gid}/annotations?token=${encodeURIComponent(token)}`);
+      state.anno.rev = fresh.revision;
+      state.anno.seats = fresh.annotations.seats || {};
+      r = await del();
+    }
+    state.anno.rev = r.revision;
+    state.anno.seats = r.annotations.seats || {}; // 以服务端返回为准：座位键真的没了，列表/角标才不会再显示
+    state.annoUndo = { seat, prev };              // 清除也能撤销（与 PUT 成功后的语义一致）
+    updateSeats(state.view);
+    if (!$('#notes-drawer').classList.contains('hidden')) renderNotesList();
+    return true;
+  } catch (e) {
+    alert(`清除失败：${e.message}\n（笔记仍在，未丢失）`);
+    return false;
+  }
+}
+
 /** 某座位当前"仍可能"的身份：扣除已公开翻牌的、你自己占用的（唯一身份即排除） */
 function possibleRolesFor(v, seat) {
   const board = v.board || {};
@@ -1915,9 +1978,11 @@ function openTagModal(seat) {
     const clr = el('button', 'btn danger', '清除此座位笔记');
     clr.addEventListener('click', async () => {
       save.disabled = true;
-      const okFlag = await saveAnnotations(seat, A_.normalizeSeatAnnotation({}));
+      clr.disabled = true;
+      // FIX-07：真正删除（DELETE），不是写一份空标注 —— 否则座位键留在 doc.seats 里，计数虚高
+      const okFlag = await clearSeatAnnotation(seat);
       if (okFlag) closeModal();
-      else save.disabled = false;
+      else { save.disabled = false; clr.disabled = false; }
     });
     br.appendChild(clr);
   }
@@ -3115,7 +3180,9 @@ function selectTarget(seat) {
 
 // ---------------- 操作区 ----------------
 // needTarget/candidates：让圆桌上的座位也能当目标按钮用（与底部胶囊共享同一份候选范围）
-let actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
+// FIX-15：target 初值用 null = "还没选"；0 = "显式放弃"（空刀/空守/不开枪/弃票，由各自的按钮写入）。
+// 这两件事以前都是 0，所以"没选就提交"无法与"明确放弃"区分 —— 见 pickedTarget()。
+let actionState = { target: null, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
 
 function updateActionbar(v) {
   const hint = $('#pending-hint');
@@ -3171,7 +3238,7 @@ function updateActionbar(v) {
   hint.className = 'pending-hint';
   hint.textContent = '⏳ 轮到你了（无时间限制，想好再发）';
   if (box.dataset.task === p.task + JSON.stringify(p.candidates || '') + String(p.extra ? p.extra.killTarget : '')) return;
-  actionState = { target: 0, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
+  actionState = { target: null, explode: false, withdraw: false, antidote: false, poison: 0, needTarget: false, candidates: [] };
   box.innerHTML = '';
   box.dataset.task = p.task + JSON.stringify(p.candidates || '') + String(p.extra ? p.extra.killTarget : '');
   buildActionUI(v, p, box);
@@ -3353,12 +3420,23 @@ function targetPicker(candidates, opts = {}) {
 }
 
 /**
- * 目标必选的决策：没选就提交会静默变成 target=0（空刀/空守/空枪），而玩家以为自己投过了。
+ * 目标必选的决策（FIX-15）：没选就提交会静默变成 target=0（空刀/空守/空枪），而玩家以为自己投过了。
  * 实测踩过：狼队"投刀"时有人没点座位，只剩 2:1 才保住刀口 —— 提交的是空刀，界面上却看不出。
  * confirmBtn 会捕获这里抛出的错误并显示在提示行，所以玩家得到的是明确的"请先选目标"，而不是一次假提交。
+ * `noneLabel`：这一任务另有显式的"放弃"按钮（空刀/空守/不开枪/弃票）。提示里要点名它，
+ * 否则"我就想空守"的玩家会以为界面坏了 —— 显式点那个按钮的行为**完全不变**（照旧提交 0），
+ * 服务端判定语义不受影响，这里只是把"什么都没选"和"明确选择放弃"分开。
  */
-function pickedTarget(label) {
-  if (!actionState.target) throw new Error(`请先点一个座位选出${label || '目标'}`);
+function pickedTarget(label, noneLabel) {
+  // ⚠ 判空必须用 null/undefined，**不能**用 falsy：0 是"显式放弃"（空刀/空守/不开枪/弃票），
+  // 是玩家点出来的合法选择。以前 actionState.target 初值是 0，于是"什么都没选"和"显式放弃"
+  // 是同一个值，判空只能写 null/undefined —— 那条分支在真实操作里永远不会命中（FIX-15 的根因）。
+  // 现在初值是 null，"没选"（null）与"显式放弃"（0）真正分开了。
+  if (actionState.target === null || actionState.target === undefined) {
+    throw new Error(noneLabel
+      ? `请先点一个座位选出${label || '目标'}（想放弃这次操作就点「${noneLabel}」）`
+      : `请先点一个座位选出${label || '目标'}`);
+  }
   return actionState.target;
 }
 
@@ -3435,7 +3513,8 @@ function buildActionUI(v, p, box) {
         const payload = { text: ta.value.trim() };
         if (p.canExplode && actionState.explode) {
           payload.explode = true;
-          if (me.role === 'whitewolfking') payload.target = actionState.target;
+          // FIX-15：target 初值已改为 null，白狼王自爆这里要显式落成 0（与改动前发给服务端的字节一致）
+          if (me.role === 'whitewolfking') payload.target = Number(actionState.target) || 0;
         }
         if (p.task === 'sheriff_speech') payload.withdraw = actionState.withdraw;
         return payload;
@@ -3470,7 +3549,9 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 守卫行动：选择今晚守护对象';
       box.appendChild(targetPicker(p.candidates, { noneLabel: '空守' }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认守护', () => ({ target: actionState.target })));
+      // FIX-15：这里原来直接提交 actionState.target —— 没选目标时静默变成"空守"（玩家以为守了谁）。
+      // 现在未选目标给可读提示；显式点「空守」照旧提交 0。
+      btnRow.appendChild(confirmBtn('确认守护', () => ({ target: pickedTarget('守护对象', '空守') })));
       box.appendChild(btnRow);
       break;
     }
@@ -3515,12 +3596,8 @@ function buildActionUI(v, p, box) {
       // 玩家点「投刀」既不报错也没有任何提示，只能干瞪眼。
       // 现在：未选目标 → 抛出可读提示（由 confirmBtn 的 catch 显示到 #pending-hint）；
       //       显式空刀（0）与正常目标照旧提交，空刀按钮的行为完全不变。
-      btnRow.appendChild(confirmBtn('投刀', () => {
-        if (actionState.target === null || actionState.target === undefined) {
-          throw new Error(p.allowNone ? '请先点一个座位选出刀口（想放弃本夜就点「空刀」）' : '请先点一个座位选出刀口');
-        }
-        return { target: actionState.target };
-      }));
+      // FIX-15：这条判断收进 pickedTarget()，与空守（night_guard）/不开枪（shoot）走同一份逻辑。
+      btnRow.appendChild(confirmBtn('投刀', () => ({ target: pickedTarget('刀口', p.allowNone ? '空刀' : null) })));
       box.appendChild(btnRow);
       break;
     }
@@ -3549,7 +3626,7 @@ function buildActionUI(v, p, box) {
         box.appendChild(el('span', 'hint', '或选择毒杀：'));
         box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
         const btnRow = el('div', 'btnrow');
-        btnRow.appendChild(confirmBtn('☠️ 使用毒药', () => ({ antidote: false, poison: actionState.target })));
+        btnRow.appendChild(confirmBtn('☠️ 使用毒药', () => ({ antidote: false, poison: Number(actionState.target) || 0 }))); // FIX-15：null→0，与改动前一致
         box.appendChild(btnRow);
       }
       const skip = el('button', 'btn ghost', '空过（都不用）');
@@ -3596,7 +3673,9 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = `⏳ ${labels[p.task]}（互相保密）`;
       box.appendChild(targetPicker(p.candidates, { noneLabel: p.allowNone ? '弃票' : null }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('投票', () => ({ target: p.allowNone ? actionState.target : pickedTarget('投票对象') })));
+      // FIX-15：投票同样不许静默弃票 —— 没选目标就给可读提示，想弃票请点「弃票」
+      // （引擎对 vote/pk_vote/sheriff_vote 一律 allowNone:true，所以以前这条分支必然是"静默按 0 提交"）。
+      btnRow.appendChild(confirmBtn('投票', () => ({ target: pickedTarget('投票对象', p.allowNone ? '弃票' : null) })));
       box.appendChild(btnRow);
       break;
     }
@@ -3604,7 +3683,8 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 开枪技能：选择带走目标';
       box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat), { noneLabel: '不开枪' }));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('开枪', () => ({ target: actionState.target })));
+      // FIX-15：同 night_guard —— 没选目标不再静默变成"不开枪"；显式点「不开枪」照旧提交 0。
+      btnRow.appendChild(confirmBtn('开枪', () => ({ target: pickedTarget('开枪目标', '不开枪') })));
       box.appendChild(btnRow);
       break;
     }
@@ -3699,46 +3779,62 @@ function openModal(inner, { onDismiss } = {}) {
   });
   root.appendChild(mask);
   // AC-06：初始焦点必须落在弹窗内（否则 Tab 会先落到背景按钮），背景整体 inert 防交互
-  const appEl = document.getElementById('app');
-  if (appEl) appEl.inert = true;
+  syncModalLayerState();
   const focusables = modal.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])');
   (focusables[0] || modal).focus({ preventScroll: true });
   if (!focusables[0]) modal.tabIndex = -1;
   return modal;
 }
 
-// modal-root 被任何路径清空（含 innerHTML 直清）都自动解除背景 inert
-new MutationObserver(() => {
+/**
+ * 背景 inert + body 滚动锁的唯一收口（FIX-08）。
+ * 只有一处判断"还有没有模态"，openModal / closeModal / MutationObserver 都调它 —— 于是
+ * **任何**清空 #modal-root 的路径（含别处直接 `innerHTML = ''`）都不会留下"锁着但看不见"的页面：
+ * 背景点不动 + 页面滚不动，却没有任何弹窗可关，是比原缺陷更糟的状态。
+ */
+function syncModalLayerState() {
   const root = document.getElementById('modal-root');
+  const open = !!root && root.children.length > 0;
   const appEl = document.getElementById('app');
-  if (appEl) appEl.inert = !!root && root.children.length > 0;
-}).observe(document.getElementById('modal-root'), { childList: true });
+  if (appEl) appEl.inert = open;
+  document.body.classList.toggle('ww-layer-open', open);
+}
+
+// modal-root 被任何路径清空（含 innerHTML 直清）都自动解除背景 inert 与滚动锁
+new MutationObserver(syncModalLayerState).observe(document.getElementById('modal-root'), { childList: true });
 
 /** 关闭最上层模态并把焦点还给来源。链式打开下一个弹窗时来源保持不变。 */
 function closeModal() {
   const root = $('#modal-root');
-  if (root) root.innerHTML = '';
+  if (root) root.innerHTML = ''; // 遮罩与内容都在这一层里：一起清掉，不留只挡住画面的空遮罩
   state.modalDismiss = null;
-  const appEl = document.getElementById('app');
-  if (appEl) appEl.inert = false;
+  syncModalLayerState(); // 解除背景 inert 与 body 滚动锁
   const src = state.modalReturnFocus;
   state.modalReturnFocus = null;
-  if (src && typeof src.focus === 'function') { try { src.focus({ preventScroll: true }); } catch (_) { try { src.focus(); } catch (_) { /* 来源已移除 */ } }
+  if (src && typeof src.focus === 'function') {
+    try { src.focus({ preventScroll: true }); } catch (_) { try { src.focus(); } catch (_) { /* 来源已移除 */ } }
   }
 }
 
-// Esc：先关最上层模态，再关笔记抽屉（上帝面板语义是"关面板=退上帝视角"，保持原入口操作）
-document.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return;
+/**
+ * Esc 关浮层（FIX-08）：实现放在这里，监听器由 web/pwa.js 统一分发（全页只有一个 Esc 监听器，
+ * 避免"两个监听器各关一层"或"谁也不关"）。关闭一律走统一的关闭函数，遮罩、焦点归还、
+ * body 滚动锁、返回栈清理都在那里，不再有"直接改 hidden"的旁路 —— 那条路被 `.modal{display:flex}`
+ * 盖掉，等于没关（浏览器实测：手机端 Esc 后弹层仍在屏幕上）。
+ * 优先级按 z-index 从高到低：检视大卡(90) → 弹窗(75/76) → 笔记抽屉。
+ * ⚠ 身份翻牌浮层（#role-overlay，80）**有意不在关闭之列**：它是"确认看到自己身份"的必经步骤，
+ * 允许 Esc 跳过会让玩家没看到身份就被推进对局；它只由「我记住了，开始游戏」关闭。
+ * 上帝面板（#god-drawer）同理不关：语义是"关面板 = 退上帝视角"，保持原入口操作。
+ */
+window.__wwEscClose = () => {
+  const stage = document.querySelector('.inspect-stage');
+  if (stage) { stage.remove(); return true; }
   const root = $('#modal-root');
-  if (root && root.children.length) {
-    e.preventDefault();
-    (state.modalDismiss || closeModal)();
-    return;
-  }
+  if (root && root.children.length) { (state.modalDismiss || closeModal)(); return true; }
   const notes = $('#notes-drawer');
-  if (notes && !notes.classList.contains('hidden') && !notesDocked()) toggleNotesDrawer();
-});
+  if (notes && !notes.classList.contains('hidden') && !notesDocked()) { toggleNotesDrawer(); return true; }
+  return false;
+};
 
 // 中文输入法 composing 期间 Enter 不发送（FIN-03）：桌面端所有提交都走显式按钮，
 // 唯一的 Enter 快捷路径是配对码输入 —— 这里统一守卫，composing 中不触发。
