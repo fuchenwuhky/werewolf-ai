@@ -95,6 +95,33 @@ function keyBindingOf(cfg) {
   ).digest('hex');
 }
 
+// ---------- 原子写的临时文件命名（FIX-12：只有这一处定义）----------
+// 两种形态都在用，且都必须能被启动清理（_cleanupStaleTmp）认出来：
+//   · 后缀式 `<目标>.tmp`：saveGame 的存档替换。**故意保留**——test/remediation.test.js 用
+//     "把 `<存档>.tmp` 预先占成目录"做 EISDIR 故障注入，改掉这个路径会让那条故障注入失效；
+//   · 前缀式 `.tmp-<目标名>-<pid>-<时间戳>`：导入/恢复等新代码。点开头 + 不以 .json 结尾，
+//     所以 listSaves/profileStats 的 `*.json` 扫描天生收不到半截文件。
+// 旧版迁移用过 `.migtmp` 后缀，这里仍然识别（只清理历史残留，不再产生新文件）。
+const TMP_PREFIX = '.tmp-';
+const LEGACY_TMP_SUFFIXES = ['.tmp', '.migtmp'];
+
+/** 该文件名是不是"我们的原子写临时文件"（启动清理据此判定） */
+function isTmpFileName(name) {
+  return String(name).startsWith(TMP_PREFIX) || LEGACY_TMP_SUFFIXES.some((s) => String(name).endsWith(s));
+}
+
+/** 原子写的临时文件路径（与最终文件同目录：同目录 rename 才是原子替换） */
+function tmpPathFor(finalFile, stamp = Date.now()) {
+  return path.join(path.dirname(finalFile), `${TMP_PREFIX}${path.basename(finalFile)}-${process.pid}-${stamp}`);
+}
+
+/**
+ * 启动清理的年龄阈值：比这个更老的临时文件才认为"上一个进程崩溃留下的"。
+ * 为什么不无条件删：同一份数据目录可能被两个进程同时用（例如手动起了第二个实例），
+ * 无差别删除会把**正在写**的临时文件删掉，反而制造"写了一半的存档"。
+ */
+const STALE_TMP_MS = 10 * 60 * 1000;
+
 class Api {
   constructor({ config, logger, saveDir = null }) {
     this.config = config;      // {get(), save(partial)}
@@ -112,6 +139,8 @@ class Api {
     const pruned = this.journal.prune(); // 每次服务启动清一次：journal 只是缓存，删掉只损失"免费复现"
     if (pruned) this.logger.info('api', `决策 journal 清理了 ${pruned} 个过期文件`);
     if (!fs.existsSync(this.saveDir)) fs.mkdirSync(this.saveDir, { recursive: true });
+    // FIX-12：启动时真正清理崩溃遗留的原子写临时文件（旧实现只在定义里存在，从未被调用）
+    this._cleanupStaleTmp();
     // 本机玩家档案与私人标注（整改方案 DATA-01）：独立 Store，不在 api.js 堆持久化实现
     this.profiles = new ProfileStore({ dataDir: path.dirname(this.saveDir), logger });
     this.annotations = new AnnotationStore({ profilesRoot: this.profiles.root, logger });
@@ -153,16 +182,37 @@ class Api {
 
   // ---------- 工具 ----------
   /**
-   * 启动时清理残留的 *.json.tmp（整改阶段 3.3 崩溃一致性）。
+   * 启动时清理残留的原子写临时文件（整改阶段 3.3 崩溃一致性；FIX-12 修好"从未被调用"）。
+   *
    * 写入是"临时文件 + rename"，进程在任何时刻被杀，tmp 都只是半截数据——
-   * 正式存档（rename 后）永远是完整份，所以 tmp 可以安全删除，绝不覆盖有效存档。
+   * 正式文件（rename 后）永远是完整份，所以陈旧 tmp 可以安全删除，绝不覆盖有效数据。
+   *
+   * FIX-12 之前有两个洞，缺一不可：
+   *   ① 本方法**没有调用者**（只在定义里存在）→ 崩溃遗留的 tmp 永远躺在数据目录里；
+   *   ② 过滤条件是 `endsWith('.json.tmp')`，只认 saveGame 的后缀式命名，认不出导入/恢复
+   *      的 `.tmp-*` 与旧迁移的 `.migtmp` → 那两类残留哪怕被调用也清不掉。
+   * 现在：命名统一由本文件的 TMP_PREFIX/LEGACY_TMP_SUFFIXES 定义，过滤走 isTmpFileName()，
+   * 并在构造函数里真正执行一次。
+   *
+   * @param {{maxAgeMs?: number}} opts 只有早于 maxAgeMs 的 tmp 才算"陈旧"（见 STALE_TMP_MS）
+   * @returns {number} 实际删除的文件数
    */
-  _cleanupStaleTmp() {
-    try {
-      const stale = fs.readdirSync(this.saveDir).filter((f) => f.endsWith('.json.tmp'));
-      for (const f of stale) fs.rmSync(path.join(this.saveDir, f), { force: true });
-      if (stale.length) this.logger.info('api', `清理残留临时存档 ${stale.length} 个（${stale.map((f) => f.replace('.json.tmp', '')).join('、')}）`);
-    } catch (_) { /* 目录不可读等：不影响启动 */ }
+  _cleanupStaleTmp({ maxAgeMs = STALE_TMP_MS } = {}) {
+    let entries = [];
+    try { entries = fs.readdirSync(this.saveDir); } catch (_) { return 0; } // 目录不可读：不影响启动
+    const now = Date.now();
+    const removed = [];
+    for (const name of entries) {
+      if (!isTmpFileName(name)) continue;
+      const full = path.join(this.saveDir, name);
+      let stat = null;
+      try { stat = fs.statSync(full); } catch (_) { continue; }
+      if (!stat.isFile()) continue; // 目录/符号链接等一律不动
+      if (now - stat.mtimeMs < maxAgeMs) continue; // 新鲜：可能是别的进程正在写，留着
+      try { fs.rmSync(full, { force: true }); removed.push(name); } catch (_) { /* 删不掉不影响启动 */ }
+    }
+    if (removed.length) this.logger.info('api', `清理残留临时文件 ${removed.length} 个（${removed.join('、')}）`);
+    return removed.length;
   }
 
   /** 按对局归属解析经验池（方案 PROF-03）：默认档案 → 旧池；其他档案 → 各自档案池 */
@@ -1629,10 +1679,42 @@ class Api {
     } catch (e) { return this.json(res, 200, { games: 0, experiences: {} }); }
   }
 
+  /**
+   * FIX-11：默认档案失效（被归档/删除）时清理或重指向。
+   *
+   * 为什么必须有这一步：`ProfileMigration.ensureDefaultProfile()` 每次启动都会校验持久化的默认档案
+   * 「存在且未归档」，一旦失效就按昵称找可用的「默认玩家」、找不到就**新建一个同名档案**。
+   * 于是"用户把默认档案归档/删掉"会在下次启动后变成"凭空多出一个默认玩家"——用户视角是数据被篡改。
+   * 正解不是让迁移闭嘴，而是让 `defaultProfileId` **永远指向一份当前可用的真档案**：
+   *   · 内存里的 this.defaultProfileId 立刻改指（GET /api/profiles 立即反映，界面不会指向死档案）；
+   *   · 磁盘标记走 ProfileMigration.setDefaultId()/_clearDefaultId()（下一步启动才不会重建）。
+   * 选谁接任：与档案列表同一套排序语义（最近使用优先，其次创建顺序）里的第一份**可用**档案。
+   * 失败取舍：标记落盘失败只 warn，不让已经成功的归档/删除请求失败——内存里的重指向仍然生效，
+   * 且下一步启动最坏情况是重建一份「默认玩家」（可见、可归档），不会丢用户数据。
+   * @returns {Promise<string|null>} 重指向后的 defaultProfileId
+   */
+  async _repointDefaultProfile(invalidId) {
+    if (!invalidId || this.defaultProfileId !== invalidId) return this.defaultProfileId;
+    try { await this._profileMigrationReady; } catch (_) { /* 迁移失败已降级记录，不阻断档案操作 */ }
+    const usable = this.profiles.list({ includeArchived: false })
+      .sort((a, b) => String(b.lastUsedAt || '').localeCompare(String(a.lastUsedAt || '')));
+    const next = usable.length ? usable[0].id : null;
+    this.defaultProfileId = next;
+    try {
+      if (this.profileMigration) this.profileMigration.setDefaultId(next); // 传 null 等价于清除
+    } catch (e) {
+      this.logger.warn('profiles', `默认档案标记落盘失败（内存已重指向 ${next || '无'}）：${e.message}`);
+    }
+    this.logger.info('profiles', `默认档案 ${invalidId} 已失效，${next ? `重指向 ${next}` : '且无可用档案可指'}`);
+    return next;
+  }
+
   /** 档案更新（方案 §3.6 PATCH）：expectedRevision 乐观并发，失败 409 */
   async updateProfile(res, pid, body) {
     try {
       const prof = await this.profiles.update(pid, body);
+      // FIX-11：归档动作让"默认档案"失效 → 必须同一次请求内清理/重指向
+      if (prof.archivedAt) await this._repointDefaultProfile(pid);
       return this.json(res, 200, { profile: prof });
     } catch (e) {
       // 状态码经 statusOf 归一：ValidationError 400 / NotFoundError 404 / ConflictError 409
@@ -1654,6 +1736,9 @@ class Api {
       const prof = this.profiles.get(pid);
       if (!prof.archivedAt) return this.json(res, 409, { error: '请先归档再删除' });
       const info = await this.profiles.trash(pid, { activeGames: active });
+      // FIX-11：删除路径同样保证默认标记不指向已消失的档案（归档态在 PATCH 已重指向过；
+      // 这里覆盖"标记被旧版本/外部改写成已删档案"的存量状态，避免下次启动重建「默认玩家」）
+      await this._repointDefaultProfile(pid);
       return this.json(res, 200, { ok: true, archiveId: info.archiveId });
     } catch (e) {
       return this.json(res, this.statusOf(e, 400), { error: e.message });
@@ -1782,10 +1867,10 @@ class Api {
             ownerProfileId: prof.id, ownerNicknameSnapshot: prof.nickname,
             ownerHumanSeat: (g.players || []).find((p) => p.isHuman)?.seat ?? null, profileSchemaVersion: 1,
             game: { ...g, id: newId, finished: true }, anchor: null, review: null, savedAt: Date.now() };
-          const tmpFile = path.join(this.saveDir, '.tmp-' + newId + '-' + Date.now());
+          const finalFile = path.join(this.saveDir, newId + '.json');
+          const tmpFile = tmpPathFor(finalFile); // 命名统一（TMP_PREFIX 家族，见文件头注释）
           tmps.push(tmpFile);
           await fs.promises.writeFile(tmpFile, JSON.stringify(doc, null, 2));
-          const finalFile = path.join(this.saveDir, newId + '.json');
           await fs.promises.rename(tmpFile, finalFile);
           written.push(finalFile);
           // 笔记随局落地（PROF-04）：旧 gameId → 新 gameId 重映射，座位经白名单规范化。
@@ -1825,7 +1910,7 @@ class Api {
         if (!cleanupComplete) {
           recoveryFile = `.import-recovery-${prof.id}-${Date.now()}.json`;
           const recPath = path.join(this.saveDir, recoveryFile);
-          const recTmp = path.join(this.saveDir, `.tmp-${recoveryFile}`); // 不得匹配 .import-recovery-* 前缀，防止重试读到半截文件
+          const recTmp = tmpPathFor(recPath); // 不得匹配 .import-recovery-* 前缀，防止重试读到半截文件
           try {
             // 完整写入 + 原子落地（计划书 §6.2-5）
             await fs.promises.writeFile(recTmp, JSON.stringify({

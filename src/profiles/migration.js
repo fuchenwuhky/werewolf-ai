@@ -50,9 +50,11 @@ class ProfileMigration {
         const prof = this.store.get(this.defaultId);
         if (prof && !prof.archivedAt) return this.defaultId;
       } catch (_) {}
-      // 已被删除 → 清除，走下方创建逻辑
-      this.defaultId = null;
-      this._persistDefaultId();
+      // 已被删除或已归档 → 清除持久化标记，走下方创建逻辑。
+      // FIX-11：这里必须走 _clearDefaultId()（置空内存值 + 删掉 default-profile-id 文件）。
+      // 旧实现是 `this.defaultId = null; this._persistDefaultId();`，而 _persistDefaultId 在 defaultId
+      // 为空时**直接 return**，那个失效的 id 原封不动留在磁盘上，每次启动都被重读一遍。
+      this._clearDefaultId();
     }
     // ② 按昵称查找（兼容升级）
     const profiles = this.store.list({ includeArchived: true });
@@ -68,18 +70,47 @@ class ProfileMigration {
     this._persistDefaultId();
     return prof.id;
   }
+  /**
+   * 持久化默认档案 id（唯一写点）。
+   * FIX-11：defaultId 为空时必须**把文件删掉**——旧实现开头是 `if (!this.defaultId) return;`，
+   * 于是"清除默认档案"永远清不掉磁盘上的陈旧 id：重启后它又被读回来，比对失败 → 再建一个「默认玩家」。
+   */
   _persistDefaultId() {
-    if (!this.defaultId) return;
-    const cursorFile = path.join(this.dir, 'default-profile-id');
-    fs.writeFileSync(cursorFile, this.defaultId);
-  }
-  _clearDefaultId() {
-    try { fs.rmSync(path.join(this.dir, 'default-profile-id'), { force: true }); } catch (_) {}
-    this.defaultId = null;
+    const file = path.join(this.dir, 'default-profile-id');
+    if (!this.defaultId) {
+      try { fs.rmSync(file, { force: true }); } catch (_) { /* 删不掉不影响启动 */ }
+      return;
+    }
+    fs.mkdirSync(this.dir, { recursive: true }); // 首次迁移由 _mark 建目录；独立调用（setDefaultId）时补建
+    fs.writeFileSync(file, this.defaultId);
   }
 
-  /** 为无归属存档写入 owner 字段（返回处理数量） */
-  _tagSaves(defaultId, defaultNickname) {
+  /** 清除默认档案标记（内存 + 磁盘）：默认档案被归档/删除，或已无可用档案可指时调用 */
+  _clearDefaultId() {
+    this.defaultId = null;
+    this._persistDefaultId();
+  }
+
+  /**
+   * 把默认档案重指向另一份档案（FIX-11；API 层在默认档案被归档/删除时调用）。
+   * 语义：默认档案必须是**当前可用**的一份真档案。只要标记还指着失效档案，
+   * 下次启动 ensureDefaultProfile() 判定失效后，若按昵称也找不到可用的「默认玩家」，
+   * 就会**凭空重建一个「默认玩家」**——用户看到多出来的档案，而且旧默认档案的归属链断了。
+   * 重指向（而不是仅清理）是修掉这条路径的正解：始终有一份可用档案接着当默认。
+   * 传空值等价于 _clearDefaultId()。
+   */
+  setDefaultId(id) {
+    if (!id) return this._clearDefaultId();
+    this.defaultId = String(id);
+    this._persistDefaultId();
+    return this.defaultId;
+  }
+
+  /** 为无归属存档写入 owner 字段（返回处理数量）。
+   *  FIX-11：旧签名 `_tagSaves(defaultId, defaultNickname)` 的第二个形参**从未被使用**——
+   *  ownerNicknameSnapshot 一律取自存档里的人类玩家名（见下方 human.name），传什么昵称都不影响结果，
+   *  纯粹是误导读代码的人，故删除形参。 */
+  _tagSaves(defaultId) {
     let n = 0;
     if (!fs.existsSync(this.savesDir)) return n;
     for (const f of fs.readdirSync(this.savesDir)) {
@@ -94,7 +125,9 @@ class ProfileMigration {
       doc.ownerNicknameSnapshot = human ? human.name : null;
       doc.ownerHumanSeat = human ? human.seat : null;
       doc.profileSchemaVersion = 1;
-      const tmp = `${file}.migtmp`;
+      // 临时文件命名与 api.js 的 TMP_PREFIX 家族一致（`.tmp-` 前缀 + pid + 时间戳）：
+      // 旧实现用 `<file>.migtmp`，既不在 api.js 启动清理的识别范围内，也不好在数据目录里一眼看出归属。
+      const tmp = path.join(path.dirname(file), `.tmp-${path.basename(file)}-${process.pid}-${Date.now()}`);
       fs.writeFileSync(tmp, JSON.stringify(doc, null, 2));
       fs.renameSync(tmp, file);
       n++;
@@ -133,7 +166,7 @@ class ProfileMigration {
     }
 
     if (!this.done.has('own-tag')) {
-      tagged = this._tagSaves(defaultId, '默认玩家');
+      tagged = this._tagSaves(defaultId); // FIX-11：死形参 defaultNickname 已删除（昵称取自存档内人类玩家）
       this._mark('own-tag');
       executed.push('own-tag');
       this._log(`无归属存档打标 ${tagged} 份 → 默认档案`);
