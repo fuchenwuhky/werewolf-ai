@@ -10,10 +10,16 @@
 name: CI
 
 on:
+  # 私有仓库的 Actions 按分钟计费：分支推送 + pull_request 会让同一次改动触发两遍。
+  # 收窄到 main（PR 仍由 pull_request 覆盖），并取消被取代的运行，省下的额度用在真正需要的地方。
   push:
-    branches: ['**']
+    branches: [main]
   pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
