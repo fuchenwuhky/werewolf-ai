@@ -22,13 +22,26 @@ function newId() { return crypto.randomUUID(); }
 /** 从存档目录收集可导出的已结束对局（不含密钥/令牌/锚点/journal）。
  *  事件流来源（审核 P1-3）：终局存档 game.events 全量保留；旧存档（game 元数据被剥过 events）
  *  回落到 anchor.events（锚点只拍在昼/夜边界，可能缺最后一段——已是存档里能拿到的最全一份）。 */
-function collectExportableGames(savesDir, ownerProfileId) {
+function collectExportableGames(savesDir, ownerProfileId, { strict = false } = {}) {
   const out = [];
   if (!fs.existsSync(savesDir)) return out;
   for (const f of fs.readdirSync(savesDir)) {
     if (!f.endsWith('.json') || f === 'experiences.json') continue;
     let doc;
-    try { doc = JSON.parse(fs.readFileSync(path.join(savesDir, f), 'utf8')); } catch (_) { continue; }
+    try {
+      doc = JSON.parse(fs.readFileSync(path.join(savesDir, f), 'utf8'));
+    } catch (e) {
+      // §6/§7：损坏数据必须返回明确错误，不能伪装成"没有这一局"。
+      // 列表路由走 _readSaveDocStrict 会 500；导出过去在这里 catch 后 continue，
+      // 于是同一份数据"列表拒绝、导出成功且少报" —— 用户看到导出成功，归档/删除档案后
+      // 这一局就再无出口（静默丢数据）。strict 由导出路由开启；默认 false 保持既有语义。
+      if (strict) {
+        throw Object.assign(new Error(
+          `存档 ${f} 不是合法 JSON，导出的对局可能不完整，已拒绝生成看似完整的包：${e.message}`
+        ), { code: 500 });
+      }
+      continue;
+    }
     if (!doc || doc.ownerProfileId !== ownerProfileId || !doc.game || !doc.game.finished) continue;
     const events = (Array.isArray(doc.game.events) && doc.game.events.length)
       ? doc.game.events

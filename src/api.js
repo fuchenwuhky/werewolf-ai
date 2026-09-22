@@ -2730,7 +2730,7 @@ class Api {
   profileExport(res, pid) {
     try {
       const prof = this.profiles.get(pid);
-      const games = transfer.collectExportableGames(this.saveDir, pid);
+      const games = transfer.collectExportableGames(this.saveDir, pid, { strict: true });
       // M1 §4.4：导出前**重新读盘并重新计算哈希**与档案元数据核对（ProfileStore.readAvatar 内部三重核对）。
       // 文件丢失、结构损坏或被换过 ⇒ 整次导出失败（500 + 指明头像问题），绝不静默导出一份看似完整的包。
       let avatar = null;
@@ -2743,13 +2743,15 @@ class Api {
       }
       const notes = {};
       for (const g of games) {
-        try {
-          const doc = this.annotations.get(pid, g.id);
-          // FIX-07：计数判据是"有没有**有意义**的座位"，不是"seats 里有没有键"——
-          // 旧前端用 PUT 写全默认值来"清除标注"，那些座位与"已清空"无法区分，
-          // 按 `Object.keys(seats).length` 计数会让导出包虚报"这局有笔记"。
-          if (doc && hasMeaningfulAnnotations(doc)) notes[g.id] = doc;
-        } catch (_) { /* 单局笔记读取失败不阻断导出 */ }
+        // §7：笔记文件**缺失**可以表示"没有笔记"，但**损坏或读取错误不能静默当作没有笔记** ——
+        // 否则导出包看起来完整，用户归档/删除档案后这些笔记就再无出口（静默丢数据）。
+        // 严格读只在这里开启；AnnotationsStore.get 的默认行为（UI 侧）不变。
+        // 失败时错误冒到本函数外层 catch，成为 500 + 明确原因。
+        const doc = this.annotations.get(pid, g.id, { strict: true });
+        // FIX-07：计数判据是"有没有**有意义**的座位"，不是"seats 里有没有键"——
+        // 旧前端用 PUT 写全默认值来"清除标注"，那些座位与"已清空"无法区分，
+        // 按 `Object.keys(seats).length` 计数会让导出包虚报"这局有笔记"。
+        if (doc && hasMeaningfulAnnotations(doc)) notes[g.id] = doc;
       }
       const pkg = transfer.buildExportPackage({ profile: prof, games, notes, hostLabel: '本机导出', avatar });
       const body = JSON.stringify(pkg, null, 2);

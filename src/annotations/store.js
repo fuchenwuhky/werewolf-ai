@@ -105,19 +105,42 @@ class AnnotationStore {
     return path.join(this.root, String(profileId), 'annotations', `${gameId}.json`);
   }
 
-  _read(profileId, gameId) {
-    return this._readFile(this.file(profileId, gameId), profileId, gameId);
+  _read(profileId, gameId, opts) {
+    return this._readFile(this.file(profileId, gameId), profileId, gameId, opts);
   }
-  _readFile(file, profileId, gameId) {
+  /**
+   * 读一份标注文档。**默认（strict=false）保持既有宽容语义**：任何失败都回空文档。
+   *
+   * `{ strict: true }`（只由导出这类"少一份就是丢数据"的路径开启）区分三种情况：
+   *   1. 文件**不存在**（ENOENT）⇒ 仍是"这局没有笔记"，返回空文档 —— §7 明确允许；
+   *   2. 文件存在但**不是合法 JSON**，或**不可读**（EACCES/EPERM/EISDIR…）⇒ 抛 { code: 500 }；
+   *      §7 明文：「笔记文件缺失可表示无笔记；文件损坏或读取错误不能静默当作无笔记」。
+   *   3. 解析成功但 schemaVersion/profileId/gameId 不匹配 ⇒ 仍是空文档（那是"不是本局的笔记"，不是损坏）。
+   */
+  _readFile(file, profileId, gameId, { strict = false } = {}) {
+    let raw;
     try {
-      const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+      raw = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      if (strict && e && e.code !== 'ENOENT') {
+        throw Object.assign(new Error(`笔记文件不可读（${path.basename(file)}）：${e.code || e.message}`), { code: 500 });
+      }
+      return emptyDoc(profileId, gameId);
+    }
+    try {
+      const doc = JSON.parse(raw);
       if (doc && doc.schemaVersion === SCHEMA_VERSION && doc.profileId === profileId && doc.gameId === gameId) return doc;
       return emptyDoc(profileId, gameId);
-    } catch (_) { return emptyDoc(profileId, gameId); }
+    } catch (e) {
+      if (strict) {
+        throw Object.assign(new Error(`笔记文件损坏（${path.basename(file)}）：不是合法 JSON：${e.message}`), { code: 500 });
+      }
+      return emptyDoc(profileId, gameId);
+    }
   }
 
-  get(profileId, gameId) {
-    return this._read(profileId, gameId);
+  get(profileId, gameId, opts) {
+    return this._read(profileId, gameId, opts);
   }
 
   /**
