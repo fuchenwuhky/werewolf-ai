@@ -3,6 +3,7 @@
  * 隔离原则：任何一侧（人类前端 / AI 上下文 / 日志回放）都只能通过 visibleEvents() 取事件。
  */
 'use strict';
+const crypto = require('node:crypto');
 const { ROLES, buildRoleDeck, validateBoard } = require('./roles');
 const { mergeRules, describeRules } = require('./rules');
 const { makeRng, seedFrom } = require('./rng');
@@ -24,6 +25,22 @@ class ForceEnded extends Error {
     super('对局被手动终止');
     this.code = 'FORCE_ENDED';
   }
+}
+
+/**
+ * 每次"等待人类输入"生成一个**新的唯一 id**（M2-a）。
+ *
+ * 为什么需要：`POST /api/games/:id/action` 只知道"此刻有人在等操作"，无法分辨提交者手里的
+ * 答案是**当前**这个任务的、还是上一个任务（或同一次提交的网络重试）。绑定 id 之后，
+ * 任务结束/被替换时旧 id 自然作废（pending 一置空就没了），重放与过期答案都能挡在
+ * `resolveHuman` 之前 —— 关键点是**副作用发生前**拒绝。
+ *
+ * 为什么用随机而不是自增计数：pending 不进存档也不进锚点快照，服务重启后同一局会重建任务；
+ * 自增计数会从 1 重来，于是"重启前用过的 id"可能与重启后的新任务撞号。随机 UUID 无此问题。
+ * 它不是鉴权凭据（action 仍必须先过玩家 token），泄漏它没有额外收益。
+ */
+function newPendingId() {
+  return crypto.randomUUID();
 }
 
 class Game {
@@ -69,7 +86,7 @@ class Game {
     this.seq = 0;
     this.day = 0;            // 夜晚开始时 +1；第 1 夜后是第 1 天
     this.phase = 'setup';
-    this.pending = null;     // 等待人类输入 {seat, request, resolve}
+    this.pending = null;     // 等待人类输入 {id, seat, request, resolve}（id 见 newPendingId）
   this.explodeRequest = null; // 人类狼的“随时自爆”请求 {seat, target}（白天任意时刻写入，引擎在最近的发言间隙消费）
   this.duelRequest = null;    // 人类骑士的“随时决斗”请求 {seat, target}
     this.winner = null;
@@ -183,14 +200,15 @@ class Game {
 
   // ---------- 输入等待 ----------
   /** 向一个座位请求决策。人类挂起等待（无限时），AI 交给 agent。
-   *  遗言/警徽/开枪等任务允许已出局的座位响应（request._allowDead = true）。 */
+   *  遗言/警徽/开枪等任务允许已出局的座位响应（request._allowDead = true）。
+   *  人类挂起时每次都生成新的 pending id（M2-a）：API 层据此拒绝"过期答案"与重复提交。 */
   async ask(seat, request) {
     if (this.forceEnded) throw new ForceEnded();
     const p = this.player(seat);
     if (!p || (!p.alive && !request._allowDead)) throw new Error(`座位${seat}无法响应（不存在或已出局）`);
     if (p.isHuman) {
       return new Promise((resolve, reject) => {
-        this.pending = { seat, request, resolve, reject };
+        this.pending = { id: newPendingId(), seat, request, resolve, reject };
         this.logger.info('engine', `等待人类玩家 ${seat}号 操作：${request.task}`);
       });
     }
@@ -342,7 +360,9 @@ class Game {
     return this._agents.get(seat);
   }
 
-  /** 人类提交操作（API 层调用）。失败返回 {ok:false,error}，pending 保留供重试。 */
+  /** 人类提交操作（API 层调用）。失败返回 {ok:false,error}，pending（含它的 id）保留供重试。
+   *  ⚠ 本函数**不做 pending id 比对**：那必须在 API 层、在调用本函数之前完成（M2-a），
+   *  否则"拒绝过期操作"就变成"先应用了再拒绝"。 */
   resolveHuman(payload) {
     if (!this.pending) return { ok: false, error: '当前没有等待你的操作' };
     const { request, resolve } = this.pending;

@@ -1415,7 +1415,12 @@ class Api {
       const iAmWolf = me && me.alive && me.role && ROLES[me.role].team === 'wolf';
       if (isGod || iAmWolf) wolfTalk = { active: true, round: wt.round, rounds: wt.rounds, canTalk: !isGod && !!iAmWolf };
     }
+    // M2-a：pending 里带上**当前任务的唯一 id**（引擎每次 ask 生成新值，任务结束/被替换即作废）。
+    // 客户端提交 action 时必须回传它，服务端在产生任何副作用之前比对（见 action()）。
+    // 兼容说明：只有手工构造的 pending 桩（老测试/内部代码）没有 id —— 那种情况取 null，
+    // 服务端不做 id 比对（没有可比的基准），见 action() 的注释。
     const pending = (game.pending && !isGod && game.pending.seat === viewer) ? {
+      pendingId: game.pending.id || null,
       task: game.pending.request.task,
       candidates: game.pending.request.candidates || null,
       allowNone: !!game.pending.request.allowNone,
@@ -1633,7 +1638,9 @@ class Api {
     return [
       g.seq, g.day, g.phase, g.finished ? 1 : 0, g.winner || '',
       g.paused ? `${g.paused.kind}:${g.paused.code || ''}` : '',
-      g.pending ? `${g.pending.seat}:${g.pending.request.task}` : '',
+      // pending 的 id 必须进指纹：同一座位同一任务的**新** pending（旧答案作废）也要推帧，
+      // 否则 SSE 客户端会一直握着旧 id 提交，被服务端当成过期操作拒掉。
+      g.pending ? `${g.pending.seat}:${g.pending.request.task}:${g.pending.id || ''}` : '',
       g.wolfTalk && g.wolfTalk.active ? `wt${g.wolfTalk.round}/${g.wolfTalk.rounds}` : '',
       g.memory ? `m${g.memory.day}/${g.memory.done}` : '',
       g.explodeRequest ? 'E' : '', g.duelRequest ? 'D' : '',
@@ -1652,7 +1659,7 @@ class Api {
     return [
       game.seq, game.day, game.phase, game.finished ? 1 : 0, game.winner || '',
       payload.paused ? `${payload.paused.kind}:${payload.paused.code || ''}` : '',
-      payload.pending ? payload.pending.task : '',
+      payload.pending ? `${payload.pending.task}:${payload.pending.pendingId || ''}` : '',
       payload.memory ? `${payload.memory.day}/${payload.memory.done}` : '',
       payload.queued.explode ? 1 : 0, payload.queued.duel ? 1 : 0,
       payload.review ? `R${payload.review.status}:${(payload.review.text || '').length}` : '',
@@ -1743,6 +1750,35 @@ class Api {
     // 409「当前没有等待中的操作」（那是给正常用户的提示，不是安全边界）。
     if (body.token !== entry.tokens.player) return this.json(res, 403, { error: 'token 无效' });
     if (!game.pending) return this.json(res, 409, { error: '当前没有等待中的操作' });
+    /**
+     * M2-a：等待中的任务必须带**当前** pendingId。三条语义（有意为之，勿"顺手放宽"）：
+     *   ① 相等 ⇒ 正常应用（同一任务的非法载荷仍由 resolveHuman 校验拒绝，pending 与 id 都保留供改正重试）；
+     *   ② 不相等、或**缺失**，而确实有待处理任务 ⇒ 409「该操作已过期或已被处理」，**在 resolveHuman 之前**返回，
+     *      于是既不消耗任务也不产生任何副作用。这条同时挡住"同一 action 重放两次"（若期间已有新任务）
+     *      与"网络重试把上一任务的答案又交一次"；
+     *   ③ **当前没有任何 pending 时不因缺 id 而拒绝** —— 上面那行已经先行返回原来的 409
+     *      「当前没有等待中的操作」（文案逐字不变）。这是刻意保留的老客户端兼容路径：
+     *      非等待态的调用（未开局/未轮到你/已结束……）行为与加 pendingId 之前完全一致。
+     * 唯一例外：手工构造的 pending 桩没有 id（引擎 ask 一定带 id）⇒ 没有可比的基准，退回旧行为放行，
+     * 免得测试与内部代码被无意义地拒掉。真实对局走不到这条分支。
+     */
+    const currentId = game.pending.id;
+    if (currentId) {
+      // 顶层为主；payload 里也给一次机会（后续客户端批次两处都可放，顶层优先）
+      const submitted = body.pendingId != null ? body.pendingId : (body.payload ? body.payload.pendingId : undefined);
+      if (submitted == null || submitted === '') {
+        return this.json(res, 409, {
+          error: '缺少 pendingId：该操作已过期或已被处理，请刷新页面后重试',
+          code: 'PENDING_ID_REQUIRED',
+        });
+      }
+      if (String(submitted) !== String(currentId)) {
+        return this.json(res, 409, {
+          error: '该操作已过期或已被处理（pendingId 已失效），请刷新页面后重试',
+          code: 'PENDING_ID_STALE',
+        });
+      }
+    }
     const result = game.resolveHuman(body.payload || {});
     return this.json(res, result.ok ? 200 : 400, result);
   }
