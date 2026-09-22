@@ -110,6 +110,21 @@ async function writeLessons(api, ownerProfileId, text, role) {
  * ⚠ 标记必须**每次调用唯一**（带随机 nonce）：同一个档案会在本文件里被探多次，而经验池是按角色
  * 累积的 —— 上一次探针留下的标记若与本次同名，就会在同角色上被一起注入，断言"没注入别人的经验"
  * 会假红（首次全量跑真的红过：甲的开局读到了乙的标记，因为那是上一轮写进甲池的自己的标记）。
+ *
+ * ⚠⚠ nonce 只解决了上面那一半。它保证"每次调用的两个标记彼此不同名"，所以
+ * `text.includes(本轮 mine / theirs)` 这类**点名到本轮标记**的判定是可靠的；但它**不解决**
+ * "同一个档案 + 同一个角色上已经积累了历次探针的标记"。因此，任何在探针**之后**对**整个角色
+ * 数组**做 `deepStrictEqual` 的断言，都会把"探针自己早先合法写进去的标记"误判成"外来继承"：
+ *   · `injectProbe(api, pid, markerPid, otherPid)` 会把 `目标档案标记-<tag>` 写进 markerPid、
+ *     把 `对照档案标记-<tag>` 写进 otherPid，而两者用的是**发牌随机出的同一个角色** `me.role`；
+ *   · 于是同一个档案在同一角色上被先后探多次时，池里会留下多条标记（这是**测试自己写的**，
+ *     不是继承）；
+ *   · 断言"整个角色数组等于某值"就会假红，且只在两次探针**随机撞到同一角色**时触发
+ *     （`quick10` 下发牌随机 ⇒ 约 1/10，与实测 5/40 吻合）。
+ * 结论（M0「新建档案/改昵称/重名」那条用例踩过这个坑，修法见该用例内的注释）：
+ *   · 判"有没有继承"要用**本轮标记**（本轮 mine 必在、本轮 theirs 必不在），不要用整数组相等；
+ *   · 若确实需要"整数组 == 某值"的语义，期望值必须把本轮探针合法写进该池的标记算进去，
+ *     或者改用没被探过的档案。
  */
 async function injectProbe(api, pid, markerPid, otherPid) {
   const players = Array.from({ length: 10 }, (_, i) => ({ name: 'P' + (i + 1), isHuman: i === 0 }));
@@ -325,7 +340,28 @@ test('M0 数据归属：新建档案/改昵称/重名都不得转移归属（身
     const renA = await call(api, 'PATCH', `/api/profiles/${A}`, { nickname: '甲' });
     assert.strictEqual(renA.status, 200, JSON.stringify(renA.body));
     assert.strictEqual(api.experienceFor(A).file, legacyPoolFile(dataDir), '甲改名后仍是旧池的归属者');
-    assert.deepStrictEqual(api.experienceFor(A).forRole('seer'), ['A1-甲自己的教训'], '甲改名后经验仍在');
+    // 甲改名后：自己的教训仍在，且**不得**混进别的档案的经验。
+    //
+    // 这里原来写的是 `deepStrictEqual(api.experienceFor(A).forRole('seer'), ['A1-甲自己的教训'])`，
+    // 它是本文件唯一的间歇假红（实测改前 5/40，全部挂在用例名「…新建档案/改昵称/重名…」上）：
+    // 上面那句 `injectProbe(api, D, D, A)` 里 **A 是 otherPid**，探针会合法地把本轮的
+    // `对照档案标记-<tag>` 写进甲的 seer 池；发牌一旦把那次探针的角色随机到 `seer`，
+    // 整数组相等就必然假红（机制/概率见 :110-127 的 ⚠⚠ 说明）。根因是"测试自己造成的池内污染"，
+    // 不是产品缺陷，所以修测试——但**不降低强度**，改成下面三条定向判定：
+    //   ① 甲自己的教训必须在（= 原断言"不丢"的那一半）；
+    //   ② 本轮探针写给 D 的 `mine`（= D 的经验）绝不许出现在甲的池里（= "别的档案的经验被注入进来"
+    //      这个真缺陷；点名到本轮 nonce，不受历史标记干扰）；
+    //   ③ 甲的 seer 池仍要求**恰好**等于本轮已知写入它的多重集（唯一允许的"外来"条目就是 ②里探针
+    //      合法写进甲池的那条对照标记，且仅当探针角色恰好是 seer 时存在）——任何未知条目、丢失、
+    //      重复依旧判红。③ 用 sort 后的多重集比较，只看"有哪些条目"，不看顺序（forRole 是最新在前，
+    //      依赖顺序只会再添一处脆弱）。
+    const aSeer = api.experienceFor(A).forRole('seer');
+    assert.ok(aSeer.includes('A1-甲自己的教训'), '甲改名后自己的经验仍在（不得丢失）');
+    assert.strictEqual(aSeer.includes(injD.mine), false,
+      `甲改名后不得注入 D 的经验（本轮同角色 ${injD.role} 处的探针标记）`);
+    const aSeerExpected = injD.role === 'seer' ? [injD.theirs, 'A1-甲自己的教训'] : ['A1-甲自己的教训'];
+    assert.deepStrictEqual([...aSeer].sort(), [...aSeerExpected].sort(),
+      '甲改名后 seer 池只应含自己的教训（+ 本轮探针合法写进甲池的对照标记）');
     assert.strictEqual(api.experienceFor(D).file, dStore, '甲改成与 D 同名后，D 的池没被换掉');
     assert.strictEqual(fs.readFileSync(legacyOwnerMarker(dataDir), 'utf8').trim(), A, '改名不得改写旧池归属标记');
 
