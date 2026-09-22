@@ -84,6 +84,8 @@ async function main() {
     let view = null;
     let sawPending = false;
     let badSubmitRejected = false;
+    let badSubmitMsg = '';
+    let badSubmitKeptPending = false;
     const t0 = Date.now();
     for (;;) {
       await sleep(150);
@@ -92,10 +94,20 @@ async function main() {
       if (view.pending) {
         sawPending = true;
         const p = view.pending;
-        // 对发言任务先试一次非法提交（空白文本），验证服务端校验拒绝且不消耗回合
+        // 对发言任务先试一次非法提交（空白文本），验证服务端校验拒绝且不消耗回合。
+        // ⚠ 必须带上**正确的** pendingId：否则会先被 409 PENDING_ID_REQUIRED 挡下，
+        //   这条探针就变成在测"缺 id"而不是在测"载荷校验"，覆盖被悄悄换掉但仍会绿。
         if (!badSubmitRejected && p.task === 'speech') {
-          try { await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, payload: { text: '   ' } }); }
-          catch (_) { badSubmitRejected = true; }
+          try {
+            await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, pendingId: p.pendingId, payload: { text: '   ' } });
+          } catch (e) {
+            badSubmitMsg = String((e && e.message) || e).slice(0, 200);
+            // 只认"载荷不合法"（400）为这条探针的成功；409（缺/错 id）说明它没测到该测的东西
+            badSubmitRejected = /→ 400:/.test(badSubmitMsg);
+          }
+          // 不消耗回合：同一个 pendingId 必须还在等待（服务端拒绝必须零副作用）
+          const vAfterBad = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken}&after=0`);
+          badSubmitKeptPending = !!(vAfterBad.pending && vAfterBad.pending.pendingId === p.pendingId);
         }
         let payload = null;
         switch (p.task) {
@@ -114,12 +126,26 @@ async function main() {
           case 'shoot': payload = { target: 0 }; break;
           default: payload = {};
         }
-        await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, payload });
+        // 计划书 §6：新客户端必须提交 pendingId。若中途过期（例如同座位产生了新任务），
+        // 刷新视图一次、保留同一份草稿、按新 id 重发一次；仍失败才算真失败。
+        try {
+          await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, pendingId: p.pendingId, payload });
+        } catch (e) {
+          const msg = String((e && e.message) || e);
+          if (!/→ 409:/.test(msg) || !/PENDING_ID_/.test(msg)) throw e;
+          const vFresh = await api('GET', `/api/games/${g.gameId}/view?token=${g.playerToken}&after=0`);
+          if (!vFresh.pending || !vFresh.pending.pendingId) throw e;
+          await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, pendingId: vFresh.pending.pendingId, payload });
+        }
       }
       if (view.finished) break;
       if (Date.now() - t0 > 120000) throw new Error('e2e 超时：对局未在 120s 内结束');
     }
     check('人类 pending 流程走通（含非法提交被拒）', sawPending && badSubmitRejected);
+    // 把探针的真实读数打出来：若它是被 409 挡下的，上面那条会红，这里给出原因
+    check('非法提交是被"载荷校验"拒绝（400），而不是被"缺/错 pendingId"拒绝（409）',
+      badSubmitRejected && /→ 400:/.test(badSubmitMsg), badSubmitMsg || '(探针未触发)');
+    check('非法提交被拒后不消耗回合（同一个 pendingId 仍在等待）', badSubmitKeptPending);
     check('对局结束且有胜负', view.finished && ['good', 'wolf', 'draw'].includes(view.winner));
     check('人类能看到自己身份', view.me && !!view.me.role);
 

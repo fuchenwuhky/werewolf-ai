@@ -138,7 +138,15 @@ async function view(gameId, token) {
     if (pending.task === lastTask && me.decisions.length && Date.now() - me.decisions[me.decisions.length - 1].at < 300) { await sleep(800); continue; }
     const t0 = Date.now();
     const { payload, why } = decide(pending, v);
-    const res = await api('POST', `/api/games/${gameId}/action`, { token, payload });
+    // 计划书 §6：提交必须带当前任务的 pendingId；id 过期（409 PENDING_ID_*）就刷新视图一次、
+    // 保留同一份 payload、按新 id 重发一次（重发成功不算错误，不污染 me.errors）
+    let res = await api('POST', `/api/games/${gameId}/action`, { token, pendingId: pending.pendingId, payload });
+    if (res.code === 409 && /^PENDING_ID_/.test(String((res.body && res.body.code) || ''))) {
+      const vFresh = await view(gameId, token);
+      if (vFresh.pending && vFresh.pending.pendingId) {
+        res = await api('POST', `/api/games/${gameId}/action`, { token, pendingId: vFresh.pending.pendingId, payload });
+      }
+    }
     lastTask = pending.task;
     const rec = { at: Date.now(), day: v.day, phase: v.phase, task: pending.task, payload, why, code: res.code, waitMs: Date.now() - t0, error: res.code === 200 ? null : (res.body && res.body.error) || '未知错误' };
     me.decisions.push(rec);

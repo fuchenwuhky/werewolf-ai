@@ -18,8 +18,30 @@ const BASE = 'http://127.0.0.1:3210';
 async function api(method, url, body) {
   const res = await fetch(BASE + url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const d = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(d.error || 'HTTP ' + res.status);
+  if (!res.ok) {
+    // 带上状态码与响应体：调用方要据此区分"缺/错 pendingId（409 PENDING_ID_*）"与其它失败
+    const err = new Error(d.error || 'HTTP ' + res.status);
+    err.status = res.status;
+    err.body = d;
+    throw err;
+  }
   return d;
+}
+// 计划书 §6：提交必须带当前任务的 pendingId。若中途过期（409 PENDING_ID_*），
+// 刷新视图一次、保留同一份载荷、按新 id 重发一次；仍失败才抛出。
+async function submitAction(s, payload, pendingId) {
+  try {
+    return await api('POST', `/api/games/${s.gameId}/action`, { token: s.playerToken, pendingId, payload });
+  } catch (e) {
+    const code = e && e.body && e.body.code;
+    if (e && e.status === 409 && /^PENDING_ID_/.test(String(code || ''))) {
+      const fresh = await api('GET', `/api/games/${s.gameId}/view?token=${s.playerToken}&after=0`);
+      if (fresh.pending && fresh.pending.pendingId) {
+        return await api('POST', `/api/games/${s.gameId}/action`, { token: s.playerToken, pendingId: fresh.pending.pendingId, payload });
+      }
+    }
+    throw e;
+  }
 }
 const load = () => JSON.parse(fs.readFileSync(STATE, 'utf8'));
 const save = (s) => fs.writeFileSync(STATE, JSON.stringify(s, null, 2));
@@ -63,7 +85,13 @@ const cmd = process.argv[2];
   }
   if (cmd === 'act') {
     const payload = JSON.parse(process.argv[3]);
-    const r = await api('POST', `/api/games/${s.gameId}/action`, { token: s.playerToken, payload });
+    // 计划书 §6：先读一次视图取当前任务的 pendingId（不猜、不用上一次的旧 id）
+    const cur = await api('GET', `/api/games/${s.gameId}/view?token=${s.playerToken}&after=${s.after || 0}`);
+    if (!cur.pending || !cur.pending.pendingId) {
+      console.error('✗ 当前没有等待中的操作，无法提交（先跑 st 看状态）');
+      process.exit(1);
+    }
+    const r = await submitAction(s, payload, cur.pending.pendingId);
     console.log('✓', JSON.stringify(r));
     appendLog([`- 🙋 我提交操作: ${JSON.stringify(payload)}`]);
     return;

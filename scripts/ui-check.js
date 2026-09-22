@@ -2728,7 +2728,16 @@ class Browser {
           else if (pending.task === 'sheriff_run') payload = { run: false };
           else if (pending.task === 'explode_check') payload = { explode: false };
           else if (alive.length) payload = { target: alive[0] };
-          await api('POST', `/api/games/${g3.gameId}/action`, { token: g3.playerToken, payload });
+          // 计划书 §6：提交必须带当前任务的 pendingId。id 过期（409 PENDING_ID_*）就刷新视图一次、
+          // 保留同一份 payload、按新 id 重发一次 —— 否则这一步的提交会被 409 静默丢弃，
+          // 循环空转到 40 次后 "夜里的投刀面板已渲染" 那条断言会红（且看起来像界面坏了）。
+          let sub = await api('POST', `/api/games/${g3.gameId}/action`, { token: g3.playerToken, pendingId: pending.pendingId, payload });
+          if (sub && sub.code === 409 && /^PENDING_ID_/.test(String((sub.body && sub.body.code) || ''))) {
+            const vFresh = (await api('GET', `/api/games/${g3.gameId}/view?token=${g3.playerToken}&after=0`)).body || {};
+            if (vFresh.pending && vFresh.pending.pendingId) {
+              sub = await api('POST', `/api/games/${g3.gameId}/action`, { token: g3.playerToken, pendingId: vFresh.pending.pendingId, payload });
+            }
+          }
           // FIX-18（保留的固定 sleep，见报告）：同上 —— 提交后等服务端把这一步的 AI 反应推完，
           // 可判定状态在下一轮读 view 时判断（`pending.task === 'wolf_kill'`）。
           await sleep(700);
