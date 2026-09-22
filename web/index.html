@@ -109,7 +109,7 @@
           <div class="home-main">
             <!-- 当前档案：复用 state.profiles / state.profileId 体系（本机玩家档案，无登录概念） -->
             <div class="home-profile" id="home-profile">
-              <span class="home-avatar" id="home-avatar" aria-hidden="true">👤</span>
+              <span class="home-avatar" id="home-avatar" aria-hidden="true"><svg class="ww-avatar-badge" viewBox="0 0 24 24" width="1.2em" height="1.2em" focusable="false"><use href="#wwAvScholar" xlink:href="#wwAvScholar"/></svg></span>
               <span class="home-who">
                 <b id="home-nick">…</b>
                 <span class="hint">本机玩家档案 · 战绩 / 笔记 / 经验按档案隔离</span>
@@ -448,6 +448,8 @@
 <script src="shared/profile-state.js"></script>
 <script src="shared/game-draft.js"></script>
 <script src="shared/connection-state.js"></script>
+<script src="shared/avatar-badge.js"></script>
+<script src="shared/avatar-image.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v16-shared'; // 预缓存清单加入共享状态模块 /shared/profile-state.js、/shared/game-draft.js、/shared/connection-state.js（前代 ww-v15-tokens 加的是 tokens.css）
+const VERSION = 'ww-v17-avatar'; // 预缓存清单加入 /shared/avatar-badge.js、/shared/avatar-image.js（M1 §4.1 自定义头像；前代 ww-v16-shared 加的是三个共享状态模块）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -41,6 +41,8 @@ const SHELL = [
   '/shared/profile-state.js',
   '/shared/game-draft.js',
   '/shared/connection-state.js',
+  '/shared/avatar-badge.js',
+  '/shared/avatar-image.js',
   '/ai-cast.js',
   '/ai-cast.html',
   '/ai-cast-page.js',

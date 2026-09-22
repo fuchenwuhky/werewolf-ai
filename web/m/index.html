@@ -56,9 +56,9 @@
       </div>
     </header>
     <div class="m-home-scroll">
-      <!-- 当前档案行（复用现有档案体系）：头像 emoji + 昵称 + 管理入口 -->
+      <!-- 当前档案行（复用现有档案体系）：头像徽记/自定义头像图 + 昵称 + 管理入口 -->
       <button class="m-profile-chip" id="m-profile-chip" type="button" title="我的档案（战绩/笔记按档案隔离）">
-        <span class="m-profile-avatar" id="m-profile-avatar">👤</span>
+        <span class="m-profile-avatar" id="m-profile-avatar"><svg class="ww-avatar-badge" viewBox="0 0 24 24" width="1.2em" height="1.2em" focusable="false"><use href="#wwAvScholar" xlink:href="#wwAvScholar"/></svg></span>
         <b class="m-profile-nick" id="m-profile-nick">加载中…</b>
         <span class="m-profile-manage">管理 ›</span>
       </button>
@@ -238,6 +238,8 @@
 <script src="../shared/profile-state.js"></script>
 <script src="../shared/game-draft.js"></script>
 <script src="../shared/connection-state.js"></script>
+<script src="../shared/avatar-badge.js"></script>
+<script src="../shared/avatar-image.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

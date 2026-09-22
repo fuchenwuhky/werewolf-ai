@@ -163,11 +163,13 @@ const PLANNED_SECTIONS = [
   '中英文切换',
   '离线',
   '离线能力',
+  'M1 自定义头像（内置徽记 / 裁切上传 / 删除回退）',
   '档案回收区（删除后可恢复）',
   'FIX-10 偏好保存 409 自恢复',
   '手机版',
   '手机端档案回收区（390×844）',
   'FIX-08 手机端 Esc 关浮层（真实按键）',
+  '手机端自定义头像（裁切上传 / 删除回退）',
   'FIX-10/FIX-15 手机端（409 自恢复 + 目标必选提示）',
   ...(FULL ? ['观战 Mock 局跑到终局（--full）'] : []),
   'P4-1 恢复卡片详情',
@@ -209,6 +211,9 @@ class Browser {
     // 辅助会话（FIX-16 检测器自证）的异常/console 桶：按 sessionId 分开，
     // 这样"在别处注入一个意外异常"不会污染主会话的验收证据。
     this.auxBySession = new Map();
+    // 原生对话框：null = 不接管（默认）；'accept' / 'dismiss' 时自动应答并把原文记进 dialogs
+    this.dialogMode = null;
+    this.dialogs = [];
   }
 
   static async launch(port, chrome) {
@@ -260,6 +265,16 @@ class Browser {
       if (!bucket) { bucket = { exceptions: [], consoleErrors: [] }; this.auxBySession.set(sid, bucket); }
       if (msg.method === 'Runtime.exceptionThrown') bucket.exceptions.push(fmtException(p));
       else if (msg.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(p.type)) bucket.consoleErrors.push(fmtConsole(p));
+      return;
+    }
+    if (msg.method === 'Page.javascriptDialogOpening') {
+      // 原生 confirm/alert：headless 下对话框必须在收到事件后立刻回应，否则该 target 的
+      // 后续命令全部挂住（页面被对话框阻塞）。默认不接管（保持"本脚本不弹原生对话框"的既有事实），
+      // 只有调用过 autoAcceptDialogs() 的段落才自动应答，并把原文记进 this.dialogs 供断言。
+      if (this.dialogMode) {
+        this.dialogs.push({ type: p.type, message: p.message, accepted: this.dialogMode === 'accept' });
+        this.send('Page.handleJavaScriptDialog', { accept: this.dialogMode === 'accept' }, this.sessionId).catch(() => { /* 已自行关闭 */ });
+      }
       return;
     }
     if (msg.method === 'Runtime.exceptionThrown') {
@@ -475,6 +490,17 @@ class Browser {
   setLatency(ms) { return this.send('Network.emulateNetworkConditions', { offline: false, latency: ms, downloadThroughput: -1, uploadThroughput: -1 }, this.sessionId); }
   /** 兼容旧调用点：断网/恢复一律走 emulateOffline（真断网 + navigator.onLine 覆盖） */
   setOffline(on) { return this.emulateOffline(on); }
+
+  /**
+   * 接管原生 confirm/alert（M1 头像段落要用到："删除自定义头像"是真 confirm）。
+   * 走 CDP 的 Page.javascriptDialogOpening + handleJavaScriptDialog，是**真实**的浏览器对话框回路
+   * —— 比在页面里覆写 window.confirm 更接近玩家，也更能证明"确认之后才真的删"。
+   * @returns 累计的对话框记录（{type, message, accepted}），供断言确认文案
+   */
+  autoAcceptDialogs(mode = 'accept') {
+    this.dialogMode = mode;
+    return this.dialogs;
+  }
 
   /**
    * 真实按键（走 CDP Input 域，isTrusted=true，会触发页面里的 keydown 监听）。
@@ -1051,6 +1077,389 @@ class Browser {
     // 建 → 归档 → 删除 → 在回收区面板里点「恢复」→ 档案回到列表。
     // 造数据走服务端 API（ui:check 的服务端是本机模式：不带 Origin 的 node 请求按管理会话放行），
     // 但**点按钮、量高度、读提示**一律走真实浏览器。断言的强度要求：几何 + 服务端证据，不接受"文字在 DOM 里"。
+    // ------------------------------------------------------------------
+    // M1 §4.1 自定义头像：内置统一线稿徽记 / 方形裁切（拖动 + 缩放 + 实时方形&圆形预览）/
+    // 512×512 重编码上传 / 删除自定义头像后回退到档案自己的 avatarId。
+    //
+    // 唯一"合成"的一步是**选中文件**：`<input type=file>` 在 headless 里没有真实用户操作可走
+    // （CDP 的 setFileInputFiles 要真实磁盘路径，且不走 change 的"用户选择"语义），所以
+    // 用 DataTransfer 造一个 File 再派发 change。**其余全部真实**：真实鼠标点击、真实 CDP 拖动
+    // （Input.dispatchMouseEvent 会走完整输入管线，Chrome 据此合成 pointerdown/move/up）、
+    // 真实原生 confirm（Page.javascriptDialogOpening + handleJavaScriptDialog）。
+    // 裁切几何本身另有 test/avatar-image.test.js 的 26 条单测在 Node 下钉住，这里证的是"浏览器里真的跑通"。
+    // ------------------------------------------------------------------
+    log('\n=== M1 自定义头像（内置徽记 / 裁切上传 / 删除回退）===');
+    {
+      const AV_NICK = '头像测试甲';
+      const j = async (method, p, body) => {
+        const r = await fetch(base + p, {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        });
+        let d = null;
+        try { d = await r.json(); } catch (_) { /* 允许空响应 */ }
+        return { code: r.status, body: d };
+      };
+      /** 页面侧采样指纹：证明"拖动/缩放真的改变了将要上传的像素"，而不是只改了数字 */
+      const STAGE_FP = `(() => {
+        const c = document.getElementById('av-crop-stage');
+        if (!c) return { ok: false, why: 'no-stage' };
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let h = 2166136261;
+        for (let i = 0; i < d.length; i += 97) { h ^= d[i]; h = Math.imul(h, 16777619) >>> 0; }
+        return { ok: true, w: c.width, h: c.height, hash: h };
+      })()`;
+      /** 弹层入场是 modalIn（scale .98 → 1）：不等到它跑完就量尺寸，量到的是 98% 的值
+       *  （实测 chip 48→47、按钮 40→39），会把"触区达标"判成假失败。等水平缩放真的到 1。
+       *  注意每次换页都会重新创建 .modal，所以每换一次页都要重新等。 */
+      const MODAL_SETTLED = `(() => { const m = document.querySelector('#modal-root .modal'); if (!m) return false;
+        const t = getComputedStyle(m).transform; if (t === 'none') return true;
+        const n = t.match(/matrix\\(([-0-9.]+)/); return !!n && Math.abs(parseFloat(n[1]) - 1) < 0.001; })()`;
+      const settle = (label) => waitExpr(label, MODAL_SETTLED, { timeout: 4000 });
+      /** 造一张真 PNG（或超限/错类型的文件）塞进 <input type=file>，然后派发 change */
+      const injectFile = (kind, arg) => b.eval(`(async () => {
+        const inp = document.getElementById('av-file');
+        if (!inp) return { ok: false, why: 'input#av-file 不存在（编辑页没打开？）' };
+        let file = null;
+        if (${JSON.stringify(kind)} === 'png') {
+          const W = ${Number(arg && arg.w) || 600}, H = ${Number(arg && arg.h) || 400};
+          const c = document.createElement('canvas'); c.width = W; c.height = H;
+          const x = c.getContext('2d');
+          const g = x.createLinearGradient(0, 0, W, H);
+          g.addColorStop(0, '#ff0000'); g.addColorStop(0.5, '#00ff00'); g.addColorStop(1, '#0000ff');
+          x.fillStyle = g; x.fillRect(0, 0, W, H);
+          x.fillStyle = '#ffff00'; x.fillRect(0, 0, 40, 40);
+          x.fillStyle = '#000000'; x.fillRect(W - 40, H - 40, 40, 40);
+          const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+          file = new File([blob], 'avatar-test.png', { type: 'image/png' });
+        } else if (${JSON.stringify(kind)} === 'oversize') {
+          file = new File([new Uint8Array(${Number(arg && arg.bytes) || 10 * 1024 * 1024 + 1})], 'huge.png', { type: 'image/png' });
+        } else {
+          file = new File([new Uint8Array([71, 73, 70, 56, 57, 97, 1, 0, 1, 0])], 'x.gif', { type: 'image/gif' });
+        }
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inp.files = dt.files;
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, name: file.name, type: file.type, size: file.size };
+      })()`);
+
+      // ---- 1) 真实点开档案管理 → 新建一个专属档案（不动别人段落依赖的默认档案）----
+      // 先记下"原来选中的是哪个档案"：本段要新建并选用一个档案（新建即选用），
+      // 而**后面的段落**（P4-1 从存档恢复等）依赖"当前档案 = 本局 owner"这条归属校验
+      // （AC-04：owner ≠ 当前浏览档案会弹三选，恢复路径就进不去对局）。所以收尾必须原样换回来。
+      const prevId = await b.eval(`state.profileId`);
+      check('头像段：进入本段前有明确的当前档案（收尾要还原，不能让后面的段落换归属）',
+        typeof prevId === 'string' && prevId.length > 0, `state.profileId=${JSON.stringify(prevId)}`);
+      await b.realClick('#btn-profiles-entry');
+      await waitExpr('头像段：档案管理弹层已打开', `!!document.getElementById('pm-trash-entry')`, { timeout: 5000 });
+      const mkBtn = await b.eval(`(() => { const b = [...document.querySelectorAll('#modal-root .btn')].find((x) => /新建档案/.test(x.textContent)); return b ? { text: b.textContent.trim(), w: Math.round(b.getBoundingClientRect().width) } : null; })()`);
+      check('头像段：弹层里有「新建档案」入口且可见', !!mkBtn && mkBtn.w > 0, JSON.stringify(mkBtn));
+      await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => /新建档案/.test(x.textContent))?.click()`);
+      await waitExpr('头像段：新建档案页（内置头像区）已渲染', `!!document.getElementById('av-builtin-row')`, { timeout: 5000 });
+      // 弹层入场是 modalIn（scale .98 → 1）。不等到它跑完就量尺寸，量到的是 98% 的值
+      // （实测 chip 48→47、按钮 40→39），会把"触区达标"判成假失败。
+      await settle('头像段：新建档案页入场动画已结束（几何测量不受 scale(.98) 影响）');
+
+      // ---- 2) 八个内置头像必须是统一风格的 SVG 徽记（一份定义 + <use> 引用）----
+      const chips = await b.eval(`(() => {
+        const row = document.getElementById('av-builtin-row');
+        const ids = ['scholar','hunter','seer','wolf','witch','night','candle','mask'];
+        const out = ids.map((id) => {
+          const c = document.getElementById('av-chip-' + id);
+          if (!c) return { id, missing: true };
+          const r = c.getBoundingClientRect();
+          const svg = c.querySelector('svg.ww-avatar-badge');
+          const use = svg && svg.querySelector('use');
+          return { id, w: Math.round(r.width), h: Math.round(r.height),
+            svg: !!svg, ref: use ? (use.getAttribute('href') || use.getAttribute('xlink:href')) : null,
+            paths: c.querySelectorAll('path, circle, rect, line, polyline, polygon').length,
+            aria: svg ? svg.getAttribute('aria-label') : null };
+        });
+        return { chips: out, sel: [...document.querySelectorAll('#av-builtin-row .chip.sel')].map((x) => x.id),
+          defs: document.querySelectorAll('svg#ww-avatar-defs symbol').length,
+          preview: (document.querySelector('#av-current-preview svg.ww-avatar-badge use') || {}).getAttribute
+            ? document.querySelector('#av-current-preview svg.ww-avatar-badge use').getAttribute('href') : null };
+      })()`);
+      check('头像段：八个内置头像都在，且每个都是带可读名的 SVG 徽记',
+        chips.chips.length === 8 && chips.chips.every((c) => !c.missing && c.svg === true && !!c.ref && !!c.aria),
+        JSON.stringify(chips.chips));
+      check('头像段：徽记只引用一份 <symbol> 定义（不是八份内联重复的路径）',
+        chips.defs === 8 && chips.chips.every((c) => c.ref === '#wwAv' + c.id[0].toUpperCase() + c.id.slice(1)),
+        `定义数=${chips.defs} 引用=${JSON.stringify(chips.chips.map((c) => c.ref))}`);
+      // <use> 可能指向一个空 <symbol>：那样"引用都在"却什么都画不出来。所以还要证明定义里真有图形，
+      // 而且徽记在页面上真的占到了可点面积（几何非零），不是 0×0 的空壳。
+      const markGeo = await b.eval(`(() => {
+        const q = 'path, circle, rect, line, polyline, polygon';
+        const defs = document.getElementById('ww-avatar-defs');
+        // 画法（stroke/fill）写在 <g> 上、由里面的图形继承，所以要沿祖先找到 symbol 为止
+        const paintOf = (e) => {
+          let n = e, s = '', f = '';
+          while (n && n.tagName && n.tagName.toLowerCase() !== 'symbol') {
+            if (!s && n.getAttribute('stroke')) s = n.getAttribute('stroke');
+            if (!f && n.getAttribute('fill')) f = n.getAttribute('fill');
+            n = n.parentNode;
+          }
+          return s + ' ' + f;
+        };
+        const syms = [...defs.querySelectorAll('symbol')];
+        const per = syms.map((s) => {
+          const sh = [...s.querySelectorAll(q)];
+          return { id: s.id, shapes: sh.length, current: sh.filter((e) => /currentColor/.test(paintOf(e))).length };
+        });
+        const one = document.querySelector('#av-chip-scholar svg.ww-avatar-badge');
+        const r = one ? one.getBoundingClientRect() : null;
+        return { per, badge: r ? { w: Math.round(r.width * 10) / 10, h: Math.round(r.height * 10) / 10 } : null,
+          hexInDefs: (defs.outerHTML.match(/#[0-9a-fA-F]{6}\\b/g) || []) };
+      })()`);
+      check('头像段：八个徽记定义里都有真实线稿图形（不是空 <symbol> 占位）',
+        markGeo.per.length === 8 && markGeo.per.every((m) => m.shapes >= 1), JSON.stringify(markGeo.per));
+      check('头像段：八个徽记统一用 currentColor 上色、定义里一个写死色值都没有（深浅底都不脱色）',
+        markGeo.per.every((m) => m.current === m.shapes) && markGeo.hexInDefs.length === 0,
+        JSON.stringify({ per: markGeo.per, hex: markGeo.hexInDefs }));
+      check('头像段：徽记在页面上占到真实面积（非 0×0 空壳）',
+        !!markGeo.badge && markGeo.badge.w >= 20 && markGeo.badge.h >= 20, JSON.stringify(markGeo.badge));
+      check('头像段：徽记 chip 触区达标（≥40 桌面 / ≥48 手机同一档）',
+        chips.chips.every((c) => c.w >= 40 && c.h >= 40), JSON.stringify(chips.chips.map((c) => ({ id: c.id, w: c.w, h: c.h }))));
+      check('头像段：默认选中真正的档案 avatarId（新建页 = 默认徽记），当前预览同源',
+        chips.sel.length === 1 && chips.sel[0] === 'av-chip-scholar' && chips.preview === '#wwAvScholar',
+        JSON.stringify({ sel: chips.sel, preview: chips.preview }));
+
+      // ---- 3) 真实点击切换内置徽记：选中态与预览必须同时跟上 ----
+      await b.realClick('#av-chip-mask');
+      const afterChip = await b.eval(`(() => ({
+        sel: [...document.querySelectorAll('#av-builtin-row .chip.sel')].map((x) => x.id),
+        preview: document.querySelector('#av-current-preview use')?.getAttribute('href') || null,
+        note: (document.getElementById('av-current-note') || {}).textContent || '',
+      }))()`);
+      check('头像段：点内置徽记后选中态与预览同时切换（不是只有一个变了）',
+        afterChip.sel.length === 1 && afterChip.sel[0] === 'av-chip-mask'
+        && afterChip.preview === '#wwAvMask' && /面具/.test(afterChip.note), JSON.stringify(afterChip));
+
+      // ---- 4) 输入昵称（真实 insertText）并创建 ----
+      await b.realClick('#profile-form-nick');
+      await b.eval(`(() => { const i = document.getElementById('profile-form-nick'); i.value = ''; i.focus(); return true; })()`);
+      await b.send('Input.insertText', { text: AV_NICK }, b.sessionId);
+      const typed = await b.eval(`document.getElementById('profile-form-nick').value`);
+      check('头像段：昵称走真实输入管线写入（读回来一致）', typed === AV_NICK, `实测="${typed}"`);
+      await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => x.textContent.trim() === '创建')?.click()`);
+      await waitExpr('头像段：创建后回到档案管理列表', `!!document.getElementById('pm-trash-entry') && !document.getElementById('av-builtin-row')`, { timeout: 6000 });
+      const created = ((await j('GET', '/api/profiles')).body.profiles || []).find((p) => p.nickname === AV_NICK);
+      check('头像段：新档案真的落库（服务端证据）', !!created && created.avatarId === 'mask' && !created.customAvatar, JSON.stringify(created || null));
+
+      // ---- 5) 预检：错类型 / 超 10MiB 都要给可读原因，且**不进入裁切页**、不动原头像 ----
+      await b.eval(`[...document.querySelectorAll('#modal-root .pm-row')].find((r) => /${AV_NICK}/.test(r.textContent))?.querySelector('.pm-ops .btn:nth-child(2)')?.click()`);
+      await waitExpr('头像段：编辑页已打开（专属档案）', `!!document.getElementById('av-file')`, { timeout: 5000 });
+      const preState = await b.eval(`(() => ({
+        note: (document.getElementById('av-current-note') || {}).textContent || '',
+        pick: (document.getElementById('av-pick') || {}).textContent || '',
+        hasCrop: !!document.getElementById('av-crop-stage'),
+      }))()`);
+      const gif = await injectFile('gif');
+      await waitExpr('头像段：错类型被拒并给出原因', `/只支持 PNG/.test(document.querySelector('#modal-root .mbody .hint[style]')?.textContent || '')`, { timeout: 4000 });
+      const gifState = await b.eval(`(() => ({
+        err: [...document.querySelectorAll('#modal-root .mbody .hint')].map((x) => x.textContent).find((t) => /只支持/.test(t)) || '',
+        hasCrop: !!document.getElementById('av-crop-stage'),
+        note: (document.getElementById('av-current-note') || {}).textContent || '',
+      }))()`);
+      check('头像段：非 PNG/JPEG/WebP 被客户端预检拦下并说明原因（不静默失败）',
+        gif.ok === true && /只支持 PNG \/ JPEG \/ WebP/.test(gifState.err) && /image\/gif/.test(gifState.err),
+        JSON.stringify({ file: gif, err: gifState.err }));
+      check('头像段：被拒时不打开裁切页、也不改动当前头像',
+        gifState.hasCrop === false && gifState.note === preState.note, JSON.stringify(gifState));
+
+      const big = await injectFile('oversize', { bytes: 10 * 1024 * 1024 + 1 });
+      await waitExpr('头像段：超 10MiB 被拒并给出实际体积', `/超过 10 MiB/.test([...document.querySelectorAll('#modal-root .mbody .hint')].map((x) => x.textContent).join('|'))`, { timeout: 4000 });
+      const bigState = await b.eval(`(() => ({
+        err: [...document.querySelectorAll('#modal-root .mbody .hint')].map((x) => x.textContent).find((t) => /超过 10 MiB/.test(t)) || '',
+        hasCrop: !!document.getElementById('av-crop-stage'),
+      }))()`);
+      check('头像段：超过 10 MiB 被拦下且文案带实际体积与「MiB」单位',
+        big.ok === true && /10\.0 MiB/.test(bigState.err) && /10 MiB/.test(bigState.err), JSON.stringify({ file: big, err: bigState.err }));
+      check('头像段：超限被拒时同样不进入裁切页', bigState.hasCrop === false, JSON.stringify(bigState));
+
+      // ---- 6) 真 PNG → 裁切页：512×512 画布 + 方形/圆形实时预览 ----
+      const png = await injectFile('png', { w: 600, h: 400 });
+      check('头像段：真 PNG 已通过 <input type=file> 送进页面（下一步会真的解码它）',
+        png.ok === true && png.type === 'image/png' && png.size > 100, JSON.stringify(png));
+      await waitExpr('头像段：裁切页已打开（512×512 画布就位）',
+        `(() => { const c = document.getElementById('av-crop-stage'); return !!c && c.width === 512 && c.height === 512; })()`, { timeout: 6000 });
+      await settle('头像段：裁切页入场动画已结束（几何测量不受 scale(.98) 影响）');
+      const cropGeo = await b.eval(`(() => {
+        const q = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; };
+        const c = document.getElementById('av-crop-stage');
+        const sq = document.getElementById('av-crop-square');
+        const rd = document.getElementById('av-crop-round');
+        return { stage: q('#av-crop-stage'), stageInner: { w: c.width, h: c.height },
+          square: q('#av-crop-square'), round: q('#av-crop-round'),
+          squareInner: sq ? { w: sq.width, h: sq.height } : null, roundInner: rd ? { w: rd.width, h: rd.height } : null,
+          zoom: (document.getElementById('av-crop-zoom') || {}).textContent || '',
+          zoomOutDisabled: document.getElementById('av-crop-zoom-out').disabled,
+          confirmH: Math.round(document.getElementById('av-crop-confirm').getBoundingClientRect().height),
+          builtinH: Math.round(document.getElementById('av-crop-builtin').getBoundingClientRect().height) };
+      })()`);
+      check('头像段：裁切画布内部分辨率恰好 512×512（就是要上传的尺寸）',
+        cropGeo.stageInner.w === 512 && cropGeo.stageInner.h === 512, JSON.stringify(cropGeo.stageInner));
+      check('头像段：裁切画布与两种预览都有真实尺寸（不是塌成 0）',
+        cropGeo.stage.w >= 120 && cropGeo.stage.h >= 120 && cropGeo.square.w >= 40 && cropGeo.round.w >= 40,
+        JSON.stringify(cropGeo));
+      check('头像段：方形/圆形预览都是 96×96 内部分辨率',
+        cropGeo.squareInner.w === 96 && cropGeo.squareInner.h === 96 && cropGeo.roundInner.w === 96 && cropGeo.roundInner.h === 96,
+        JSON.stringify({ square: cropGeo.squareInner, round: cropGeo.roundInner }));
+      check('头像段：初始 1.00× 时「－」是禁用的（不会缩到留白）',
+        cropGeo.zoom === '1.00×' && cropGeo.zoomOutDisabled === true, JSON.stringify({ zoom: cropGeo.zoom, disabled: cropGeo.zoomOutDisabled }));
+      check('头像段：裁切页触区分档正确（确认=主操作 ≥44，改用内置=次操作 ≥40）',
+        cropGeo.confirmH >= 44 && cropGeo.builtinH >= 40,
+        `确认=${cropGeo.confirmH}（主操作档 44） 改用内置=${cropGeo.builtinH}（普通档 40）`);
+      await b.shot(path.join(SHOTS, '19a-avatar-crop-desktop.png'));
+
+      // ---- 7) 真实拖动：像素指纹必须变化（证明"居中被裁掉的正是这些像素"）----
+      const before = await b.eval(STAGE_FP);
+      const stageBox = await b.eval(`(() => { const c = document.getElementById('av-crop-stage'); const r = c.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: Math.round(r.width) }; })()`);
+      await b.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: stageBox.x, y: stageBox.y, button: 'left', buttons: 1, clickCount: 1 }, b.sessionId);
+      for (let i = 1; i <= 6; i++) {
+        await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stageBox.x + (64 / 6) * i, y: stageBox.y, button: 'left', buttons: 1 }, b.sessionId);
+      }
+      await b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: stageBox.x + 64, y: stageBox.y, button: 'left', buttons: 0, clickCount: 1 }, b.sessionId);
+      const afterDrag = await b.eval(STAGE_FP);
+      check('头像段：真实拖动改变了裁切输出像素（拖动真的生效，不是只换了状态变量）',
+        before.ok === true && afterDrag.ok === true && before.hash !== afterDrag.hash,
+        JSON.stringify({ before: before.hash, after: afterDrag.hash, stageCssW: stageBox.w }));
+
+      // ---- 8) 缩放：真实点击「＋」到 1.25×，指纹再变；「－」回 1.00× ----
+      const zoomInBtn = await b.probe('#av-crop-zoom-in');
+      checkGeometry('头像段：「＋」缩放键可见、非零尺寸、中心点未被遮挡', zoomInBtn, { minW: 32, minH: 32 });
+      await b.realClick('#av-crop-zoom-in');
+      const afterZoom = await b.eval(`(() => ({
+        zoom: (document.getElementById('av-crop-zoom') || {}).textContent || '',
+        fp: (${STAGE_FP}).hash,
+      }))()`);
+      check('头像段：点「＋」后倍率变 1.25× 且裁切输出像素随之改变',
+        afterZoom.zoom === '1.25×' && afterZoom.fp !== afterDrag.hash,
+        JSON.stringify({ zoom: afterZoom.zoom, before: afterDrag.hash, after: afterZoom.fp }));
+      await b.realClick('#av-crop-zoom-out');
+      const backZoom = await b.eval(`(document.getElementById('av-crop-zoom') || {}).textContent || ''`);
+      check('头像段：点「－」能回到 1.00×（上下限都夹得住）', backZoom === '1.00×', backZoom);
+
+      // ---- 9) 圆形预览必须真的裁成圆（角透明、中心不透明），方形预览角不透明 ----
+      const alpha = await b.eval(`(() => {
+        const g = (id, x, y) => document.getElementById(id).getContext('2d').getImageData(x, y, 1, 1).data[3];
+        return { squareCorner: g('av-crop-square', 1, 1), roundCorner: g('av-crop-round', 1, 1), roundCenter: g('av-crop-round', 48, 48) };
+      })()`);
+      check('头像段：圆形预览四角透明、中心不透明（真的走了 ctx.arc 裁剪，不是只靠 CSS 圆角）',
+        alpha.squareCorner === 255 && alpha.roundCorner === 0 && alpha.roundCenter === 255, JSON.stringify(alpha));
+
+      // ---- 10) 确认裁切 → 编辑页出现"待保存"预览 → 保存 → 列表/首页立即变成自定义图 ----
+      await b.realClick('#av-crop-confirm');
+      await waitExpr('头像段：确认裁切后回到编辑页且出现待保存预览',
+        `!!document.getElementById('av-pending-preview') && /保存/.test((document.getElementById('av-current-note') || {}).textContent || '')`, { timeout: 6000 });
+      const pending = await b.eval(`(() => {
+        const c = document.getElementById('av-pending-preview');
+        return { inner: c ? { w: c.width, h: c.height } : null, note: (document.getElementById('av-current-note') || {}).textContent || '',
+          pick: (document.getElementById('av-pick') || {}).textContent || '',
+          hasCrop: !!document.getElementById('av-crop-stage') };
+      })()`);
+      check('头像段：裁好的新图以画布形式预览（CSP 不允许 data:/blob: 图片 URL，所以不能走 <img>）',
+        !!pending.inner && pending.inner.w === 64 && pending.note.includes('保存') && pending.hasCrop === false,
+        JSON.stringify(pending));
+      check('头像段：已有待保存新图时按钮文案与语义同步（「重新选择图片…」）', /重新选择/.test(pending.pick), pending.pick);
+
+      const nickBefore = await b.eval(`(() => ({ home: document.getElementById('home-nick').textContent, top: document.getElementById('topbar-profile').textContent }))()`);
+      await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => x.textContent.trim() === '保存')?.click()`);
+      await waitExpr('头像段：保存后回到档案管理且该行已换成分自定义图',
+        `!!document.querySelector('#modal-root .pm-name-av img.ww-avatar-img')`, { timeout: 8000 });
+      const saved = await b.eval(`(() => {
+        const rows = [...document.querySelectorAll('#modal-root .pm-row')];
+        const row = rows.find((r) => /${AV_NICK}/.test(r.textContent));
+        const img = row ? row.querySelector('.pm-name-av img.ww-avatar-img') : null;
+        const home = document.querySelector('#home-avatar img.ww-avatar-img');
+        return { rowImg: img ? img.getAttribute('src') : null, rowTag: img ? img.tagName : null,
+          homeImg: home ? home.getAttribute('src') : null,
+          homeHasBadge: !!document.querySelector('#home-avatar svg.ww-avatar-badge'),
+          homeNick: document.getElementById('home-nick').textContent,
+          top: document.getElementById('topbar-profile').textContent };
+      })()`);
+      check('头像段：玩家中心那行真的换成了自定义图（<img> 用服务端给的 avatarUrl）',
+        /^\/api\/profiles\/[^/]+\/avatar\?v=[0-9a-f]{64}$/.test(String(saved.rowImg)), JSON.stringify(saved));
+      check('头像段：首页当前档案头像同步更新，且不再显示内置徽记（§4.1 第 5 条"立即更新"）',
+        !!saved.homeImg && saved.homeImg === saved.rowImg && saved.homeHasBadge === false, JSON.stringify(saved));
+      check('头像段：换头像不改动任何昵称文案（本机玩家名逐字不变）',
+        saved.homeNick === nickBefore.home && saved.top === nickBefore.top && saved.homeNick === AV_NICK,
+        JSON.stringify({ before: nickBefore, after: { home: saved.homeNick, top: saved.top } }));
+
+      // ---- 11) 服务端证据：取回来的 PNG 必须恰好 512×512、8-bit、RGB/RGBA ----
+      const ihdr = await b.eval(`(async () => {
+        const src = document.querySelector('#home-avatar img.ww-avatar-img').getAttribute('src');
+        const r = await fetch(src);
+        const buf = new Uint8Array(await r.arrayBuffer());
+        const be = (o) => (buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3];
+        return { status: r.status, ctype: r.headers.get('content-type'), bytes: buf.length,
+          sig: [...buf.slice(0, 8)].join(','), chunk: String.fromCharCode(buf[12], buf[13], buf[14], buf[15]),
+          w: be(16), h: be(20), bitDepth: buf[24], colorType: buf[25], iend: String.fromCharCode(buf[buf.length - 8], buf[buf.length - 7], buf[buf.length - 6], buf[buf.length - 5]) };
+      })()`);
+      check('头像段：浏览器产出的 PNG 被服务端原样接受（200 + image/png）',
+        ihdr.status === 200 && ihdr.ctype === 'image/png' && ihdr.sig === '137,80,78,71,13,10,26,10',
+        JSON.stringify({ status: ihdr.status, ctype: ihdr.ctype, sig: ihdr.sig }));
+      check('头像段：上传的图恰好 512×512、8-bit、色彩类型 RGB(2)/RGBA(6)（服务端唯一会接受的形状）',
+        ihdr.chunk === 'IHDR' && ihdr.w === 512 && ihdr.h === 512 && ihdr.bitDepth === 8 && [2, 6].includes(ihdr.colorType) && ihdr.iend === 'IEND',
+        JSON.stringify(ihdr));
+
+      // ---- 12) 删除自定义头像：真实原生 confirm → 回退到档案自己的 avatarId（绝不是破图）----
+      const dialogs = b.autoAcceptDialogs('accept');
+      await b.eval(`[...document.querySelectorAll('#modal-root .pm-row')].find((r) => /${AV_NICK}/.test(r.textContent))?.querySelector('.pm-ops .btn:nth-child(2)')?.click()`);
+      await waitExpr('头像段：再次打开编辑页（删除前状态）', `!!document.getElementById('av-delete-custom') && !document.getElementById('av-delete-custom').hidden`, { timeout: 5000 });
+      const delBtnProbe = await b.probe('#av-delete-custom');
+      checkGeometry('头像段：「删除自定义头像」按钮可见、非零尺寸、中心点未被遮挡', delBtnProbe, { minW: 60, minH: 24 });
+      await b.realClick('#av-delete-custom');
+      await waitExpr('头像段：删除接口已返回且界面已回退到内置徽记',
+        `(() => { const n = document.querySelector('#av-current-preview svg.ww-avatar-badge use'); return !!n && (n.getAttribute('href') || '') === '#wwAvMask'; })()`, { timeout: 8000 });
+      const afterDel = await b.eval(`(() => ({
+        previewRef: document.querySelector('#av-current-preview use')?.getAttribute('href') || null,
+        note: (document.getElementById('av-current-note') || {}).textContent || '',
+        homeImg: !!document.querySelector('#home-avatar img'),
+        homeBadge: document.querySelector('#home-avatar use')?.getAttribute('href') || null,
+        deleteHidden: document.getElementById('av-delete-custom').hidden,
+        err: (document.querySelector('#modal-root .mbody .hint[style]') || {}).textContent || '' }))()`);
+      const dlg = dialogs[dialogs.length - 1];
+      check('头像段：删除走的是真实原生 confirm，且确认文案说清"改用内置徽记"',
+        !!dlg && dlg.accepted === true && /删除自定义头像/.test(dlg.message) && /面具/.test(dlg.message),
+        JSON.stringify(dlg || null));
+      check('头像段：删除后回退到该档案自己的 avatarId（面具），不是空白也不是破图',
+        afterDel.previewRef === '#wwAvMask' && afterDel.homeBadge === '#wwAvMask'
+        && afterDel.homeImg === false && afterDel.err === '',
+        JSON.stringify(afterDel));
+      check('头像段：删掉自定义图之后，「删除自定义头像」自己变为不可用（没有可删的东西就不给按）',
+        afterDel.deleteHidden === true && /内置徽记/.test(afterDel.note), JSON.stringify({ hidden: afterDel.deleteHidden, note: afterDel.note }));
+      const delSrv = ((await j('GET', '/api/profiles')).body.profiles || []).find((p) => p.id === (created && created.id));
+      check('头像段：服务端证据 —— 图片已删（customAvatar 清空、avatarUrl 为 null）但 avatarId 原样保留',
+        !!delSrv && delSrv.avatarUrl === null && !delSrv.customAvatar && delSrv.avatarId === 'mask',
+        JSON.stringify(delSrv || null));
+      await b.shot(path.join(SHOTS, '19b-avatar-after-delete-desktop.png'));
+
+      // ---- 13) 收尾：退回列表 → 把当前档案换回本段开始时的那个
+      // （不还原的话，P4-1「从存档恢复」会因为 owner≠当前档案 弹归属三选，后面整串段落都进不去对局）
+      // 桌面编辑页的 ✕ = 关掉本层并重开档案管理（保持"编辑完回列表"的既有走向）。
+      await b.realClick('#modal-root .mhead button');
+      await waitExpr('头像段：从编辑页退回档案列表', `!!document.getElementById('pm-trash-entry') && !document.getElementById('av-file')`, { timeout: 5000 });
+      const avId = String((created && created.id) || 'none');
+      const rowAfterDel = await b.eval(`(() => {
+        const row = document.querySelector('#modal-root .pm-row[data-profile-id="${avId}"]');
+        return { rowImg: !!(row && row.querySelector('.pm-name-av img')),
+          rowBadge: row ? (row.querySelector('.pm-name-av use')?.getAttribute('href') || null) : null };
+      })()`);
+      check('头像段：列表那行也从自定义图退回内置徽记（玩家中心和列表同一份状态）',
+        rowAfterDel.rowBadge === '#wwAvMask' && rowAfterDel.rowImg === false, JSON.stringify(rowAfterDel));
+      // 「选用」本身就是"选中并关掉弹层"，所以这里不再额外点 ✕。
+      const restoreProbe = await b.probe(`#modal-root .pm-row[data-profile-id="${prevId}"] .pm-ops .btn`);
+      checkGeometry('头像段：收尾时"原当前档案"那一行的首个操作键可见且可点（收尾路径自身可用）',
+        restoreProbe, { minW: 40, minH: 24 });
+      await b.realClick(`#modal-root .pm-row[data-profile-id="${prevId}"] .pm-ops .btn`);
+      await waitExpr('头像段：当前档案已换回本段开始时的那个，且弹层已自行关闭',
+        `state.profileId === ${JSON.stringify(prevId)} && document.getElementById('modal-root').children.length === 0`,
+        { timeout: 6000 });
+    }
+
     log('\n=== 档案回收区（删除后可恢复）===');
     {
       const j = async (method, p, body) => {
@@ -1666,6 +2075,155 @@ class Browser {
     }
 
     // ---- 6.7 FIX-10 / FIX-15（手机端）：手机端是独立实现，两端同款行为各验一次 ----
+    // ------------------------------------------------------------------
+    // M1 §4.1 头像（手机端 390×844）：同一份共享模块在底部弹层里换页跑通，
+    // 并守住 #m-sheet 的 §3 触区（48/52）—— #m-sheet 在 #m-app 之外，不受全局兜底。
+    // 这里编辑的是**当前档案**，测完把自定义头像删掉，恢复成它原本的内置徽记（不留给后面的段落）。
+    // ------------------------------------------------------------------
+    log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
+    {
+      const FP = `(() => {
+        const c = document.getElementById('av-crop-stage');
+        if (!c) return { ok: false, why: 'no-stage' };
+        const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let h = 2166136261;
+        for (let i = 0; i < d.length; i += 97) { h ^= d[i]; h = Math.imul(h, 16777619) >>> 0; }
+        return { ok: true, w: c.width, h: c.height, hash: h };
+      })()`;
+      const injectPng = (w, h) => b.eval(`(async () => {
+        const inp = document.getElementById('av-file');
+        if (!inp) return { ok: false, why: 'input#av-file 不存在（编辑页没打开？）' };
+        const c = document.createElement('canvas'); c.width = ${Number(w)}; c.height = ${Number(h)};
+        const x = c.getContext('2d');
+        const g = x.createLinearGradient(0, 0, ${Number(w)}, ${Number(h)});
+        g.addColorStop(0, '#ff0000'); g.addColorStop(0.5, '#00ff00'); g.addColorStop(1, '#0000ff');
+        x.fillStyle = g; x.fillRect(0, 0, ${Number(w)}, ${Number(h)});
+        x.fillStyle = '#ffff00'; x.fillRect(0, 0, 40, 40);
+        const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+        const file = new File([blob], 'avatar-m.png', { type: 'image/png' });
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        inp.files = dt.files;
+        inp.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, name: file.name, type: file.type, size: file.size };
+      })()`);
+
+      await b.realClick('#m-profile-chip');
+      await waitExpr('手机头像段：档案弹层已打开', `!!document.getElementById('m-pm-trash-entry')`, { timeout: 6000 });
+      const curNickBefore = await b.eval(`document.getElementById('m-profile-nick').textContent`);
+      await b.realClick('#m-sheet .pm-row.current .pm-ops .btn:nth-child(2)');
+      await waitExpr('手机头像段：编辑页已打开（内置头像区就位）', `!!document.getElementById('av-builtin-row')`, { timeout: 6000 });
+      const mChips = await b.eval(`(() => {
+        const ids = ['scholar','hunter','seer','wolf','witch','night','candle','mask'];
+        const r = ids.map((id) => { const c = document.getElementById('av-chip-' + id); if (!c) return { id, missing: true };
+          const b = c.getBoundingClientRect(); const u = c.querySelector('use');
+          return { id, w: Math.round(b.width), h: Math.round(b.height), ref: u ? (u.getAttribute('href') || '') : null }; });
+        return { chips: r, sheetH: Math.round(document.querySelector('#m-sheet .m-sheet').getBoundingClientRect().height),
+          vpH: window.innerHeight, sel: [...document.querySelectorAll('#av-builtin-row .chip.sel')].length };
+      })()`);
+      check('手机头像段：八个内置徽记都渲染出来且引用同一份定义',
+        mChips.chips.length === 8 && mChips.chips.every((c) => !c.missing && c.ref === '#wwAv' + c.id[0].toUpperCase() + c.id.slice(1)),
+        JSON.stringify(mChips.chips));
+      check('手机头像段：徽记 chip 触区 ≥48（#m-sheet 在 #m-app 之外，不受全局兜底）',
+        mChips.chips.every((c) => c.w >= 48 && c.h >= 48),
+        JSON.stringify(mChips.chips.map((c) => ({ id: c.id, w: c.w, h: c.h }))));
+      check('手机头像段：弹层高度受视口约束（不超出屏幕）', mChips.sheetH > 120 && mChips.sheetH <= mChips.vpH,
+        `弹层=${mChips.sheetH} 视口=${mChips.vpH}`);
+
+      const mpng = await injectPng(720, 480);
+      check('手机头像段：真 PNG 已通过 <input type=file> 送进页面（下一步会真的解码它）',
+        mpng.ok === true && mpng.type === 'image/png' && mpng.size > 100, JSON.stringify(mpng));
+      await waitExpr('手机头像段：裁切页已在弹层里换页（512×512 画布就位）',
+        `(() => { const c = document.getElementById('av-crop-stage'); return !!c && c.width === 512 && c.height === 512; })()`, { timeout: 6000 });
+      const mCrop = await b.eval(`(() => {
+        const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { w: Math.round(r.width), h: Math.round(r.height) }; };
+        const sq = document.getElementById('av-crop-square');
+        return { stage: box('#av-crop-stage'), square: box('#av-crop-square'), round: box('#av-crop-round'),
+          squareInner: sq ? { w: sq.width, h: sq.height } : null,
+          zoomIn: box('#av-crop-zoom-in'), confirm: box('#av-crop-confirm'), builtin: box('#av-crop-builtin'),
+          back: box('#av-crop-cancel'), zoom: (document.getElementById('av-crop-zoom') || {}).textContent || '',
+          zoomOutDisabled: document.getElementById('av-crop-zoom-out').disabled,
+          inSheet: (() => { const s = document.querySelector('#m-sheet .m-sheet'); return !!s && s.contains(document.getElementById('av-crop-stage')); })() };
+      })()`);
+      check('手机头像段：裁切画布 512×512、预览 96×96、两种预览都有真实尺寸',
+        mCrop.stage.w >= 120 && mCrop.stage.h >= 120 && mCrop.square.w >= 40 && mCrop.round.w >= 40
+        && mCrop.squareInner.w === 96 && mCrop.squareInner.h === 96,
+        JSON.stringify(mCrop));
+      check('手机头像段：裁切页确实在同一个底部弹层里换页（返回深度不加深）', mCrop.inSheet === true, JSON.stringify({ inSheet: mCrop.inSheet }));
+      check('手机头像段：裁切页三个按钮触区 ≥48（确认键走主操作档不受影响）',
+        mCrop.zoomIn.h >= 48 && mCrop.confirm.h >= 48 && mCrop.builtin.h >= 48 && mCrop.back.h >= 48,
+        JSON.stringify({ zoomIn: mCrop.zoomIn, confirm: mCrop.confirm, builtin: mCrop.builtin, back: mCrop.back }));
+      check('手机头像段：初始 1.00× 且「－」禁用', mCrop.zoom === '1.00×' && mCrop.zoomOutDisabled === true,
+        JSON.stringify({ zoom: mCrop.zoom, disabled: mCrop.zoomOutDisabled }));
+      await b.shot(path.join(SHOTS, '20a-avatar-crop-mobile.png'));
+
+      // 真实拖动：手机端这次改横向 —— 720×480 的源在 1× 下纵向已经铺满（cy 被夹死，拖不动是对的），
+      // 横向才是这一档真正有余量的方向。同时这也顺带证明"没有余量的方向拖不动"是几何的正确结果。
+      const mBefore = await b.eval(FP);
+      const box = await b.eval(`(() => { const c = document.getElementById('av-crop-stage'); const r = c.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      await b.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', buttons: 1, clickCount: 1 }, b.sessionId);
+      for (let i = 1; i <= 6; i++) {
+        await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x + (48 / 6) * i, y: box.y, button: 'left', buttons: 1 }, b.sessionId);
+      }
+      await b.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x + 48, y: box.y, button: 'left', buttons: 0, clickCount: 1 }, b.sessionId);
+      const mAfter = await b.eval(FP);
+      check('手机头像段：真实拖动改变了裁切输出像素',
+        mBefore.ok === true && mAfter.ok === true && mBefore.hash !== mAfter.hash,
+        JSON.stringify({ before: mBefore.hash, after: mAfter.hash }));
+      await b.realClick('#av-crop-zoom-in');
+      const mZoom = await b.eval(`(document.getElementById('av-crop-zoom') || {}).textContent || ''`);
+      check('手机头像段：点「＋」倍率变成 1.25×', mZoom === '1.25×', mZoom);
+
+      // 确认裁切 → 保存 → 首页档案行的头像立即换成自定义图
+      await b.realClick('#av-crop-confirm');
+      await waitExpr('手机头像段：确认后回到编辑页并出现待保存预览',
+        `!!document.getElementById('av-pending-preview')`, { timeout: 6000 });
+      await b.realClick('#m-sheet .btn.primary');
+      await waitExpr('手机头像段：保存后回到档案列表', `!!document.getElementById('m-pm-trash-entry') && !document.getElementById('av-file')`, { timeout: 8000 });
+      const mSaved = await b.eval(`(() => {
+        const img = document.querySelector('#m-profile-avatar img.ww-avatar-img');
+        const row = [...document.querySelectorAll('#m-sheet .pm-row')].find((r) => /（当前）/.test(r.textContent));
+        return { homeImg: img ? img.getAttribute('src') : null,
+          homeBadge: !!document.querySelector('#m-profile-avatar svg.ww-avatar-badge'),
+          rowHasImg: !!(row && row.querySelector('.pm-name-av img.ww-avatar-img')),
+          nick: document.getElementById('m-profile-nick').textContent };
+      })()`);
+      check('手机头像段：首页档案行立即换成自定义图（§4.1 第 5 条）',
+        /^\/api\/profiles\/[^/]+\/avatar\?v=[0-9a-f]{64}$/.test(String(mSaved.homeImg)) && mSaved.homeBadge === false,
+        JSON.stringify({ src: mSaved.homeImg, badge: mSaved.homeBadge }));
+      check('手机头像段：档案列表那行也换成同一张图（玩家中心同源）',
+        mSaved.rowHasImg === true, JSON.stringify(mSaved));
+      check('手机头像段：昵称不受头像操作影响', mSaved.nick === curNickBefore, `前="${curNickBefore}" 后="${mSaved.nick}"`);
+
+      // 删除自定义头像（真实原生 confirm）→ 回退到该档案 avatarId 的徽记
+      const mDialogs = b.autoAcceptDialogs('accept');
+      await b.realClick('#m-sheet .pm-row.current .pm-ops .btn:nth-child(2)');
+      await waitExpr('手机头像段：再次进入编辑页（有自定义头像）', `!!document.getElementById('av-delete-custom') && !document.getElementById('av-delete-custom').hidden`, { timeout: 6000 });
+      await b.realClick('#av-delete-custom');
+      await waitExpr('手机头像段：删除后首页档案行回到内置徽记（不是破图）',
+        `(() => { const u = document.querySelector('#m-profile-avatar use'); return !!u && /^#wwAv/.test(u.getAttribute('href') || ''); })()`, { timeout: 8000 });
+      const mDel = await b.eval(`(() => ({
+        homeBadge: (document.querySelector('#m-profile-avatar use') || {}).getAttribute ? document.querySelector('#m-profile-avatar use').getAttribute('href') : null,
+        homeImg: !!document.querySelector('#m-profile-avatar img'),
+        note: (document.getElementById('av-current-note') || {}).textContent || '',
+        err: (document.querySelector('#m-sheet .hint[style]') || {}).textContent || '',
+      }))()`);
+      const mDlg = mDialogs[mDialogs.length - 1];
+      check('手机头像段：删除走真实原生 confirm 且文案说清回退到哪个内置徽记',
+        !!mDlg && mDlg.accepted === true && /删除自定义头像/.test(mDlg.message) && /改用内置徽记/.test(mDlg.message),
+        JSON.stringify(mDlg || null));
+      check('手机头像段：删除后回退到该档案自己的内置徽记、页面上不再有 img（绝不破图）',
+        /^#wwAv/.test(String(mDel.homeBadge)) && mDel.homeImg === false,
+        JSON.stringify({ badge: mDel.homeBadge, img: mDel.homeImg }));
+      check('手机头像段：删除后编辑页提示已切回内置徽记、没有错误行', /内置徽记/.test(mDel.note) && mDel.err === '',
+        JSON.stringify({ note: mDel.note, err: mDel.err }));
+      await b.shot(path.join(SHOTS, '20b-avatar-after-delete-mobile.png'));
+
+      // 收尾：关掉弹层（后面的段落自己开）
+      await b.realClick('#m-sheet .m-sheet-head button');
+      await waitExpr('手机头像段：收尾关闭底部弹层', `document.querySelectorAll('#m-sheet > *').length === 0`, { timeout: 5000 });
+    }
+
     log('\n=== FIX-10/FIX-15 手机端（409 自恢复 + 目标必选提示）===');
     {
       const jm = async (method, p, body) => {

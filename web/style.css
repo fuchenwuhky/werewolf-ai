@@ -334,6 +334,50 @@ body[data-phase='day'] .moon-disc { background: radial-gradient(circle at 40% 34
   background: rgba(146, 174, 235, .06);
 }
 .home-avatar { flex: none; font-size: 34px; line-height: 1; }
+/* ---- M1 §4.1 自定义头像：展示位（内置徽记 / 自定义图）与方形裁切页 ----
+   两者都用 em 尺寸：容器给 font-size（桌面 .home-avatar 34px、手机 .m-profile-chip 18px），
+   于是头像随字号与紧凑布局一起缩放，但**不会塌成 0** —— ui-check 的截图矩阵会对
+   #home-avatar / #m-profile-avatar 量几何（非零尺寸，阈值 16×16）。
+   徽记本身只用 currentColor（见 web/shared/avatar-badge.js），深浅底都跟着容器文字色；
+   这里也不写任何十六进制色值，全部走 tokens.css 的语义令牌（test/css.test.js 有白名单）。
+   这份样式放在 style.css，手机端 m.css 已 @import 它 —— 一份定义，两端共用。 */
+.ww-avatar-badge,
+.ww-avatar-img { width: 1.2em; height: 1.2em; display: inline-block; vertical-align: middle; }
+.ww-avatar-img { object-fit: cover; border-radius: 50%; background: rgba(var(--sem-moon-rgb), .12); }
+
+/* 方形裁切页：拖动区（就是"方形预览"本身）+ 方形/圆形两种实时预览 + 缩放 */
+.av-crop-stage {
+  display: block; width: 100%; max-width: 288px; aspect-ratio: 1 / 1;
+  margin: 0 auto; border: 1px solid rgba(var(--sem-gold-rgb), .45); border-radius: var(--r-md);
+  background: rgba(var(--sem-bg-rgb), .6);
+  touch-action: none; cursor: grab;
+}
+.av-crop-stage:active { cursor: grabbing; }
+.av-crop-previews { display: flex; align-items: center; justify-content: center; gap: var(--sp-4); margin: var(--sp-3) 0 var(--sp-2); }
+.av-crop-preview { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--muted); font-size: var(--fs-aux-min); }
+.av-crop-preview canvas { width: 64px; height: 64px; display: block; border: 1px solid var(--line); }
+.av-crop-preview.round canvas { border-radius: 50%; }
+.av-crop-zoom { display: flex; align-items: center; justify-content: center; gap: var(--sp-2); margin-bottom: var(--sp-2); }
+.av-crop-zoom .btn { min-width: var(--h-ctl-min); }
+
+/* 编辑页里的头像区：当前显示预览 + 八个内置徽记 + 自定义图操作。
+   内置徽记 chip 用 --h-touch-min（48）当触区下限：它是纯图标按钮，没有文字撑高度，
+   不显式给就会小到手机上点不准（§3：缩小字号/紧凑布局不得缩小最低触区）。 */
+.av-current { display: flex; align-items: center; gap: var(--sp-3); margin: var(--sp-2) 0; }
+.av-current-av {
+  flex: none; width: var(--h-touch-min); height: var(--h-touch-min); overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: rgba(var(--sem-bg-rgb), .5);
+}
+.av-current-av .ww-avatar-badge,
+.av-current-av .ww-avatar-img,
+.av-current-canvas { width: 100%; height: 100%; display: block; }
+.av-row { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin: var(--sp-2) 0; }
+/* 徽记选择 chip：纯图标按钮，按手机常用触区 48×48 起步（桌面同一档，偏大不偏小）。
+   写成 .chip.av-chip 是必要的：#m 端 .chip 的 min-height:36 在本文件里出现得更晚，
+   单写 .av-chip 会被它按"同优先级后写者胜"压掉 —— 实测就是 36 而不是 48。 */
+.chip.av-chip { min-width: var(--h-touch-min); min-height: var(--h-touch-min); justify-content: center; font-size: 22px; }
+.pm-name-av { display: inline-block; vertical-align: middle; margin-right: var(--sp-2); font-size: 18px; }
 .home-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .home-who b { font-size: var(--fs-lg); color: var(--gold-bright); letter-spacing: 1px; overflow-wrap: anywhere; }
 

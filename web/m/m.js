@@ -236,8 +236,17 @@ for (const sel of ['#m-modal', '#m-sheet', '#m-flip']) {
 // .inspect-stage 是直接挂在 body 上的浮层（开/关 = body 增删一个子节点）
 new MutationObserver(syncLayerScrollLock).observe(document.body, { childList: true });
 
+/** 底部弹层关闭前的一次性清理（换页/关层都要跑）。目前只有裁切页用它释放 ImageBitmap：
+ *  位图不进 DOM、不会被 innerHTML = '' 回收，必须在所有出口显式 close()。 */
+let sheetTeardown = null;
+function runSheetTeardown() {
+  if (!sheetTeardown) return;
+  const fn = sheetTeardown;
+  sheetTeardown = null;
+  try { fn(); } catch (_) { /* 清理失败不得阻断关层 */ }
+}
 function closeModalDom() { $('#m-modal').innerHTML = ''; syncLayerScrollLock(); }
-function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; $('#m-sheet').innerHTML = ''; syncLayerScrollLock(); }
+function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; runSheetTeardown(); $('#m-sheet').innerHTML = ''; syncLayerScrollLock(); }
 /** UI 关闭中部弹窗（X / 取消 / 按钮） */
 function closeModalTop() {
   const top = backStack[backStack.length - 1];
@@ -1080,6 +1089,7 @@ function openSheet(title, bodyEl, footEl, opts) {
   if (!root) return null;
   const wasOpen = !!root.firstChild; // 弹层内换页（档案列表↔编辑）：同一层换内容，返回深度不加深
   if (sheetViewportCleanup) sheetViewportCleanup(); // 换页前先摘掉上一层的视口监听（避免叠加）
+  runSheetTeardown(); // 换页同理：上一页的一次性清理必须先跑（例如裁切页的位图）
   root.innerHTML = '';
   const mask = el('div', 'm-sheet-mask');
   const sheet = el('div', 'm-sheet');
@@ -1109,13 +1119,46 @@ function openSheet(title, bodyEl, footEl, opts) {
     if (window.visualViewport) window.visualViewport.removeEventListener('resize', revealFocused);
     sheetViewportCleanup = null;
   };
+  sheetTeardown = o.onTeardown || null; // 本页的清理钩子（换页与关层都会跑到）
   return sheet;
 }
 
 // ---------------- 玩家档案（PROF-01，与桌面端同一套 API） ----------------
 // 本机多档案：战绩/笔记/经验池按档案隔离；API 配置是安装级的，切换档案不动它。
 // 唯一身份是 UUID，昵称允许重名；归档替代删除，删除只对已归档档案开放（服务端二次校验）。
-const AVATAR_EMOJI = { scholar: '🎓', hunter: '🏹', seer: '🔮', wolf: '🐺', witch: '🧪', night: '🌙', candle: '🕯️', mask: '🎭' };
+//
+// M1 §4.1 头像的唯一真值在 web/shared/ 的两个共享模块（桌面端 app.js 引用同一份，所以"两端一致"
+// 是结构事实而不是"两处碰巧写得一样"——改造前那份九宫格 emoji 表就是这样长成两份的）：
+//   · avatar-badge.js —— 八个内置头像的统一线稿徽记（一份 <symbol> 定义 + <use> 引用）与显示回落；
+//   · avatar-image.js —— 选图预检 / 居中覆盖裁切 / 只编码一次 / 2MiB 守卫 / §4.3 三接口的请求形状。
+// 这里只保留"画在哪块 DOM、由谁触发"。
+// ⚠ 纪律：只改**头像**那一行。聊天内容、玩家昵称、战绩/日志文案里的正常 emoji 一个都不动
+//    （头像之外没有第二条 emoji 清理路径，也不加任何全局 emoji 正则）。
+
+/** 表单内联错误行（沿用档案表单原有配色，不再多写一处色值） */
+function formErrorLine() {
+  const p = el('p', 'hint');
+  p.style.color = '#ff8080';
+  return p;
+}
+
+/** 头像三接口（§4.3）发的是**原始 PNG 字节**：api() 只发 JSON，所以另走一次 fetch。
+ *  错误口径与 api() 对齐：401 弹局域网配对门。 */
+const rawFetch = (url, init) => fetch(url, init);
+async function avatarRequest(fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    if (e && e.status === 401) showPairingGate();
+    throw e;
+  }
+}
+
+/** 头像显示位的唯一入口：内置徽记 / 自定义图 / 加载失败回落，全部由共享模块决定 */
+function renderAvatarInto(node, profile) {
+  if (!node) return;
+  window.WWAvatarBadge.renderInto(node, profile || null);
+}
 
 async function loadProfiles() {
   // M1：拉列表 + 选中 id 落地收在共享模块（两端原本逐字相同），这里只接上本端的界面刷新
@@ -1197,7 +1240,9 @@ function onPrefControlChangeM() {
 }
 
 function profileLabel(p) {
-  return `${AVATAR_EMOJI[p.avatarId] || '👤'} ${p.nickname}${p.archivedAt ? '（已归档）' : ''}`;
+  // <option> 只能承载纯文本，装不下 SVG 徽记 —— 这里用徽记的**可读名**保住"是哪个内置头像"
+  // 这条信息（不再需要第二张 emoji 对照表），聊天/昵称里的 emoji 与此无关、照旧。
+  return `${window.WWAvatarBadge.textLabel(p.avatarId)} ${p.nickname}${p.archivedAt ? '（已归档）' : ''}`;
 }
 
 function renderProfileStrip(err) {
@@ -1215,12 +1260,14 @@ function renderProfileStrip(err) {
   renderHomeProfile(err); // FIN-04：首页「当前档案」行与规则页选择器同一份数据
 }
 
-/** 首页档案行：头像 emoji + 昵称 + 管理入口（点整行进档案管理弹层） */
+/** 首页档案行：头像 + 昵称 + 管理入口（点整行进档案管理弹层） */
 function renderHomeProfile(err) {
   const av = $('#m-profile-avatar'), nick = $('#m-profile-nick');
   if (!av || !nick) return;
   const p = state.profiles.find((x) => x.id === state.profileId && !x.archivedAt);
-  av.textContent = p ? (AVATAR_EMOJI[p.avatarId] || '👤') : '👤';
+  // 共享模块保证只有两种结果：自定义图（服务端给的 avatarUrl）或该档案 avatarId 的内置徽记；
+  // 缺失/脏数据也回落到默认徽记 —— 不存在"什么都不画"的第三种情况（也就不会有破图）。
+  renderAvatarInto(av, p);
   nick.textContent = p ? p.nickname : (err ? '档案加载失败' : '默认档案');
   if (err) nick.title = err; else nick.removeAttribute('title');
 }
@@ -1242,8 +1289,15 @@ function openProfileManager() {
   const usableCount = state.profiles.filter((p) => !p.archivedAt).length;
   for (const p of rows) {
     const row = el('div', 'pm-row' + (p.archivedAt ? ' archived' : '') + (p.id === state.profileId ? ' current' : ''));
+    row.dataset.profileId = p.id; // 供脚本/验收精确定位某一行（昵称允许重名，不能按昵称找）
     const main = el('div', 'pm-main');
-    const name = elText('div', 'pm-name', profileLabel(p) + (p.id === state.profileId ? '（当前）' : ''));
+    // 名前行：真实头像（自定义图或内置徽记）+ 昵称/归档/当前"三态文案"。
+    // 与首页档案行是同一条渲染路径，玩家中心一眼能看出改没改成功。
+    const name = el('div', 'pm-name');
+    const avBox = el('span', 'pm-name-av');
+    name.appendChild(avBox);
+    name.appendChild(document.createTextNode(`${p.nickname}${p.archivedAt ? '（已归档）' : ''}${p.id === state.profileId ? '（当前）' : ''}`));
+    renderAvatarInto(avBox, p);
     main.appendChild(name);
     main.appendChild(elText('div', 'hint', `创建于 ${(p.createdAt || '').slice(0, 10)}${p.archivedAt ? ` · 归档于 ${(p.archivedAt || '').slice(0, 10)}` : ''}`));
     row.appendChild(main);
@@ -1312,34 +1366,169 @@ function openProfileManager() {
   openSheet('👤 我的档案', body, foot);
 }
 
-/** 新建/编辑档案：在同一底部弹层里换页，保存后回列表（与桌面端同一套字段与校验） */
-function openProfileEdit(existing) {
+/**
+ * 新建/编辑档案：在同一底部弹层里换页，保存后回列表（与桌面端同一套字段、同一套共享模块）。
+ *
+ * 头像的两条状态轴分开管，互不覆盖：
+ *   · `avatarId` —— 内置徽记，同时也是**删掉自定义图之后的回退**（服务端从不动它）；
+ *   · `customUrl` / `pendingBlob` —— 自定义图：已保存的用服务端给的 `avatarUrl`，
+ *     刚裁好还没保存的用 `pendingBlob`（内存里的 PNG Blob）。
+ * 「改成什么样」全部攒到「保存」才落盘；只有「删除自定义头像」是立即生效的显式动作
+ * （§4.1 第 6 条要求的两个明确动作语义不同，所以是两个按钮）。
+ * `draft` 用于"选图 → 裁切页 → 返回"时把昵称/简介/已选内置头像原样带回，玩家不会白填一遍。
+ */
+function openProfileEdit(existing, draft) {
+  const Badge = window.WWAvatarBadge;
+  const Img = window.WWAvatarImage;
+  const d = draft || {};
   const body = el('div');
+  const err = formErrorLine();
+
+  // revision 自己拿在手上：删除自定义头像会立即推进它，若继续用外面临时快照里的旧值，
+  // 接着点「保存」必然 409（一次"刚被别处修改过"的假警报）。
+  let rev = existing ? existing.revision : null;
+  let avatarId = d.avatarId !== undefined ? d.avatarId : (existing ? existing.avatarId : Badge.DEFAULT_AVATAR_ID);
+  let customUrl = d.customUrl !== undefined ? d.customUrl : (existing ? (existing.avatarUrl || null) : null);
+  let pendingBlob = d.pendingBlob || null;
+  let removeCustom = !!d.removeCustom;
+
   const nameL = el('label');
   nameL.appendChild(el('span', null, '昵称（1–20 字）'));
-  const nameI = el('input'); nameI.maxLength = 20; nameI.value = existing ? existing.nickname : '';
+  const nameI = el('input'); nameI.maxLength = 20; nameI.id = 'profile-form-nick';
+  nameI.value = d.nickname !== undefined ? d.nickname : (existing ? existing.nickname : '');
   nameL.appendChild(nameI);
   body.appendChild(nameL);
 
-  body.appendChild(el('div', 'hint', '头像（内置 8 选 1，仅作区分，不上传图片）'));
-  const av = el('div', 'chip-row');
-  let avatarId = existing ? existing.avatarId : 'scholar';
-  for (const [aid, emoji] of Object.entries(AVATAR_EMOJI)) {
-    const c = el('button', 'chip' + (aid === avatarId ? ' sel' : ''), emoji);
-    c.type = 'button';
-    c.addEventListener('click', () => { avatarId = aid; [...av.children].forEach((x) => x.classList.remove('sel')); c.classList.add('sel'); });
-    av.appendChild(c);
-  }
-  body.appendChild(av);
-
   const bioL = el('label');
   bioL.appendChild(el('span', null, '简介（选填，最多 100 字）'));
-  const bioI = el('textarea'); bioI.maxLength = 100; bioI.rows = 2; bioI.value = existing ? (existing.bio || '') : '';
+  const bioI = el('textarea'); bioI.maxLength = 100; bioI.rows = 2; bioI.id = 'profile-form-bio';
+  bioI.value = d.bio !== undefined ? d.bio : (existing ? (existing.bio || '') : '');
   bioL.appendChild(bioI);
   body.appendChild(bioL);
 
-  const err = el('p', 'hint'); err.style.color = '#ff8080';
+  // ---------------- 头像（§4.1 第 1/5/6 条）----------------
+  body.appendChild(el('div', 'hint', '头像：用下面的内置徽记，或从设备选一张图片裁成正方形。图片只保存在这台设备上。'));
+
+  const curBox = el('div', 'av-current');
+  const curAv = el('span', 'av-current-av');
+  curAv.id = 'av-current-preview';
+  const curTxt = elText('span', 'hint', '');
+  curTxt.id = 'av-current-note';
+  curBox.append(curAv, curTxt);
+  body.appendChild(curBox);
+
+  const avRow = el('div', 'chip-row av-row');
+  avRow.id = 'av-builtin-row';
+  const chips = new Map();
+  for (const aid of Badge.AVATAR_IDS) {
+    const c = el('button', 'chip av-chip', Badge.badgeMarkup(aid));
+    c.type = 'button';
+    c.id = `av-chip-${aid}`;
+    c.title = `内置头像：${Badge.nameOf(aid)}`;
+    c.setAttribute('aria-label', `内置头像 ${Badge.nameOf(aid)}`);
+    c.addEventListener('click', () => { avatarId = aid; syncAvatarUi(); });
+    chips.set(aid, c);
+    avRow.appendChild(c);
+  }
+  body.appendChild(avRow);
+
+  const avHint = el('div', 'hint');
+  avHint.id = 'av-custom-note';
+  const customRow = el('div', 'btnrow');
+  const pick = el('button', 'btn', '选择图片…');
+  pick.id = 'av-pick'; pick.type = 'button';
+  const useBuiltin = el('button', 'btn ghost', '改用内置头像');
+  useBuiltin.id = 'av-use-builtin'; useBuiltin.type = 'button';
+  const delCustom = el('button', 'btn ghost small danger', '删除自定义头像');
+  delCustom.id = 'av-delete-custom'; delCustom.type = 'button';
+  const fileI = document.createElement('input');
+  fileI.type = 'file';
+  fileI.id = 'av-file';
+  fileI.hidden = true;
+  fileI.accept = Img.ACCEPT_ATTR;
+  customRow.append(pick, useBuiltin, delCustom);
+  body.append(avHint, customRow, fileI);
   body.appendChild(err);
+
+  // 预览的异步竞态守卫：连点会先后触发两次绘制，旧的那次不许覆盖新的
+  let paintSeq = 0;
+  async function paintCurrent() {
+    const seq = ++paintSeq;
+    curAv.innerHTML = '';
+    if (pendingBlob) {
+      // 已裁好但还没上传：用画布把它画出来（CSP img-src 'self' 不允许 data:/blob: 图片 URL）
+      const c = el('canvas', 'av-current-canvas');
+      c.id = 'av-pending-preview';
+      c.width = 64; c.height = 64;
+      curAv.appendChild(c);
+      curTxt.textContent = '已裁好新图片 · 点「保存」后生效';
+      try {
+        const bmp = await window.createImageBitmap(pendingBlob);
+        if (seq === paintSeq) c.getContext('2d').drawImage(bmp, 0, 0, 64, 64);
+        Img.releaseBitmap(bmp);
+      } catch (_) { /* 预览画不出来不影响保存：真正的图源是 pendingBlob 本身 */ }
+      return;
+    }
+    curTxt.textContent = removeCustom
+      ? `保存后改用内置徽记「${Badge.nameOf(avatarId)}」`
+      : (customUrl ? '当前使用自定义头像' : `当前使用内置徽记「${Badge.nameOf(avatarId)}」`);
+    // 与首页档案行同一条渲染路径：这里看到的就是保存后看到的
+    renderAvatarInto(curAv, { avatarId, avatarUrl: removeCustom ? null : customUrl });
+  }
+
+  function syncAvatarUi() {
+    for (const [aid, c] of chips) c.classList.toggle('sel', aid === avatarId);
+    const hasCustom = !!pendingBlob || (!!customUrl && !removeCustom);
+    pick.textContent = hasCustom ? '重新选择图片…' : '选择图片…';
+    useBuiltin.disabled = !hasCustom;
+    delCustom.hidden = !customUrl;
+    delCustom.disabled = !existing || !customUrl;
+    // 自定义图会盖过内置徽记：不说清"上面选的是删除后的回退"，玩家点了会以为没反应
+    avHint.textContent = hasCustom
+      ? `当前显示自定义头像；上面的内置徽记「${Badge.nameOf(avatarId)}」是删除自定义头像后的回退`
+      : '内置头像只作区分：不上传图片，也不影响战绩与笔记';
+    paintCurrent();
+  }
+
+  useBuiltin.addEventListener('click', () => { pendingBlob = null; removeCustom = true; syncAvatarUi(); });
+
+  pick.addEventListener('click', () => { fileI.click(); });
+  fileI.addEventListener('change', async () => {
+    const f = fileI.files && fileI.files[0];
+    fileI.value = ''; // 清空：同一个文件再选一次也要能触发 change
+    if (!f) return;
+    err.textContent = '';
+    // §4.1 第 2 条：类型/体积/可解码/宽高三层预检都在共享模块里，失败必有明确原因
+    const prep = await Img.prepareSource(f);
+    if (!prep.ok) { err.textContent = prep.message; return; }
+    const snap = () => ({ nickname: nameI.value, bio: bioI.value, avatarId, customUrl, pendingBlob, removeCustom });
+    openAvatarCrop({
+      source: prep,
+      onConfirm: (blob) => openProfileEdit(existing, { ...snap(), pendingBlob: blob, removeCustom: false }),
+      onUseBuiltin: () => openProfileEdit(existing, { ...snap(), pendingBlob: null, removeCustom: true }),
+      onCancel: () => openProfileEdit(existing, snap()),
+    });
+  });
+
+  delCustom.addEventListener('click', async () => {
+    if (!customUrl || !existing) return;
+    if (!confirm(`删除自定义头像？\n\n删除后该档案改用内置徽记「${Badge.nameOf(avatarId)}」，已上传的图片文件会从本机移除。聊天记录与战绩不受影响。`)) return;
+    delCustom.disabled = true;
+    err.textContent = '';
+    try {
+      const resp = await avatarRequest(() => Img.deleteAvatar(rawFetch, { profileId: existing.id, revision: rev }));
+      const merged = Img.mergeAvatarResult(state.profiles, resp);
+      if (merged && Number.isInteger(merged.revision)) rev = merged.revision;
+      // 服务端只删图片、**不动 avatarId**：回退靠的就是它
+      customUrl = null; pendingBlob = null; removeCustom = false;
+      await loadProfiles(); // 首页档案行立即跟上（§4.1 第 5 条）
+      syncAvatarUi();
+    } catch (e) {
+      err.textContent = `删除自定义头像失败：${e.message}（原头像保持不变）`;
+    } finally {
+      delCustom.disabled = false;
+    }
+  });
 
   const foot = el('div', 'btnrow');
   const back = el('button', 'btn ghost', '返回');
@@ -1349,23 +1538,159 @@ function openProfileEdit(existing) {
   go.addEventListener('click', async () => {
     const nick = nameI.value.trim();
     if (!nick) { err.textContent = '昵称不能为空'; return; }
+    err.textContent = '';
     go.disabled = true;
     try {
-      if (existing) await api('PATCH', `/api/profiles/${existing.id}`, { expectedRevision: existing.revision, nickname: nick, avatarId, bio: bioI.value.trim() });
-      else {
+      let prof = existing;
+      if (existing) {
+        const r = await api('PATCH', `/api/profiles/${existing.id}`, { expectedRevision: rev, nickname: nick, avatarId, bio: bioI.value.trim() });
+        prof = (r && r.profile) || existing;
+      } else {
         const r = await api('POST', '/api/profiles', { nickname: nick, avatarId, bio: bioI.value.trim() });
-        onSelectProfile(r.profile.id); // 新建即选用
+        prof = r.profile;
+        onSelectProfile(prof.id); // 新建即选用
+      }
+      if (prof && Number.isInteger(prof.revision)) rev = prof.revision;
+      // §4.1 第 7 条：头像只在玩家真的动了它时才发请求。先保存资料再传图，
+      // 任何一步失败都不会留下"图没了"的中间态（原头像保持不变）。
+      if (pendingBlob) {
+        const resp = await avatarRequest(() => Img.putAvatar(rawFetch, { profileId: prof.id, revision: rev, body: pendingBlob }));
+        const merged = Img.mergeAvatarResult(state.profiles, resp);
+        if (merged && Number.isInteger(merged.revision)) rev = merged.revision;
+      } else if (removeCustom && customUrl) {
+        const resp = await avatarRequest(() => Img.deleteAvatar(rawFetch, { profileId: prof.id, revision: rev }));
+        const merged = Img.mergeAvatarResult(state.profiles, resp);
+        if (merged && Number.isInteger(merged.revision)) rev = merged.revision;
       }
       await loadProfiles();
       openProfileManager();
     } catch (e) {
       go.disabled = false;
-      if (e.status === 409) err.textContent = '档案刚被别处修改过（另一窗口？），请返回后重新进入再试';
+      if (e.status === 409 || /已被其他窗口|revision/i.test(e.message || '')) err.textContent = '档案刚被别处修改过（另一窗口？），请返回后重新进入再试';
       else err.textContent = e.message;
     }
   });
   foot.appendChild(go);
   openSheet(existing ? '✏️ 编辑档案' : '✨ 新建档案', body, foot);
+  syncAvatarUi();
+}
+
+/**
+ * 方形裁切页（§4.1 第 3 条）：拖动 + 缩放 + 方形/圆形实时预览；确认时按「居中覆盖」裁成
+ * 512×512 并**重新编码一次** PNG（重编码本身就会丢掉 EXIF/GPS 等元数据）。
+ *
+ * 它是在同一个底部弹层里换页（openSheet 的 swapIfOpen），返回深度不加深。
+ * 位图不进 DOM，`innerHTML = ''` 收不走它 —— 所以所有出口（确认/改用内置/返回/✕/遮罩/系统返回）
+ * 都汇到 `release()`，关层那一路由 openSheet 的 onTeardown 钩子兜住。
+ * 预览全是 <canvas>：CSP 是 `img-src 'self'`（src/static.js），`data:`/`blob:` 图片 URL 会被拦掉；
+ * 解码走 createImageBitmap（不经过 URL）。编码复用这张 512×512 展示画布。
+ */
+function openAvatarCrop(cfg) {
+  const Img = window.WWAvatarImage;
+  const S = Img.OUTPUT_SIZE;
+  const P = 96; // 预览画布内部分辨率（CSS 展示 64px）
+  const source = cfg.source;
+  let view = Img.initialView(source.width, source.height, S);
+  let released = false;
+  let drag = null;
+
+  const release = () => {
+    if (released) return;
+    released = true;
+    Img.releaseBitmap(source.bitmap);
+  };
+  const leave = (fn) => { if (released) return; release(); fn(); };
+
+  const body = el('div');
+  body.appendChild(el('p', 'hint', `拖动调整位置，用 ＋ / － 缩放。头像按「居中覆盖」裁成 ${S}×${S} 正方形，不会拉伸变形。`));
+
+  const stage = el('canvas', 'av-crop-stage');
+  stage.id = 'av-crop-stage';
+  stage.width = S; stage.height = S;
+  stage.setAttribute('aria-label', '裁切区域：拖动可调整位置');
+  body.appendChild(stage);
+
+  const mkPreview = (id, label, round) => {
+    const box = el('div', 'av-crop-preview' + (round ? ' round' : ''));
+    const c = el('canvas');
+    c.id = id; c.width = P; c.height = P;
+    box.append(c, elText('span', null, label));
+    return { box, ctx: c.getContext('2d') };
+  };
+  const sq = mkPreview('av-crop-square', '方形', false);
+  const rd = mkPreview('av-crop-round', '圆形', true);
+  const previews = el('div', 'av-crop-previews');
+  previews.append(sq.box, rd.box);
+  body.appendChild(previews);
+
+  const zoomRow = el('div', 'av-crop-zoom');
+  const zOut = el('button', 'btn small', '－'); zOut.id = 'av-crop-zoom-out'; zOut.type = 'button';
+  const zVal = elText('span', 'hint', ''); zVal.id = 'av-crop-zoom';
+  const zIn = el('button', 'btn small', '＋'); zIn.id = 'av-crop-zoom-in'; zIn.type = 'button';
+  zoomRow.append(zOut, zVal, zIn);
+  body.appendChild(zoomRow);
+
+  const err = formErrorLine();
+  body.appendChild(err);
+
+  function paint() {
+    Img.drawCrop(stage.getContext('2d'), source.bitmap, S, view);
+    for (const p of [{ ctx: sq.ctx, round: false }, { ctx: rd.ctx, round: true }]) {
+      p.ctx.clearRect(0, 0, P, P);
+      p.ctx.save();
+      if (p.round) { p.ctx.beginPath(); p.ctx.arc(P / 2, P / 2, P / 2, 0, Math.PI * 2); p.ctx.clip(); }
+      p.ctx.drawImage(stage, 0, 0, P, P);
+      p.ctx.restore();
+    }
+    zVal.textContent = `${view.zoom.toFixed(2)}×`;
+    zOut.disabled = view.zoom <= Img.MIN_ZOOM;
+    zIn.disabled = view.zoom >= Img.MAX_ZOOM;
+  }
+
+  // 指针位移是 CSS 像素，而裁切几何按"画布内部像素"算：展示尺寸通常小于 512，必须换算
+  stage.addEventListener('pointerdown', (e) => {
+    if (typeof e.button === 'number' && e.button !== 0) return;
+    drag = { x: e.clientX, y: e.clientY };
+    try { stage.setPointerCapture(e.pointerId); } catch (_) { /* 不支持捕获时退化为"指针在区域内才能拖" */ }
+    if (typeof e.preventDefault === 'function') e.preventDefault();
+  });
+  stage.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const r = stage.getBoundingClientRect();
+    const k = r.width > 0 ? S / r.width : 1;
+    view = Img.dragView(source.width, source.height, S, view, (e.clientX - drag.x) * k, (e.clientY - drag.y) * k);
+    drag = { x: e.clientX, y: e.clientY };
+    paint();
+  });
+  const endDrag = () => { drag = null; };
+  stage.addEventListener('pointerup', endDrag);
+  stage.addEventListener('pointercancel', endDrag);
+  stage.addEventListener('lostpointercapture', endDrag);
+  zOut.addEventListener('click', () => { view = Img.zoomView(source.width, source.height, S, view, view.zoom - Img.ZOOM_STEP); paint(); });
+  zIn.addEventListener('click', () => { view = Img.zoomView(source.width, source.height, S, view, view.zoom + Img.ZOOM_STEP); paint(); });
+
+  const foot = el('div', 'btnrow');
+  const back = el('button', 'btn ghost', '返回');
+  back.id = 'av-crop-cancel';
+  back.addEventListener('click', () => leave(cfg.onCancel));
+  const useBuiltin = el('button', 'btn ghost', '改用内置头像');
+  useBuiltin.id = 'av-crop-builtin';
+  useBuiltin.addEventListener('click', () => leave(cfg.onUseBuiltin));
+  const ok = el('button', 'btn primary', '确认裁切');
+  ok.id = 'av-crop-confirm';
+  ok.addEventListener('click', async () => {
+    ok.disabled = true;
+    err.textContent = '';
+    const r = await Img.produceAvatar({ image: source.bitmap, view, outSize: S, canvas: stage });
+    // 超 2MiB 时只有这一句原文文案，且**绝不**降采样/降色深重编一次
+    if (!r.ok) { err.textContent = r.message; ok.disabled = false; return; }
+    leave(() => cfg.onConfirm(r.blob));
+  });
+  foot.append(back, useBuiltin, ok);
+
+  paint();
+  // onTeardown 兜住 ✕ / 遮罩 / 系统返回这三条不经过上面按钮的关层路径
+  openSheet('裁切头像', body, foot, { onTeardown: release });
 }
 
 /** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
