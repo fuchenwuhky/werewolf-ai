@@ -57,7 +57,13 @@ const state = {
   notesModeBound: false, // 笔记右栏的媒体查询监听只注册一次
 };
 
-const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
+/**
+ * 阶段值 → 中文名：**唯一真值在 web/shared/phase-label.js**（与手机端 m.js 引用的是同一个文件、
+ * 同一个对象，不是两份拷贝）。两端原来各写一张逐字相同的表，单边改一个文案不会有任何测试发现；
+ * 现在改成引用，键集合与文案由 test/phase-label.test.js 的冻结台账逐字钉住。
+ * 这里只保留这个名字，是为了不动下面 4 处使用点（`PHASE_LABEL[phase] || phase` 的兜底语义不变）。
+ */
+const PHASE_LABEL = window.WWPhaseLabel.PHASE_LABEL;
 
 // 座位视图偏好（FIN-05）：圆桌 / 列表记住上一次选择
 // AC-10：左栏 240px 塞 12 人圆桌（座位 56px/姓名 10px）不可读——默认用列表视图；
@@ -242,6 +248,8 @@ async function initSetup() {
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
       window.WWGameDraft.clearHandle(localStorage, 'ww_current');
+      // ww_resumable 是**历史遗留的清理**，不是死代码 —— 不要删这两行（见 :953 处的完整说明）：
+      // 老版本在 localStorage 里留下的这个键，只有这两处 removeItem 负责清掉。
       localStorage.removeItem('ww_resumable');
       $('#resume-box').classList.add('hidden');
     }
@@ -944,6 +952,13 @@ async function resumeGame() {
     if (!next) return;
     state.game = next;
     window.WWGameDraft.writeHandle(localStorage, 'ww_current', next);
+    // ⚠ 下面这行 removeItem（以及上面「放弃并清除」里的那一行）是**向后兼容的清理，不是死代码**：
+    // 该键由 37555ae 引入（当时 setItem/getItem 配合 resumeFromAnchor 使用），493ec8f 把恢复机制
+    // 整体迁到 SessionModel + ww_current 之后，写/读两侧都不再需要它 —— 全仓库现在只剩这两处 removeItem。
+    // 删掉它们不会"清理代码"，反而会让**老用户浏览器里那份残留值永远留在 localStorage**：它既没有
+    // 测试覆盖，也没有任何界面读它，于是再没人知道它是什么。保留的成本是两行，收益是老设备升级后不留垃圾键。
+    // 另有一条静态守卫（test/ww-resumable.test.js）禁止这个键出现任何 setItem/getItem：
+    // 将来若有人重新启用它却没有配套测试，守卫会先判红。
     localStorage.removeItem('ww_resumable');
     enterGameScreen();
   } catch (e) { alert(`恢复失败：${e.message}`); }

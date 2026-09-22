@@ -65,7 +65,7 @@ const CONTENT_EMOJI_PINS = [
   ['web/m/m.js', "lastwords: '🕯 遗言'", '事件上下文标签'],
   ['web/m/m.js', "'🎉 好人阵营获胜'", '胜利文案'],
   // 本批明确判定为"内容、不动"的几处（也是别的门禁钉住的）
-  ['web/m/m.js', "'⚙ 设置'", '齿轮菜单的设置入口（scripts/ui-check.js:2891 钉 textContent）'],
+  ['web/m/m.js', "icoLabel('settings', '设置')", '齿轮菜单的设置入口（A3b 换成共享徽记；文案仍是恰好「设置」，门禁在 scripts/ui-check.js 手机端齿轮段）'],
   ['web/app.js', "'🎲 随机（推荐）'", '座位随机项（test/seat.test.js 钉）'],
   ['web/m/m.js', "'🎲 随机（推荐）'", '座位随机项（test/seat.test.js 钉）'],
   ['web/index.html', '👤 我的档案', '档案标签（非头像 👤）'],

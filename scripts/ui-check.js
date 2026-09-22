@@ -1192,6 +1192,27 @@ class Browser {
       await waitExpr('头像段：档案管理弹层已打开', `!!document.getElementById('pm-trash-entry')`, { timeout: 5000 });
       const mkBtn = await b.eval(`(() => { const b = [...document.querySelectorAll('#modal-root .btn')].find((x) => /新建档案/.test(x.textContent)); return b ? { text: b.textContent.trim(), w: Math.round(b.getBoundingClientRect().width) } : null; })()`);
       check('头像段：弹层里有「新建档案」入口且可见', !!mkBtn && mkBtn.w > 0, JSON.stringify(mkBtn));
+      // ---- 桌面 #modal 里的 `.btnrow` 按钮族（运行时覆盖缺口 A3b 补齐）----
+      // 缺口是什么：ui-check 对 #modal-root 的交互不少（定位/可见性/点遮罩/点 ✕/关闭路径），
+      // 但**弹层底部那一排 `.btnrow` 按钮**从来只有一条"由 ② 的探针与 css 守卫表负责"的注释，
+      // 没有任何一次真实渲染量测。这里用与玩家一致的真路（上面那次 realClick('#btn-profiles-entry')
+      // 真的打开了档案管理弹层）把这个状态驱出来 —— 弹层底部就是 .btnrow（新建档案 / 导入档案包 /
+      // 回收站，web/app.js:1237-1249），逐条量几何与实测高度。
+      await settle('桌面弹窗 .btnrow：档案管理弹层入场动画已结束（几何不受 modalIn scale(.98) 影响）');
+      const prowGeo = await b.eval(`(() => {
+        const xs = [...document.querySelectorAll('#modal-root .modal .btnrow .btn')];
+        const hs = xs.map((e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+        return { n: xs.length, min: hs.length ? Math.min(...hs) : -1, max: hs.length ? Math.max(...hs) : -1,
+          texts: xs.map((e) => e.textContent.replace(/\\s+/g, ' ').trim()) };
+      })()`);
+      check('§3 触点门禁（桌面）：#modal 里 .btnrow 全部按钮实测高度 ≥40（普通档；改小即判红）',
+        prowGeo.n >= 3 && prowGeo.min >= 40,
+        `按钮数=${prowGeo.n} 最小高=${prowGeo.min} 最大高=${prowGeo.max} 文案=${JSON.stringify(prowGeo.texts)}`);
+      // 几何四联：可见 + 非零尺寸 + 中心点在视口内且命中它自己（未被遮罩/别的层压住）。
+      // scroll:true —— .btnrow 在弹层正文末尾，正文内部滚动；不滚过去量到的是视口外的坐标（假红）。
+      const prowBtn = await b.probe('#modal-root .modal .btnrow .btn', { scroll: true });
+      checkGeometry('§3 触点门禁（桌面）：#modal .btnrow 首个按钮可见、非零尺寸、中心点命中自身、未被遮挡',
+        prowBtn, { minW: 40, minH: 40 });
       await b.eval(`[...document.querySelectorAll('#modal-root .btn')].find((x) => /新建档案/.test(x.textContent))?.click()`);
       await waitExpr('头像段：新建档案页（内置头像区）已渲染', `!!document.getElementById('av-builtin-row')`, { timeout: 5000 });
       // 弹层入场是 modalIn（scale .98 → 1）。不等到它跑完就量尺寸，量到的是 98% 的值
@@ -3020,9 +3041,36 @@ class Browser {
       await b.click('#m-gear');
       // FIX-18：原来是固定 sleep(500)，改成等到齿轮弹层的条目渲染出来
       await waitExpr('P5 手机端：齿轮弹层条目已渲染', `document.querySelectorAll('#m-modal .gear-item').length > 0`, { timeout: 5000 });
-      const gearItems = await b.eval(`[...document.querySelectorAll('#m-modal .gear-item')].map((x) => x.textContent.trim())`);
-      check('手机端齿轮：设置入口不再谎报"可改接口/模型/节奏"', gearItems.includes('⚙ 设置'), JSON.stringify(gearItems));
-      await b.eval(`(() => { const t = [...document.querySelectorAll('#m-modal .gear-item')].find((x) => x.textContent.trim() === '⚙ 设置'); if (t) t.click(); })()`);
+      /**
+       * 齿轮里那条「设置」入口的定位：**按共享徽记**（icons.js 的 settings → `<use href="#wwIcSettings">`），
+       * 不按 textContent 逐字比字形。A2 把两端导航/操作图标统一成 SVG 之后，该条由 `'⚙ 设置'`
+       * 变成 `icoLabel('settings', '设置')`：textContent 里只剩「设置」（徽记是 <svg>，不出文字）。
+       *
+       * 判据（比原来更强，不是放宽）：
+       *   ① 必须**恰好有一条**齿轮项带 settings 徽记（`<use>` 指向同一份定义的 #wwIcSettings）；
+       *   ② 该条的文案（剥掉徽记后）**逐字等于**「设置」—— 多一个字都判红。
+       * 为什么 ② 不能松：这条断言原本守的是"设置入口不得谎报能改接口/模型/节奏"。
+       * 写成 `设置（可改接口/模型）` 会立刻被 ② 抓住；写成别的入口不叫"设置"会被 ① 抓住。
+       */
+      const gearSettings = await b.eval(`(() => {
+        const rows = [...document.querySelectorAll('#m-modal .gear-item')];
+        const hits = rows.filter((x) => {
+          const u = x.querySelector('svg.ww-icon use');
+          return !!u && (u.getAttribute('href') || u.getAttribute('xlink:href')) === '#wwIcSettings';
+        });
+        const row = hits[0] || null;
+        return {
+          n: hits.length,
+          label: row ? row.textContent.replace(/\\s+/g, ' ').trim() : null,
+          hasIcon: !!(row && row.querySelector('svg.ww-icon use')),
+          labels: rows.map((x) => x.textContent.replace(/\\s+/g, ' ').trim()),
+        };
+      })()`);
+      check('手机端齿轮：设置入口带共享徽记（#wwIcSettings，不是文本字形）', gearSettings.n === 1 && gearSettings.hasIcon === true,
+        `命中 ${gearSettings.n} 条｜全部条目=${JSON.stringify(gearSettings.labels)}`);
+      check('手机端齿轮：设置入口不再谎报"可改接口/模型/节奏"（文案逐字等于「设置」）',
+        gearSettings.label === '设置', `实测文案=${JSON.stringify(gearSettings.label)}｜全部条目=${JSON.stringify(gearSettings.labels)}`);
+      await b.eval(`(() => { const t = [...document.querySelectorAll('#m-modal .gear-item')].find((x) => { const u = x.querySelector('svg.ww-icon use'); return !!u && (u.getAttribute('href') || u.getAttribute('xlink:href')) === '#wwIcSettings'; }); if (t) t.click(); })()`);
       // FIX-18：原来是固定 sleep(500)，改成等到"本局信息"面板真的渲染出来
       await waitExpr('P5 手机端：对局内设置面板已渲染（含本局信息行）', `document.querySelectorAll('#m-modal .setinfo .set-row').length >= 3`, { timeout: 5000 });
       const setPanel = await b.eval(`(() => ({
@@ -3232,7 +3280,12 @@ class Browser {
 
       // 底部弹层（#m-sheet 在 #m-app **之外**，不受全局兜底！这正是 44px 真生效的地方）
       await b.realClick('#m-profile-chip');
-      await waitExpr('触点门禁：档案弹层已展开（量测前置条件）', `(() => { const root = document.getElementById('m-sheet'); const panel = root ? root.querySelector('.m-sheet') : null; const r = panel ? panel.getBoundingClientRect() : null; return { ok: !!panel && r.width > 200 && r.height > 100, panelH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      // ⚠ 谓词必须**返回布尔**：waitExpr 的外层是 `{ ok: !!(EXPR) }`，所以 IIFE 里 `return { ok: … }`
+      //   会恒真 —— 条件不成立也判绿。同一段里真的踩到过：底部弹层没关，后面的图鉴/设置点击
+      //   全被它的遮罩挡下（realClick 返回 NOT_CLICKABLE），而两处等待却一直是 ✓。
+      await waitExpr('触点门禁：档案弹层已展开（量测前置条件）',
+        `(() => { const root = document.getElementById('m-sheet'); const panel = root ? root.querySelector('.m-sheet') : null; const r = panel ? panel.getBoundingClientRect() : null; return !!panel && r.width > 200 && r.height > 100; })()`,
+        { timeout: 8000, interval: 100 });
       const sheetFoot = await b.probe('#m-sheet .m-sheet-foot .btn');
       check('§3 触点门禁：档案弹层底部按钮实测高度 ≥48（#m-sheet 在 #m-app 之外，不受兜底）', hOnly(sheetFoot) >= 48, `实测 h=${hOnly(sheetFoot)}（w=${sheetFoot.w}）`);
       const sheetOps = await b.probe('#m-sheet .pm-ops .btn');
@@ -3240,13 +3293,49 @@ class Browser {
       // 弹层内的删除类入口（危险操作，必须可点且够大）
       const sheetTrash = await b.probe('#m-sheet .pm-trash-entry');
       check('§3 触点门禁：档案弹层回收区入口实测高度 ≥48', hOnly(sheetTrash) >= 48, `实测 h=${hOnly(sheetTrash)}（w=${sheetTrash.w}）`);
+      // 量完必须**真的关掉这一层**再继续：底部弹层的遮罩盖住整屏，留着它后面每一次 realClick
+      // 都会被它挡下（实测 coveredBy=div.pm-name）—— 这正是"中部弹窗那一族按钮一直量不到"的真正原因。
+      // 关闭走真实用户路径：弹层标题栏的 ✕（m.js:1125-1126 的 close → sheetDismiss）。
+      //
+      // ⚠ 点之前必须先等它**站定**：实测（反向验证 RV-6 的原始读数）命中测试通过、但鼠标事件落下时
+      //   ✕ 已经不在原位 —— 点击落到列表行上，弹层没关，realClick 却返回 OK。
+      //   两个会让它移动的原因都真实存在：① 入场动画 `mSheetUp .18s`（m.css:588）；
+      //   ② 弹层贴底（m.css:578）而正文是异步渲染的，档案列表长出来时整个面板向上长、头部跟着上移。
+      //   判据用**几何连续三次完全一致（间隔 50ms）**，不猜是哪一个原因 —— 比固定 setTimeout 更硬，
+      //   而且它自己就是一条可判红的断言（弹层永远不站定 ⇒ 这里先红，而不是让后面变成一串莫名其妙的红）。
+      const sheetStable = await b.eval(`(async () => {
+        const s = document.querySelector('#m-sheet .m-sheet');
+        if (!s) return { stable: false, reason: 'no-panel' };
+        const snap = () => { const r = s.getBoundingClientRect(); return [r.top, r.left, r.width, r.height].map((v) => Math.round(v * 10) / 10).join(','); };
+        let prev = snap(); let same = 0;
+        for (let i = 0; i < 30 && same < 3; i++) {
+          await new Promise((r) => setTimeout(r, 50));
+          const cur = snap();
+          same = cur === prev ? same + 1 : 0;
+          prev = cur;
+        }
+        const r = s.getBoundingClientRect();
+        return { stable: same >= 3, box: prev, h: Math.round(r.height * 10) / 10, anims: s.getAnimations().map((a) => a.playState) };
+      })()`);
+      check('§3 触点门禁：档案弹层已站定（位置连续 150ms 不变；否则点的是几十毫秒前的坐标）',
+        sheetStable.stable === true, JSON.stringify(sheetStable));
+      const sheetCloseClick = await b.realClick('#m-sheet .m-sheet-head .btn');
+      check('§3 触点门禁：档案弹层能按真实路径关掉（不关掉后面所有点击都会被它的遮罩挡下）',
+        sheetCloseClick === 'OK', `realClick=${sheetCloseClick}`);
+      await waitExpr('触点门禁：档案弹层已关闭（#m-sheet 已清空，后续点击不再被遮罩挡下）',
+        `document.getElementById('m-sheet').childNodes.length === 0`, { timeout: 5000, interval: 100 });
 
       // 资料页翻页键（`.cdx-pager button`，m.css:517 是**元素**选择器 (0,1,1)：若按钮不带 .btn 就不吃兜底，
       // 44px 会真生效）。进入方式与真实用户一致：先把入口滚进视口，再真实点击（#m-codex-btn → openCodex）。
       await b.eval(`(() => { const el = document.getElementById('m-codex-btn'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
       await new Promise((r) => setTimeout(r, 250));
-      await b.realClick('#m-codex-btn');
-      await waitExpr('触点门禁：手机端资料页已打开（量测前置条件）', `(() => { const s = document.getElementById('m-codex'); const p = document.querySelector('#m-codex .cdx-pager button'); const r = p ? p.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!r && r.height > 0, pagerH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
+      const codexClick = await b.realClick('#m-codex-btn');
+      check('§3 触点门禁：首页「角色图鉴」入口的真实鼠标点击确实落在它身上', codexClick === 'OK', `realClick=${codexClick}`);
+      // 等到**屏本身**显示出来为止（谓词返回布尔）。不拿翻页键当等待条件：资料页首层本来就不渲染
+      // `.cdx-pager`，用它当条件会让这里永远等不到（旧写法返回对象 ⇒ 恒真 ⇒ 超时也判绿）。
+      await waitExpr('触点门禁：手机端资料页已打开（#m-codex 屏可见）',
+        `(() => { const s = document.getElementById('m-codex'); return !!s && !s.classList.contains('hidden'); })()`,
+        { timeout: 8000, interval: 100 });
       const pagerBtn = await b.probe('#m-codex .cdx-pager button');
       if (pagerBtn.found) {
         check('§3 触点门禁：资料页翻页按钮实测高度 ≥48', hOnly(pagerBtn) >= 48, `实测 h=${hOnly(pagerBtn)}（w=${pagerBtn.w}）`);
@@ -3256,30 +3345,57 @@ class Browser {
         // 「恒真和宽容断言清理后只能收缩基线」：恒真断言会污染断言集合，等于假覆盖。
         log('· §3 触点门禁：资料页首层无翻页键（该状态量测不适用）—— 属已知覆盖缺口');
       }
-      // 中部弹窗（#m-modal 同样在 #m-app **之外**，index.html:211）—— 经由首页设置入口 openModal 打开。
-      // 这是 ② 报告的 §6.2 发现处：这里的 .btnrow .btn 实测 40、.btn.primary 实测 44，都低于 §3。
-      await b.eval(`(() => { const el = document.getElementById('m-codex-back'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
-      await new Promise((r) => setTimeout(r, 200));
-      const backBtn = await b.probe('#m-codex-back');
-      if (backBtn.found) { await b.realClick('#m-codex-back'); await new Promise((r) => setTimeout(r, 300)); }
+      // 中部弹窗（#m-modal 同样在 #m-app **之外**，index.html:213）—— 经由首页设置入口打开。
+      // 这是 ② 报告的 §6.2 发现处：这里的 `.btnrow .btn` 实测 40、`.btn.primary` 实测 44（都低于 §3）。
+      // 旧版只留了一条 · 信息行（"此刻无 .btnrow 按钮，该状态量测不适用"）—— 而它其实**一直**量不到，
+      // 根因就是上面那层没关的底部弹层。下面把这个状态真的驱出来，那条信息行由这几条断言取代。
+      // 先记下"资料页确实是开着的"：否则点击返回键的 ✗ 与"已隐藏"的 ✓ 会互相抵消成假绿
+      // （RV-5 实测：把上面关弹层的步骤删掉后，codex 压根没打开，"已隐藏"却照样 ✓）。
+      const codexOpenBefore = await b.eval(`!document.getElementById('m-codex').classList.contains('hidden')`);
+      const codexBackClick = await b.realClick('#m-codex-back');
+      check('§3 触点门禁：资料页能按真实路径返回（返回键真的点到了，且返回前它确实开着）',
+        codexOpenBefore === true && codexBackClick === 'OK', `打开态=${codexOpenBefore} realClick=${codexBackClick}`);
+      await waitExpr('触点门禁：已从资料页返回首页（#m-codex 已隐藏）',
+        `document.getElementById('m-codex').classList.contains('hidden')`, { timeout: 5000, interval: 100 });
       await b.eval(`(() => { const el = document.getElementById('m-settings-btn'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
       await new Promise((r) => setTimeout(r, 250));
-      await b.realClick('#m-settings-btn');
-      await waitExpr('触点门禁：手机端设置弹窗已打开（量测前置条件）', `(() => { const m = document.querySelector('#m-modal .modal-mask'); const b2 = document.querySelector('#m-modal .modal .btnrow .btn'); const r = b2 ? b2.getBoundingClientRect() : null; return { ok: !!m && !!r && r.height > 0, btnH: r ? Math.round(r.height) : -1 }; })()`, { timeout: 8000, interval: 100 });
-      const modalBtn = await b.probe('#m-modal .modal .btnrow .btn');
-      if (modalBtn.found) {
-        check('§3 触点门禁：中部弹窗按钮实测高度 ≥48（#m-modal 在 #m-app 之外）', hOnly(modalBtn) >= 48, `实测 h=${hOnly(modalBtn)}（w=${modalBtn.w}）`);
-        const modalPrimary = await b.probe('#m-modal .modal .btnrow .btn.primary');
-        if (modalPrimary.found) check('§3 触点门禁：中部弹窗主确认键实测高度 ≥52（§3 主操作档）', hOnly(modalPrimary) >= 52, `实测 h=${hOnly(modalPrimary)}（w=${modalPrimary.w}）`);
-      } else {
-        // 恒真断言不写进断言集合（计划书第 52 行）：此处只记录"这一状态量不到"，用 log。
-        log('· §3 触点门禁：中部弹窗此刻无 .btnrow 按钮（该状态量测不适用）—— 属已知覆盖缺口；'
-          + '该族按钮由 ② 的探针与 test/css.test.js 守卫表负责');
-      }
+      const openSettingsClick = await b.realClick('#m-settings-btn');
+      check('§3 触点门禁：首页「设置」入口的真实鼠标点击确实落在它身上（被别的层挡住就判红）',
+        openSettingsClick === 'OK', `realClick=${openSettingsClick}`);
+      await waitExpr('触点门禁：手机端设置弹窗已打开（.btnrow 已渲染出真实几何）',
+        `(() => { const m = document.querySelector('#m-modal .modal-mask'); const x = document.querySelector('#m-modal .modal .btnrow .btn'); const r = x ? x.getBoundingClientRect() : null; return !!m && !!r && r.height > 0; })()`,
+        { timeout: 8000, interval: 100 });
+      // 全族实测：一次取回全部 `.btnrow .btn` 的高度（不只看第一个），任何一个低于 48 都判红。
+      const rowGeo = await b.eval(`(() => {
+        const xs = [...document.querySelectorAll('#m-modal .modal .btnrow .btn')];
+        const hs = xs.map((e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+        return { n: xs.length, min: hs.length ? Math.min(...hs) : -1, max: hs.length ? Math.max(...hs) : -1,
+          texts: xs.map((e) => e.textContent.replace(/\\s+/g, ' ').trim()) };
+      })()`);
+      check('§3 触点门禁：中部弹窗 .btnrow 全部按钮实测高度 ≥48（#m-modal 在 #m-app 之外）',
+        rowGeo.n >= 2 && rowGeo.min >= 48,
+        `按钮数=${rowGeo.n} 最小高=${rowGeo.min} 最大高=${rowGeo.max} 文案=${JSON.stringify(rowGeo.texts)}`);
+      // 几何四联（§11.3）：可见 + 非零尺寸 + 中心点在视口内且被 elementFromPoint 命中它自己（未被遮挡）。
+      // scroll:true —— 设置弹层正文内部滚动，按钮在正文末尾，不滚过去量到的是视口外的坐标（假红）。
+      const modalRowBtn = await b.probe('#m-modal .modal .btnrow .btn', { scroll: true });
+      checkGeometry('§3 触点门禁：中部弹窗 .btnrow 首个按钮可见、非零尺寸、中心点命中自身、未被遮挡',
+        modalRowBtn, { minW: 40, minH: 48 });
+      const modalPrimary = await b.probe('#m-modal .modal .btnrow .btn.primary', { scroll: true });
+      checkGeometry('§3 触点门禁：中部弹窗主确认键（.btnrow .btn.primary）可见、命中自身、实测 ≥52（§3 主操作档）',
+        modalPrimary, { minW: 40, minH: 52 });
+      // 收尾：按真实路径关掉弹窗（✕ → closeModalTop），不把一层弹窗留给后面的段落。
+      // 同样先确认弹窗**开着**（关闭前有子节点）：不然"本来就没开"也会让"已清空"判绿（RV-5 实测踩到过）。
+      const modalKidsBefore = await b.eval(`document.getElementById('m-modal').childNodes.length`);
+      const modalCloseClick = await b.realClick('#m-modal .mhead .btn');
+      check('§3 触点门禁：中部弹窗能按真实路径关掉（✕；关闭前弹窗确实是开着的）',
+        modalKidsBefore > 0 && modalCloseClick === 'OK', `关闭前子节点=${modalKidsBefore} realClick=${modalCloseClick}`);
+      await waitExpr('触点门禁：中部弹窗已关闭（#m-modal 已清空）',
+        `document.getElementById('m-modal').childNodes.length === 0`, { timeout: 5000, interval: 100 });
       // 覆盖缺口（如实记录，不假装覆盖）：`#m-flip-done`（翻牌页主确认，44）只在牌面揭示那一刻出现，
       // 时序不可控，本段不冒充已覆盖；由 ② 的探针与 test/css.test.js 的守卫表负责。
-      // 未在此量测的两处（如实记录，不假装覆盖）：`.m-dialog .btnrow .btn`（在 #m-modal 内，需要真实触发一次
-      // 确认弹窗才能量）与 `.m-to-bottom`（需先把局中信息流滚到底部才可见）。它们由 ② 的交付报告与台账负责，
+      // 仍然未在此量测的两处（如实记录，不假装覆盖）：`.m-dialog .btnrow .btn`（局内行动对话框的按钮族：
+      // 与上面量到的**中部弹窗**是不同容器、不同规则，要真开一局并触发一次确认才会出现）与
+      // `.m-to-bottom`（需先把局中信息流滚到底部才可见）。它们由 ② 的交付报告与台账负责，
       // 不在这里用"存在性检查"冒充 —— §11.3 明确禁止只有"存在 + 文字"型的弱检查。
     }
 

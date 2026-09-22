@@ -36,7 +36,13 @@ const state = {
   // 防双击双提交（FIN-03：双击只产生一次业务提交）
   submitting: false,
 };
-const PHASE_LABEL = { setup: '开局', night: '夜晚', dawn: '天亮', sheriff: '警长竞选', speech: '白天发言', vote: '放逐投票', pk: 'PK 环节', over: '结算' };
+/**
+ * 阶段值 → 中文名：**唯一真值在 web/shared/phase-label.js**（与桌面端 app.js 引用的是同一个文件、
+ * 同一个对象，不是两份拷贝）。两端原来各写一张逐字相同的表，单边改一个文案不会有任何测试发现；
+ * 现在改成引用，键集合与文案由 test/phase-label.test.js 的冻结台账逐字钉住。
+ * 这里只保留这个名字，是为了不动下面 3 处使用点（`PHASE_LABEL[phase] || phase` 的兜底语义不变）。
+ */
+const PHASE_LABEL = window.WWPhaseLabel.PHASE_LABEL;
 
 // ---------------- 系统返回栈（FIN-06 §10.5/§10.6） ----------------
 // 返回优先级：关闭最上层面板 → 当前功能页返回（页签/规则页）→ 离局确认。
@@ -443,11 +449,11 @@ function openGear() {
     rows.push([icoLabel('card', '查看我的身份牌'), () => { closeModalDom(); openInspect(v.me.role, true); }]);
   }
   // 设置弹窗由 openModal 自动"换内容"（同一层），返回深度不变
-  // ⚠ 这一条**保持纯文本 `⚙ 设置`**：脚本验收 scripts/ui-check.js:2891 把该菜单项的
-  // textContent 钉成 `'⚙ 设置'`（用来证明"设置入口不再谎报可改接口/模型/节奏"），
-  // 而那个文件不属于本批可改范围。改成徽记会让 textContent 变成 `设置` ⇒ 门禁判红。
-  // 待 ui-check 改按数据属性（而不是文案）定位后，这里可以一并换成 icoLabel('settings', '设置')。
-  rows.push(['⚙ 设置', () => openSettingsModal()]);
+  // 这一条与其余齿轮项统一走共享徽记（A3b）：文案仍是**恰好**「设置」——
+  // 不许写成"设置（可改接口/模型）"那种谎报（对局中确实改不了接口/模型/节奏，理由见 openSettingsModal）。
+  // 门禁也从"textContent 逐字等于 '⚙ 设置'"改成"按徽记定位（#wwIcSettings）+ 文案恰好等于「设置」"
+  // （scripts/ui-check.js 的手机端齿轮段），所以换徽记不再判红，而**谎报反而会判红**。
+  rows.push([icoLabel('settings', '设置'), () => openSettingsModal()]);
   rows.push([icoLabel('codex', I18N.t('codex.entry')), () => { closeModalDom(); openCodex(true); }]);
   rows.push([icoLabel('lang', `切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`), () => { closeModalTop(); toggleLang(); }]);
   if (inGame && !over) {

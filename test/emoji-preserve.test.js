@@ -84,6 +84,12 @@ test('口径自检：字符簇折叠成 1，且裸 ✓/✗/≥/→ 不算 emoji�
  * 非头像 `👤` 的 6 处**源码/HTML 字面量**（M1 合并后 HEAD 的人工核对基线）。
  * `window` = 允许的上下行漂移（这就是"大致位置"：文案必须还在，但不把守卫绑死在行号上）。
  *
+ * ⚠ 行号是"大致位置"的锚点，**上面加几行注释就会漂**：A3b 在 web/app.js 的 PHASE_LABEL 定义
+ * 与 ww_resumable 清理处各加了几行注释、在 web/m/m.js 的 PHASE_LABEL 处加了注释，两处 `👤`
+ * 字面量因此各下移（app.js 1147→1175、m.js 1366→1392），原来 ±25 的窗口刚好差一点。
+ * 处理方式是**把锚点对齐到真实行号**（window 仍为 25，判据强度一字未改）；
+ * 不许改成"整文件找得到就算过" —— 那会把"字形被搬走/被替换"这类退化放过去。
+ *
  * 第 7 处 `web/shared/avatar-badge.js:15` 在**注释**里提到旧 `'👤'` 兜底字形，**故意不钉**：
  * 注释随时可能被改写，钉它只会制造与事实无关的假红 —— 而且删掉那句注释并不损失任何用户可见文案。
  */
@@ -93,11 +99,11 @@ const REQUIRED_LITERALS = [
     literal: '👤 ${escapeHtml(profile.nickname)}',
     note: '顶栏档案信息里的**玩家姓名**前缀（"不许误删玩家姓名 emoji"的直接落点）',
   },
-  { file: 'web/app.js', line: 1147, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
+  { file: 'web/app.js', line: 1175, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
   { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
   { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
   { file: 'web/m/index.html', line: 109, window: 25, literal: '👤 我的', note: '手机端"我的"页签' },
-  { file: 'web/m/m.js', line: 1366, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
+  { file: 'web/m/m.js', line: 1392, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
 ];
 
 test('非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {
