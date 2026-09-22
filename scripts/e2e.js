@@ -54,7 +54,13 @@ async function main() {
     check('静态页面包含游戏标题', html.includes('AI 狼人杀'));
 
     const mHtml = await fetch(BASE + '/m/').then((r) => r.text());
-    check('APP 端页面可用（板子选择）', mHtml.includes('选择你的战场'));
+    // 判据同时钉"容器 + 步骤标题"：删掉板子选择界面会红，改文案也会红（逼着同步改断言）。
+    // 原先查的是 '选择你的战场' —— 那个串自 78c1c17（手机半边那批）起就不在 web/m/index.html 里了，
+    // 这条断言因此长期假红（改了页面文案却没同步改断言）。真值见 web/m/index.html 的
+    // `<div id="m-board-grid" …>` 与 `<h3 …>… 选择板子</h3>`。
+    check('APP 端页面可用（板子选择）',
+      mHtml.includes('id="m-board-grid"') && mHtml.includes('选择板子'),
+      `board-grid=${mHtml.includes('id="m-board-grid"')} label=${mHtml.includes('选择板子')}`);
     const uaRes = await fetch(BASE + '/', {
       headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) Mobile' },
       redirect: 'manual',
