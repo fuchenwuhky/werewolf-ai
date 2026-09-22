@@ -225,6 +225,21 @@ const TOUCH_WIRING = [
   ['web/m/m.css', '#m-modal .btn', '--h-touch-min', 48],
   ['web/m/m.css', '#m-modal .btn.primary', '--h-touch-main', 52],
   ['web/m/m.css', '#m-modal .gear-item', '--h-touch-min', 48],
+  // M1 桌面触区收口（计划书 §3 行75：桌面普通 ≥40、主要 ≥44）——
+  // 下面 4 条都是主控实测真的 <40 的**桌面**触区，且各自就是所在容器里胜出的那条规则
+  // （手机端那一档 ≥48 已由上面 #m-app / #m-sheet / #m-modal 几条守住，本次不动 m.css）：
+  //   · .role-row button（板子编辑器 − / +，web/app.js:351-353 生成）实测 26，且无 .btn 兜底；
+  //   · .chip 实测 36（共享组件：桌面 #action-controls 选目标胶囊、桌面标注编辑器里的倾向/把握/候选身份）；
+  //   · .seat-tabs .chip 实测 36（圆桌/列表切换）：特异性 (0,2,0) 高于 .chip，必须单独接线，
+  //     否则"改 .chip"会被它按后者胜出压回 36（这正是本条存在的理由）；
+  //   · .new-msg-pill 实测 36（局中"↓ 有新发言"胶囊，桌面独有控件）。
+  // 反面钉住：.chip.av-chip（内置徽记 chip）自己的下限是 --h-touch-min（48）且特异性更高，
+  // 不能被 .chip 这次改动拖低 —— 单独接线，值仍取 48（§3：不得缩小任何既有触区）。
+  ['web/style.css', '.role-row button', '--h-ctl-min', 40],
+  ['web/style.css', '.chip', '--h-ctl-min', 40],
+  ['web/style.css', '.seat-tabs .chip', '--h-ctl-min', 40],
+  ['web/style.css', '.new-msg-pill', '--h-ctl-min', 40],
+  ['web/style.css', '.chip.av-chip', '--h-touch-min', 48],
 ];
 
 /** 取某个选择器的规则体（行首 `sel {` 起、按大括号配对收；允许缩进，@media 里的规则也能取到） */

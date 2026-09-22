@@ -622,8 +622,12 @@ input[type=radio]:checked {
 .role-row .rname { display: flex; align-items: center; gap: 6px; font-size: var(--fs-md); min-width: 0; }
 .role-row .cnt { display: flex; align-items: center; gap: 4px; }
 .role-row .cnt b { min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; color: var(--gold-bright); font-size: var(--fs-base); }
+/* − / + 是板子编辑器里点得最多的控件（web/app.js:351-353 每个角色一对，quick10 共 15 对），
+   原来只有 26px 高。§3 行75：桌面普通按钮 ≥40 —— 用现成令牌 --h-ctl-min，不写像素魔法数。
+   本次只补**高度**下限（宽度保持 26px 不动，避免改动排布）：
+   把固定 `height: 26px` 换成 `min-height`（与 .btn / .chip 同一套写法，内容矮也不会塌到 26 以下）。 */
 .role-row button {
-  width: 26px; height: 26px; border-radius: var(--r-xs); cursor: pointer;
+  width: 26px; min-height: var(--h-ctl-min); border-radius: var(--r-xs); cursor: pointer;
   border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--text-dim);
   font-size: var(--fs-base); line-height: 1; font-family: inherit;
   transition: background-color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
@@ -795,7 +799,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 
 /* 座位视图切换（FIN-05）：圆桌 / 列表共用数据与选择状态，切换不清草稿、不改目标 */
 .seat-tabs { display: flex; gap: var(--sp-1); flex: none; }
-.seat-tabs .chip { min-height: 36px; padding: 0 13px; }
+/* 座位视图切换（圆桌/列表）：两个 .chip 原来 36px 高。§3 行75 桌面普通按钮 ≥40。
+   这条特异性 (0,2,0) 高于下面的 .chip，所以必须单独接线（静态守卫见 test/css.test.js 的 TOUCH_WIRING）。 */
+.seat-tabs .chip { min-height: var(--h-ctl-min); padding: 0 13px; }
 
 /* 列表视图：整行即目标区（≥64×72），行内信息比缩小的圆桌更可读 */
 .seats-list {
@@ -1007,10 +1013,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   padding: 0 var(--sp-3) var(--sp-6) 0;
   scroll-behavior: smooth;
 }
-/* 新发言胶囊（FIN-10）：用户上翻阅读时提示新增条数，点击回到最新 */
+/* 新发言胶囊（FIN-10）：用户上翻阅读时提示新增条数，点击回到最新。
+   桌面独有控件（手机端走 m.css 自己的实现），原来 36px 高 ⇒ §3 行75 桌面普通按钮 ≥40。 */
 .new-msg-pill {
   position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 6;
-  min-height: 36px; padding: 0 18px; border-radius: var(--r-pill);
+  min-height: var(--h-ctl-min); padding: 0 18px; border-radius: var(--r-pill);
   border: 1px solid var(--gold-dim); cursor: pointer;
   background: linear-gradient(180deg, var(--priv), #101728);
   color: var(--gold-bright); font-size: var(--fs-md); font-family: inherit;
@@ -1101,9 +1108,14 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 #action-controls textarea:focus { outline: none; border-color: var(--gold); box-shadow: var(--inset-field), var(--ring-soft); }
 #action-controls > .btnrow { margin: 0; }
 /* 选目标用的座位胶囊 */
+/* 选目标用的座位胶囊（共享组件：桌面 #action-controls 的选目标胶囊、桌面标注编辑器里的
+   倾向/把握/候选身份，手机端弹层里也复用同一套类）。原来 36px 高。
+   §3 行75：桌面普通按钮 ≥40 ⇒ 这里是**桌面下限**；手机端那一档 ≥48 由 m.css 的容器规则负责
+   （本次不动 m.css：这条取值 40 只会比原来 36 更大，不会把任何既有触区改小）。
+   .chip.av-chip（48）不受影响：它自己的 min-height 用 --h-touch-min，特异性也更高。 */
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
-  min-height: 36px; padding: 0 11px; border-radius: var(--r-pill); cursor: pointer;
+  min-height: var(--h-ctl-min); padding: 0 11px; border-radius: var(--r-pill); cursor: pointer;
   font-size: var(--fs-md); font-variant-numeric: tabular-nums;
   border: 1px solid var(--line); background: rgba(146, 174, 235, .06); color: var(--text-dim);
   transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), transform .08s var(--ease);

@@ -180,6 +180,14 @@ const PLANNED_SECTIONS = [
   'P5 手机端进入对局',
   '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
   '触点几何门禁（真实渲染高度，计划书 §3）',
+  // 桌面那一档（§3 行75：普通 ≥40、主要 ≥44）与手机档是两套阈值、两个页面（/ 与 /m/），所以单独成段。
+  // 拆成两段是因为**状态不同**、必须放在不同的时刻量：
+  //   · 设置屏那段（板子编辑器 − / +）放在「设置页」段落里 —— 那时本进程还没建过任何局，
+  //     页面不可能被自动恢复进局屏（放到后面量会被恢复进局屏，− / + 的几何变 0，施工期真踩过）；
+  //   · 对局屏那段（.seat-tabs .chip / 选目标胶囊 / 标注编辑器弹层）放在 FIX-07 之后，自己建 g6 再量。
+  // 两段都无条件执行（不在 if (FULL) 里），严格模式的"未执行"判据照旧有效。
+  '桌面触点几何门禁（设置屏，计划书 §3）',
+  '桌面触点几何门禁（对局屏，计划书 §3）',
   '浏览器控制台',
 ];
 
@@ -751,6 +759,34 @@ class Browser {
         // 恒真断言不写进断言集合（计划书第 52 行），用 log 如实记录覆盖缺口。
         log(`· §3 触点门禁（桌面）：丢弃草稿此刻不在场（实测 h=${hOf(dDiscard)}；该按钮只在有草稿时出现）—— 属已知覆盖缺口`);
       }
+      // ---- 计划书 §3 行75 桌面档：桌面触点几何门禁（设置屏部分）----
+      // 为什么放在**这个位置**（这是主控定位到的顺序问题，不是随手放的）：本段之所以能稳定量到设置屏，
+      // 是因为此刻本进程**还没有建过任何一局** —— 服务端没有"已开局未结束"的活局，页面就不可能被
+      // checkResume 的"找回令牌"分支（web/app.js:866-878 写回 ww_current → :4479-4487 自动 resumeGame）
+      // 拉进局屏。反面实测（施工期真踩到过）：放到后面去量，页面会被自动恢复进局屏并弹出身份翻牌浮层
+      // （#role-overlay 全屏层），#screen-setup 被隐藏 —— 30 个 − / + 全是 w=0/h=0、中心点被浮层压住。
+      // 所以下面第一条断言就是"服务端无未结束的活局"：它是"页面停在设置屏"的**物理前提**，不许放宽。
+      log('\n=== 桌面触点几何门禁（设置屏，计划书 §3）===');
+      {
+        const liveRows = (((await (await fetch(`${base}/api/games`)).json()).rows) || []).filter((x) => x.started && !x.finished);
+        check('§3 触点门禁（桌面·设置屏）前置：服务端无未结束的活局（页面不会被自动恢复进局屏）',
+          liveRows.length === 0, `仍有 ${liveRows.length} 局：${JSON.stringify(liveRows.map((x) => ({ id: x.id, inMemory: x.inMemory })))}`);
+        const boardGeo = await b.eval(`(() => {
+          const xs = [...document.querySelectorAll('#board-editor .role-row .cnt button')];
+          const hs = xs.map((e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+          return { screen: (document.querySelector('.screen:not(.hidden)') || {}).id || null,
+            rows: document.querySelectorAll('#board-editor .role-row').length, n: xs.length,
+            min: hs.length ? Math.min(...hs) : -1, max: hs.length ? Math.max(...hs) : -1 };
+        })()`);
+        check('§3 触点门禁（桌面·设置屏）：页面确实停在设置屏、板子编辑器已渲染出非零几何（不是被自动恢复的局屏）',
+          boardGeo.screen === 'screen-setup' && boardGeo.rows >= 5 && boardGeo.n >= 10 && boardGeo.min > 0, JSON.stringify(boardGeo));
+        const roleBtn = await b.probe('#board-editor .role-row .cnt button', { scroll: true });
+        checkGeometry('§3 触点门禁（桌面·设置屏）：板子编辑器 − / + 按钮可见、非零尺寸、中心点未被遮挡（≥40px 触区）',
+          roleBtn, { minW: 20, minH: 40 });
+        check('§3 触点门禁（桌面·设置屏）：板子编辑器 − / + 全部按钮最小实测高度 ≥40（改前 26）',
+          boardGeo.n >= 10 && boardGeo.min >= 40, `按钮数=${boardGeo.n} 最小高=${boardGeo.min} 最大高=${boardGeo.max}`);
+      }
+
       // 桌面端弹窗（#modal）内的按钮：#modal 的内容由 openModal 动态生成，开局前不一定存在；
       // 不在这里用"存在性检查"冒充覆盖 —— 由 ② 的桌面实测探针与 test/css.test.js 的守卫表负责。
     }
@@ -2839,6 +2875,103 @@ class Browser {
         await api('POST', `/api/games/${g5.gameId}/terminate`, { token: g5.playerToken });
       }
 
+      // ---- (§3 行75 桌面档) 桌面触点几何门禁（对局屏部分）：与手机端那一段同一套机制 ----
+      // 为什么单独列一段（而不是塞进下面「触点几何门禁」那一段）：那一段整段跑在 /m/ 手机上，
+      // 量不到桌面控件；而 .chip 是**两端共享**的组件，桌面这一档（普通 ≥40、主要 ≥44）必须真渲染来量。
+      // 为什么只在这里量"局中"的几处：本段先建一局（g6）并用 ww_current 明确指向它，页面因此**确定地**
+      // 恢复到 g6（不是碰运气）；设置屏那几处（板子编辑器 − / +）在局屏里已经隐藏、量不到，
+      // 所以它们放在前面「设置页」段落（本进程还没建过任何局的那一刻）另行量测。
+      // ⚠ 弹层几何有**测量假象**：.modal 入场是 @keyframes modalIn（scale .98 → 1），不等它跑完，
+      //   40px 的按钮会量成 39.2、44px 量成 43.12（主控上一轮踩过，见 style.css:1338 附近）。
+      //   所以下面量弹层内控件前一律先等到 transform 到 1 —— 与上面头像段 settle() 同一套判据。
+      log('\n=== 桌面触点几何门禁（对局屏，计划书 §3）===');
+      {
+        const hOf = (pr) => (pr && pr.found && typeof pr.h === 'number' ? Math.round(pr.h) : -1);
+        await b.setViewport(1440, 900, false);
+
+        // ② 桌面对局屏：座位视图切换（.seat-tabs .chip）+ 选目标胶囊（#action-controls .chip）
+        const g6 = await mkGame('quick10', 10, 771101);
+        await api('POST', `/api/games/${g6.gameId}/start`, { token: g6.playerToken });
+        // 先落一条座位 5 的标注：③ 要靠它让「笔记列表 → 编辑」这条真路把标注编辑器弹层打开
+        const anno = await api('PUT', `/api/games/${g6.gameId}/annotations`, {
+          token: g6.playerToken, expectedRevision: 0, seats: { 5: { leaning: 'lean_wolf', note: '桌面触区量测用' } },
+        });
+        check('桌面触点门禁前置：服务端已写入座位 5 的标注（③ 打开弹层走的就是这条真路）',
+          anno.code === 200 && !!(anno.body && anno.body.annotations && anno.body.annotations.seats && anno.body.annotations.seats['5']),
+          `PUT ${anno.code} seats=${JSON.stringify(anno.body && anno.body.annotations && anno.body.annotations.seats)}`);
+        await enterAndWaitGame(g6, '桌面触点门禁：页面已进入对局屏（② / ③ 量测前置条件）');
+        // 开局必经的身份翻牌浮层（#role-overlay，全屏层）是**异步**弹出来的（P4-6 实测过这个竞态：
+        // 读一次还是 hidden，下一拍就弹出来了）。它压在上面时按钮照样有高度，但玩家点不到 ——
+        // 所以这里轮询：见到它就按真实鼠标点「我记住了，开始游戏」收掉，直到确认收起。
+        await waitCheck('桌面触点门禁：身份翻牌浮层已收起（局中触点不被全屏层压住）', async () => {
+          const shown = await b.eval(`(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`);
+          if (!shown) return { ok: true, shown: false };
+          await b.realClick('#btn-flip-done');
+          return { ok: false, shown: true, clicked: true };
+        }, { timeout: 6000, interval: 200 });
+        const ringChip = await b.probe('#seat-view-ring');
+        check('§3 触点门禁（桌面）：座位视图切换按钮（.seat-tabs .chip）实测高度 ≥40（改前 36）',
+          hOf(ringChip) >= 40, `实测 h=${ringChip.h}（w=${ringChip.w}）`);
+        const listChip = await b.probe('#seat-view-list');
+        check('§3 触点门禁（桌面）：座位视图切换的第二个 .chip 同样 ≥40（成对判，不只看第一个）',
+          hOf(listChip) >= 40, `实测 h=${listChip.h}（w=${listChip.w}）`);
+        const actChip = await b.probe('#action-controls .chip');
+        if (actChip.found && hOf(actChip) > 0) {
+          check('§3 触点门禁（桌面）：局中选目标胶囊（#action-controls .chip）实测高度 ≥40（改前 36）',
+            hOf(actChip) >= 40, `实测 h=${actChip.h}（w=${actChip.w}）`);
+        } else {
+          // 恒真断言不写进断言集合（计划书第 52 行）：此刻这个阶段没有目标胶囊就如实记录，不冒充覆盖。
+          log(`· §3 触点门禁（桌面）：此刻 #action-controls 没有目标胶囊（实测 h=${hOf(actChip)}，阶段相关）`
+            + ' —— 属已知覆盖缺口；静态守卫由 test/css.test.js 的 TOUCH_WIRING「.chip」条目负责');
+        }
+
+        // ③ 弹层内：.chip（倾向 / 把握 / 候选身份）+ .btn（保存笔记 / 清除此座位笔记）
+        if (await b.eval(`document.getElementById('notes-drawer').classList.contains('hidden')`)) {
+          await b.click('#btn-notes');
+          await waitExpr('桌面触点门禁：笔记抽屉已打开', `!document.getElementById('notes-drawer').classList.contains('hidden')`, { timeout: 4000 });
+        }
+        await b.eval(`renderNotesList()`);
+        await waitExpr('桌面触点门禁：笔记列表已渲染座位 5 的行',
+          `[...document.querySelectorAll('#notes-list .pm-row')].some((r) => /5\\s*号/.test((r.querySelector('.pm-name') || {}).textContent || ''))`, { timeout: 5000 });
+        await b.eval(`(() => {
+          const row = [...document.querySelectorAll('#notes-list .pm-row')].find((r) => /5\\s*号/.test((r.querySelector('.pm-name') || {}).textContent || ''));
+          row?.querySelector('.pm-ops .btn')?.click();
+          return true;
+        })()`);
+        await waitExpr('桌面触点门禁：座位 5 的标注编辑器弹层已打开',
+          `!!document.querySelector('#modal-root .modal')`, { timeout: 5000 });
+        // modalIn（scale .98 → 1）没跑完时量到的是 98% 的值（实测 40 → 39.2、44 → 43.12）：
+        // 先等水平缩放真的到 1 再量，否则会把"达标"判成假失败。
+        const DESK_MODAL_SETTLED = `(() => { const m = document.querySelector('#modal-root .modal'); if (!m) return false;
+          const t = getComputedStyle(m).transform; if (t === 'none') return true;
+          const n = t.match(/matrix\\(([-0-9.]+)/); return !!n && Math.abs(parseFloat(n[1]) - 1) < 0.001; })()`;
+        await waitExpr('桌面触点门禁：标注编辑器入场动画已结束（几何不受 modalIn scale(.98) 影响）', DESK_MODAL_SETTLED, { timeout: 4000 });
+        const modalBtn = await b.probe('#modal-root .modal .btn');
+        check('§3 触点门禁（桌面）：弹层内 .btn 实测高度 ≥40（等 modalIn 跑完后量，不是 39.2 的假象）',
+          hOf(modalBtn) >= 40, `实测 h=${modalBtn.h}（w=${modalBtn.w}，动画结束后量）`);
+        const modalDanger = await b.probe('#modal-root .modal .btn.danger');
+        if (modalDanger.found) {
+          check('§3 触点门禁（桌面）：弹层内危险操作 .btn.danger 实测高度 ≥40',
+            hOf(modalDanger) >= 40, `实测 h=${modalDanger.h}（w=${modalDanger.w}）`);
+        }
+        const chipGeo = await b.eval(`(() => {
+          const xs = [...document.querySelectorAll('#modal-root .modal .mbody .chip')];
+          const hs = xs.map((e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+          return { n: xs.length, min: hs.length ? Math.min(...hs) : -1, max: hs.length ? Math.max(...hs) : -1 };
+        })()`);
+        check('§3 触点门禁（桌面）：标注编辑器里全部 .chip（倾向 / 把握 / 候选身份）最小实测高度 ≥40（改前 36）',
+          chipGeo.n >= 5 && chipGeo.min >= 40,
+          `chip 数=${chipGeo.n} 最小高=${chipGeo.min} 最大高=${chipGeo.max}`);
+
+        // 收尾：走 FIX-07 同一条真路关掉弹层（清除该座位笔记），再终止本段自造的局并清掉 ww_current
+        // —— 后面 P5 手机端会写自己的局，不能留一个已终止的指针在 localStorage 里。
+        await b.eval(`[...document.querySelectorAll('#modal-root .modal button')].find((x) => /清除此座位笔记/.test(x.textContent))?.click()`);
+        await waitExpr('桌面触点门禁：标注编辑器已关闭（收尾不留下盖住页面的弹层）',
+          `!document.querySelector('#modal-root .modal')`, { timeout: 6000 });
+        await api('POST', `/api/games/${g6.gameId}/terminate`, { token: g6.playerToken });
+        await b.eval(`localStorage.removeItem('ww_current'); localStorage.removeItem('ww_resumable'); true`);
+      }
+
       // (E) P5 移动端：手机版必须能进对局并把座位/流程/待办渲染出来（mock 局，零成本）
       log('\n=== P5 手机端进入对局 ===');
       const g4 = await mkGame('quick10', 10, 20260917);
@@ -2937,6 +3070,20 @@ class Browser {
       })()`);
       check('FIX-07 手机端前置：座位 3 的标注弹层打开了「清除」键（可点、非 0 尺寸）',
         !!mClearBtn && mClearBtn.h > 20 && mClearBtn.w > 20 && mClearBtn.zero === false, JSON.stringify(mClearBtn));
+      // 本次桌面改动（web/style.css 的 .chip：36 → --h-ctl-min=40）对**手机端**的影响，顺手如实量一次。
+      // 事实（静态可查）：web/m/m.css 里**根本没有** .chip 的 min-height 规则 ⇒ 手机端这批 .chip
+      // 一直吃的就是 style.css 那条共享规则（改前 36）。所以这次改动对手机端是**放大**（36 → 40），
+      // 不可能覆盖/缩小任何手机端下限；而量出来的 40 仍然**低于** §3 的移动触区 48 ——
+      // 这是 M1 遗留的**手机端**缺口（改前更差），修它必须动 web/m/m.css（不属本次独占文件）。
+      // 按计划书第 52 行：量不到达标就如实记录，不写恒真断言冒充覆盖。
+      const mChipGeo = await b.eval(`(() => {
+        const xs = [...document.querySelectorAll('#m-sheet .chip')];
+        const hs = xs.map((e) => Math.round(e.getBoundingClientRect().height * 10) / 10);
+        return { n: xs.length, min: hs.length ? Math.min(...hs) : -1, max: hs.length ? Math.max(...hs) : -1 };
+      })()`);
+      log(`· §3 触点门禁（手机端·已知缺口）：标注弹层 #m-sheet 里的 .chip 实测 h=${mChipGeo.min}~${mChipGeo.max}`
+        + `（共 ${mChipGeo.n} 个，吃 style.css 的 .chip；改前 36、现 40，仍 < 48）`
+        + '—— 需 m.css 补容器级 48px 下限（.chip.av-chip 那条 48 不受影响，见手机头像段断言）');
       const mSeatBefore = await b.eval(`Object.prototype.hasOwnProperty.call(state.anno.seats || {}, '3')`);
       await b.eval(`[...document.querySelectorAll('#m-sheet .btn')].find((x) => x.textContent.trim() === '清除')?.click()`);
       // FIX-18：原来是固定 sleep(1400)，改成等到清除真的落地（内存里座位键消失，且不出现错误行）
