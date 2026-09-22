@@ -8,6 +8,14 @@
 const $ = (sel) => document.querySelector(sel);
 const el = (tag, cls, html) => { const d = document.createElement(tag); if (cls) d.className = cls; if (html != null) d.innerHTML = html; return d; };
 
+/**
+ * 核心导航/操作图标的接线（计划书 §3 第 78 行前半句），与桌面 app.js 完全同一套：
+ * 图标只有一份定义（web/shared/icons.js 的 39 个 `<symbol>`，每个使用点一行 `<use>`），
+ * `icoLabel` 只去掉**标签开头那个图标位**，文案内部的 emoji（角色/状态语义字形）一律不动。
+ */
+function ico(id) { return window.WWIcons.iconMarkup(id); }
+function icoLabel(id, text) { return window.WWIcons.labelMarkup(id, text); }
+
 const state = {
   meta: null, view: null,
   boardId: 'adv12', boardCounts: null,
@@ -126,7 +134,7 @@ async function showMyGamesSheet() {
     rows = r.rows || [];
   } catch (e) { flash(`对局列表加载失败：${e.message}`); return; }
   const wrap = el('div');
-  wrap.appendChild(el('h3', 'mtitle', '🎲 我的对局'));
+  wrap.appendChild(el('h3', 'mtitle', icoLabel('game', '我的对局')));
   const body = el('div', 'mbody');
   if (!rows.length) { body.appendChild(el('p', 'hint', '当前档案还没有对局。回「开始」页开一局吧。')); }
   else {
@@ -273,7 +281,7 @@ function askLeaveGame() {
   state.leaveAskOpen = true;
   const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', '退出对局？'));
-  wrap.appendChild(el('p', null, '对局进度已保存，退出后可从首页「▶ 继续上局」回来。要退出吗？'));
+  wrap.appendChild(el('p', null, '对局进度已保存，退出后可从首页「继续上局」回来。要退出吗？'));
   const row = el('div', 'btnrow');
   const leave = el('button', 'btn danger', '退出到首页');
   leave.addEventListener('click', () => { state.leaveAskOpen = false; closeModalTop(); window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); });
@@ -432,22 +440,26 @@ function openGear() {
   const rows = [];
   if (inGame && v && v.me && v.me.role) {
     // 检视大卡替换齿轮这一层（replace）：返回键一层一层关，不留下已关闭的影子层
-    rows.push(['🎴 查看我的身份牌', () => { closeModalDom(); openInspect(v.me.role, true); }]);
+    rows.push([icoLabel('card', '查看我的身份牌'), () => { closeModalDom(); openInspect(v.me.role, true); }]);
   }
   // 设置弹窗由 openModal 自动"换内容"（同一层），返回深度不变
+  // ⚠ 这一条**保持纯文本 `⚙ 设置`**：脚本验收 scripts/ui-check.js:2891 把该菜单项的
+  // textContent 钉成 `'⚙ 设置'`（用来证明"设置入口不再谎报可改接口/模型/节奏"），
+  // 而那个文件不属于本批可改范围。改成徽记会让 textContent 变成 `设置` ⇒ 门禁判红。
+  // 待 ui-check 改按数据属性（而不是文案）定位后，这里可以一并换成 icoLabel('settings', '设置')。
   rows.push(['⚙ 设置', () => openSettingsModal()]);
-  rows.push([I18N.t('codex.entry'), () => { closeModalDom(); openCodex(true); }]);
-  rows.push([`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => { closeModalTop(); toggleLang(); }]);
+  rows.push([icoLabel('codex', I18N.t('codex.entry')), () => { closeModalDom(); openCodex(true); }]);
+  rows.push([icoLabel('lang', `切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`), () => { closeModalTop(); toggleLang(); }]);
   if (inGame && !over) {
-    rows.push(['⏹ 结束本局', () => askTerminate()]);
+    rows.push([icoLabel('end', '结束本局'), () => askTerminate()]);
   } else {
-    rows.push(['🏠 返回首页', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }]);
+    rows.push([icoLabel('home', '返回首页'), () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }]);
   }
   // 必须传**无类名的普通容器**：openModal 会把它 unwrap，只保留自己那一层 .modal。
   // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
   // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
   const wrap = el('div');
-  wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
+  wrap.appendChild(el('h3', 'mtitle', icoLabel('settings', '设置')));
   const box = el('div', 'gear-list');
   rows.forEach(([label, fn]) => {
     const b = el('button', 'gear-item' + (/结束本局/.test(label) ? ' danger' : ''), label);
@@ -469,7 +481,7 @@ function askTerminate() {
   // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
   // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
   const wrap = el('div');
-  wrap.appendChild(el('h3', 'mtitle', '⏹ 结束本局'));
+  wrap.appendChild(el('h3', 'mtitle', icoLabel('end', '结束本局')));
   wrap.appendChild(el('p', null, '结束后本局不可恢复，将直接结算并公开所有身份。确定要结束吗？'));
   const row = el('div', 'btnrow');
   const yes = el('button', 'btn danger', '确定结束');
@@ -496,7 +508,7 @@ function openSettingsModal() {
   // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
   // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
   const wrap = el('div');
-  wrap.appendChild(el('h3', 'mtitle', '⚙ 设置'));
+  wrap.appendChild(el('h3', 'mtitle', icoLabel('settings', '设置')));
   const body = el('div', 'mbody');
   // FIN-03/§8.3：API 配置是安装级的——说明归属，避免"切档案怎么 Key 也变了"的误解
   body.appendChild(el('p', 'hint', '🔑 接口 / 模型 / Key 属于安装级配置：此设备共享，不随玩家档案切换；开局时即已固化，对局中不可修改，请回首页调整。'));
@@ -578,12 +590,12 @@ function openSettingsModal() {
     b.addEventListener('click', fn);
     list.appendChild(b);
   };
-  add(I18N.t('codex.entry'), () => { closeModalDom(); openCodex(true); });
-  if (inGame && v && v.me && v.me.role) add('🎴 查看我的身份牌', () => { closeModalDom(); openInspect(v.me.role, true); });
-  add(`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => { closeModalTop(); toggleLang(); });
+  add(icoLabel('codex', I18N.t('codex.entry')), () => { closeModalDom(); openCodex(true); });
+  if (inGame && v && v.me && v.me.role) add(icoLabel('card', '查看我的身份牌'), () => { closeModalDom(); openInspect(v.me.role, true); });
+  add(icoLabel('lang', `切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`), () => { closeModalTop(); toggleLang(); });
   // 这条是"真路"而不是假开关：回首页 = 重载页面，本局存在浏览器里（mww_current），
   // 首页会出现"继续对局"卡片，所以可以放心去改设置再回来。
-  add('⚙ 去首页改接口 / 模型 / 节奏（本局会保存）', () => { location.reload(); });
+  add(icoLabel('settings', '去首页改接口 / 模型 / 节奏（本局会保存）'), () => { location.reload(); });
   body.appendChild(list);
 
   body.appendChild(el('p', 'hint', '接口 / 模型 / 节奏是服务端配置：各 AI 的参数在开局时就已经发给它，所以对局中改动不会影响正在进行的这一局（这就是它"看起来失效"的原因）。要调整请回首页设置 —— 本局会保存，随时能继续。'));
@@ -591,11 +603,11 @@ function openSettingsModal() {
 
   const row = el('div', 'btnrow');
   if (inGame && !(v && v.finished)) {
-    const end = el('button', 'btn danger', '⏹ 结束本局');
+    const end = el('button', 'btn danger', icoLabel('end', '结束本局'));
     end.addEventListener('click', () => askTerminate());
     row.appendChild(end);
   }
-  const home = el('button', 'btn danger', '🏠 退出到首页（放弃本局）');
+  const home = el('button', 'btn danger', icoLabel('home', '退出到首页（放弃本局）'));
   home.addEventListener('click', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); });
   row.appendChild(home);
   wrap.appendChild(row);
@@ -606,6 +618,9 @@ function openSettingsModal() {
 function toggleLang() {
   const next = I18N.getLang() === 'en' ? 'zh-CN' : 'en';
   I18N.setLang(next);
+  // i18n 会整块重写 data-i18n 元素的 textContent（词典里的导航文案仍带前导图标字形），
+  // 所以必须在这里按 data-ww-icon 重画一遍，否则切一次语言徽记就退回 emoji。
+  window.WWIcons.mount(document);
   // 图鉴内容是 JS 拼的（分区标题、徽记、AI 打法），不跟着 data-i18n 自动重刷
   if (!$('#m-codex').classList.contains('hidden')) window.Codex.render();
   flash(next === 'en' ? 'Language: English' : '界面语言：中文');
@@ -633,7 +648,7 @@ async function openSummarySheet() {
   // 传 el('div','modal') 会多套一层 position:fixed 的内层 .modal（脱离文档流），
   // 外层 .modal 于是没有在流内容 → 塌成两条边框（2px）——真机上就是"点开只有一条线"。
   const wrap = el('div');
-  wrap.appendChild(el('h3', 'mtitle', '📊 本局总结'));
+  wrap.appendChild(el('h3', 'mtitle', icoLabel('summary', '本局总结')));
   const body = el('div', 'mbody');
 
   const result = v.winner === 'good' ? '🎉 好人阵营获胜'
@@ -689,7 +704,7 @@ async function openSummarySheet() {
   body.appendChild(rev);
   wrap.appendChild(body);
   const row = el('div', 'btnrow');
-  const coach = el('button', 'btn', '🧠 生成 AI 复盘');
+  const coach = el('button', 'btn', icoLabel('coach', '生成 AI 复盘'));
   coach.addEventListener('click', () => requestReview());
   row.appendChild(coach);
   const close = el('button', 'btn', '关闭');
@@ -841,7 +856,7 @@ function wireSettings() {
   $('#m-settings-btn').addEventListener('click', async () => {
     const cfg = await api('GET', '/api/config').catch(() => ({}));
     const wrap = el('div');
-    const head = el('div', 'mhead', '<h2>⚙ AI 设置</h2>');
+    const head = el('div', 'mhead', `<h2>${ico('settings')} AI 设置</h2>`);
     const close = el('button', 'btn ghost small', '✕');
     close.addEventListener('click', closeModalTop);
     head.appendChild(close);
@@ -1094,9 +1109,14 @@ function openSheet(title, bodyEl, footEl, opts) {
   const mask = el('div', 'm-sheet-mask');
   const sheet = el('div', 'm-sheet');
   const head = el('div', 'm-sheet-head');
-  const t = el('h3'); t.textContent = title || ''; // 标题可能拼座位昵称：textContent，不进 innerHTML
+  const t = el('h3');
+  // 标题可能拼座位昵称：文字一律走 createTextNode，不进 innerHTML（安全线不变）。
+  // 徽记是**本次改造新增**的那一半：`o.icon` 只是 icons.js 白名单里的一个 id，
+  // 认不出来的 id 会被 normalizeId 拒掉（返回空串），所以它同样不是用户输入。
+  if (o.icon) t.insertAdjacentHTML('afterbegin', window.WWIcons.iconMarkup(o.icon));
+  t.appendChild(document.createTextNode(window.WWIcons.plainLabel(title || '')));
   head.appendChild(t);
-  const close = el('button', 'btn ghost small', '✕');
+  const close = el('button', 'btn ghost small', ico('close'));
   close.addEventListener('click', sheetDismiss);
   head.appendChild(close);
   const body = el('div', 'm-sheet-body');
@@ -1343,16 +1363,16 @@ function openProfileManager() {
   body.appendChild(list);
   // 回收区入口（FIX-04）：「删除＝归档代替删除」以前删掉就找不回来，这里是唯一的恢复入口。
   const trashRow = el('div', 'btnrow');
-  const trashBtn = el('button', 'btn ghost pm-trash-entry', '🗑 回收站');
+  const trashBtn = el('button', 'btn ghost pm-trash-entry', icoLabel('trash', '回收站'));
   trashBtn.id = 'm-pm-trash-entry';
   trashBtn.addEventListener('click', openProfileTrash);
   trashRow.appendChild(trashBtn);
   body.appendChild(trashRow);
   // 计数异步补：失败不静默（标签直接写"读取失败"、title 给出原因），也不影响档案管理本身可用。
   api('GET', '/api/profiles/trash').then((r) => {
-    trashBtn.textContent = `🗑 回收站（${((r && r.items) || []).length}）`;
+    trashBtn.innerHTML = icoLabel('trash', `回收站（${((r && r.items) || []).length}）`);
   }).catch((e) => {
-    trashBtn.textContent = '🗑 回收站（读取失败）';
+    trashBtn.innerHTML = icoLabel('trash', '回收站（读取失败）');
     trashBtn.title = (e && e.message) || '回收区不可用';
   });
   body.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
@@ -1360,7 +1380,7 @@ function openProfileManager() {
   const mk = el('button', 'btn', '＋ 新建档案');
   mk.addEventListener('click', () => openProfileEdit(null));
   foot.appendChild(mk);
-  const imp = el('button', 'btn ghost', '📥 导入');
+  const imp = el('button', 'btn ghost', icoLabel('import', '导入'));
   imp.addEventListener('click', openProfileImport);
   foot.appendChild(imp);
   openSheet('👤 我的档案', body, foot);
@@ -1571,7 +1591,7 @@ function openProfileEdit(existing, draft) {
     }
   });
   foot.appendChild(go);
-  openSheet(existing ? '✏️ 编辑档案' : '✨ 新建档案', body, foot);
+  openSheet(existing ? '编辑档案' : '新建档案', body, foot, { icon: existing ? 'edit' : 'create' });
   syncAvatarUi();
 }
 
@@ -1850,7 +1870,7 @@ function openProfileTrash() {
   const back = el('button', 'btn primary', '← 返回档案列表');
   back.addEventListener('click', () => openProfileManager());
   foot.appendChild(back);
-  openSheet('🗑 回收站', body, foot);
+  openSheet('回收站', body, foot, { icon: 'trash' });
   renderProfileTrash(list, msg);
 }
 
@@ -1867,7 +1887,7 @@ async function startGame() {
     const useMock = !!state.mock;
     // 开局明确播报本局是否花钱（P2-b）：这句是玩家最后一次确认的机会
     flash(useMock ? '🧪 Mock 试玩：本局不调用 API、不消耗额度' : '💳 真实对局：本局会调用 API 并消耗额度');
-    const cfg = await api('GET', '/api/config');    if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在 ⚙ 设置 里填写 API Key（或勾选 Mock 试玩）'; return; }
+    const cfg = await api('GET', '/api/config');    if (!useMock && !cfg.hasKey) { $('#m-err').textContent = '⚠ 请先在「设置」里填写 API Key（或勾选 Mock 试玩）'; return; }
     const seatChoice = String($('#m-my-seat').value || 'random');
     const randomSeat = seatChoice === 'random';
     const mySeat = randomSeat ? 0 : Number(seatChoice);
@@ -1898,7 +1918,10 @@ async function startGame() {
     enterGame();
   } catch (e) { $('#m-err').textContent = `✗ ${e.message}`; }
   finally {
-    if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('m-busy'); startBtn.textContent = I18N.t('m.start'); }
+    // 还原时不能只写 textContent：i18n 词典里的 `m.start` 是「⚔ 开始游戏」，
+    // 直接写会把 data-ww-icon 的徽记抹掉（按钮从此只剩一个 emoji）。
+    // 所以写完文案再按标记重画一次 —— 与切语言后重画走的是同一条路。
+    if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('m-busy'); startBtn.textContent = I18N.t('m.start'); window.WWIcons.mountNode(startBtn); }
   }
 }
 
@@ -2240,8 +2263,8 @@ function updatePausedBanner(v) {
     `<div class="pb-msg">${title}${p.code ? `（${escapeHtml(String(p.code))}）` : ''}：${escapeHtml(String(p.message || ''))}</div>` +
     `<div class="pb-hint">${when}。进度已保存，恢复后从断点继续。</div>` +
     `<div class="pb-actions">` +
-    `<button class="btn primary" id="m-btn-resume-paused">继续对局</button>` +
-    `<button class="btn ghost" id="m-btn-terminate-paused">终止本局</button>` +
+    `<button class="btn primary" id="m-btn-resume-paused">${icoLabel('resume', '继续对局')}</button>` +
+    `<button class="btn ghost" id="m-btn-terminate-paused">${icoLabel('end', '终止本局')}</button>` +
     `</div>`;
   $('#m-btn-resume-paused').addEventListener('click', resumePausedGame);
   $('#m-btn-terminate-paused').addEventListener('click', terminateGame);
@@ -2274,7 +2297,7 @@ async function resumePausedGame() {
     hint('已从断点继续 ✓');
   } catch (e) {
     hint(`✗ 恢复失败：${e.message}`);
-    if (btn) { btn.disabled = false; btn.textContent = '继续对局'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = icoLabel('resume', '继续对局'); }
   }
 }
 
@@ -2470,12 +2493,12 @@ function patchSeatBadges(s, p) {
     put(rc);
   } else if (sum) {
     // 我的标注角标（NOTE-04）：倾向中文 · 首个候选身份 emoji+名。真身公开后由真身覆盖。
-    const pill = el('span', 'tag-pill', `🏷${escapeHtml(sum)}`);
+    const pill = el('span', 'tag-pill', ico('tag') + escapeHtml(sum));
     pill.title = '我的私人笔记摘要（AI 看不到）';
     put(pill);
   } else if (legacy) {
     // 旧格式兜底（无归属档案的旧局尚未迁移成功时）：保留旧 🏷 显示
-    const b = el('span', 'b l', '🏷');
+    const b = el('span', 'b l', ico('tag'));
     b.style.color = roleInfo(legacy).color;
     put(b);
   }
@@ -2495,7 +2518,7 @@ function renderNotesListM() {
   if (state.annoUndo && state.annoUndo.seat != null) {
     const u = el('div', 'm-note-undo');
     u.appendChild(el('span', 'hint', `${state.annoUndo.seat} 号刚被修改`));
-    const ub = el('button', 'btn ghost small', '↩ 撤销');
+    const ub = el('button', 'btn ghost small', icoLabel('undo', '撤销'));
     ub.addEventListener('click', async () => {
       const { seat, prev } = state.annoUndo;
       state.annoUndo = null;
@@ -2792,7 +2815,7 @@ function openLegacyPendingPrompt(pending) {
   const seats = Object.keys(pending);
   if (!seats.length) return;
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>🏷 旧标记待确认</h2>');
+  const head = el('div', 'mhead', `<h2>${ico('tag')} 旧标记待确认</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', closeModalTop);
   head.appendChild(close);
@@ -3083,14 +3106,14 @@ function openTagModal(seat) {
     });
     foot.appendChild(clr);
   }
-  openSheet(`📝 ${seat} 号的私人笔记`, body, foot, { vetoClose });
+  openSheet(`${seat} 号的私人笔记`, body, foot, { vetoClose, icon: 'notes' });
 }
 
 /** 旧格式兜底（无归属档案的旧局 404 / 共享模型缺失）：本地身份标记 {seat: roleId}，只存 localStorage */
 function openLegacyTagModal(seat) {
   const v = state.view;
   const wrap = el('div');
-  const head = el('div', 'mhead', `<h2>🏷 标记 ${seat} 号</h2>`);
+  const head = el('div', 'mhead', `<h2>${ico('tag')} 标记 ${seat} 号</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', closeModalTop);
   head.appendChild(close);
@@ -3214,11 +3237,11 @@ function updateActionbar(v) {
     keys.dataset.task = sig; dlg.dataset.task = sig;
     keys.innerHTML = ''; dlg.innerHTML = '';
     dlg.appendChild(el('div', 'idle', v.finished
-      ? '本局已结算 —— 看总结，或从左上角 ⚙ 里查看规则书与退出。'
+      ? `本局已结算 —— 看总结，或从左上角 ${ico('settings')} 里查看规则书与退出。`
       : '现在轮不到你操作。轮到你会在这里出现输入框或技能键。'));
     if (v.finished) {
-      keys.appendChild(keyEl('📊 查看本局总结', 'on', () => openSummarySheet()));
-      keys.appendChild(keyEl('🏠 回到首页', '', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }));
+      keys.appendChild(keyEl(icoLabel('summary', '查看本局总结'), 'on', () => openSummarySheet()));
+      keys.appendChild(keyEl(icoLabel('home', '回到首页'), '', () => { window.WWGameDraft.clearHandle(localStorage, 'mww_current'); location.reload(); }));
       // 结算后自动弹一次总结（用户反馈"手机端结束后什么都没有"）；只弹一次，关掉不再打扰
       if (state.summaryShownFor !== state.game.gameId) {
         state.summaryShownFor = state.game.gameId;
@@ -3273,7 +3296,7 @@ async function confirmDuel(v) {
 
 function mountDuelBtn(v, box) {
   if (!canDuelNow(v) || box.querySelector('.duel-now-btn')) return;
-  const b = el('button', 'btn danger duel-now-btn', '⚔️ 决斗');
+  const b = el('button', 'btn danger duel-now-btn', icoLabel('duel', '决斗'));
   b.addEventListener('click', () => confirmDuel(v));
   box.appendChild(b);
 }
@@ -3302,7 +3325,7 @@ async function confirmExplode(v) {
 
 function mountExplodeBtn(v, box) {
   if (!canExplodeNow(v) || box.querySelector('.explode-now-btn')) return;
-  const b = el('button', 'btn danger explode-now-btn', '🔮 自爆');
+  const b = el('button', 'btn danger explode-now-btn', icoLabel('explode', '自爆'));
   b.style.flex = '1';
   b.addEventListener('click', () => confirmExplode(v));
   box.appendChild(b);
@@ -3418,14 +3441,14 @@ function buildActionUI(v, p, keys, dlg) {
     keys.appendChild(send);
     if (p.canExplode && me.role === 'whitewolfking') markNeedTarget(v, v.players.filter((x) => x.alive && x.seat !== me.seat).map((x) => x.seat), '选择自爆要带走的玩家');
     if (p.canExplode) {
-      keys.appendChild(keyEl('🔮 自爆', 'alt', () => {
+      keys.appendChild(keyEl(icoLabel('explode', '自爆'), 'alt', () => {
         actionState.explode = !actionState.explode;
         hint(actionState.explode ? '已勾选自爆：发送后立即公开狼人身份并进入黑夜' : '已取消自爆');
         refreshCanvas(v);
       }));
     }
     if (p.canWithdraw) {
-      keys.appendChild(keyEl('🚰 退水', 'alt', () => {
+      keys.appendChild(keyEl(icoLabel('withdraw', '退水'), 'alt', () => {
         actionState.withdraw = !actionState.withdraw;
         setKeyEnabled(send, canSend());
         hint(actionState.withdraw ? '已选择退水：发送后退出竞选' : '已取消退水');
@@ -3463,17 +3486,17 @@ function buildActionUI(v, p, keys, dlg) {
   if (p.task === 'witch') {
     const ex = p.extra || {};
     if (ex.canAntidote) {
-      keys.appendChild(keyEl(`💊 解药救 ${ex.killTarget} 号`, 'on', () => submitSimple({ antidote: true, poison: 0 })));
+      keys.appendChild(keyEl(icoLabel('antidote', `解药救 ${ex.killTarget} 号`), 'on', () => submitSimple({ antidote: true, poison: 0 })));
     } else {
-      keys.appendChild(keyEl('💊 解药不可用', 'off', null, { sub: ex.antidoteUsed ? '已用过' : '今夜无人被刀' }));
+      keys.appendChild(keyEl(icoLabel('antidote', '解药不可用'), 'off', null, { sub: ex.antidoteUsed ? '已用过' : '今夜无人被刀' }));
     }
-    const poisonKey = keyEl('☠ 用毒', 'off', () => submitSimple({ antidote: false, poison: Number(actionState.target) || 0 }), { confirm: true }); // FIX-15：null→0，与改动前一致
+    const poisonKey = keyEl(icoLabel('poison', '用毒'), 'off', () => submitSimple({ antidote: false, poison: Number(actionState.target) || 0 }), { confirm: true }); // FIX-15：null→0，与改动前一致
     if (ex.canPoison) {
       actionState.needTarget = true;
       markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '到「玩家」页点选要毒的人（可毒自己）');
       keys.appendChild(poisonKey);
     } else {
-      keys.appendChild(keyEl('☠ 毒药不可用', 'off', null, { sub: ex.poisonUsed ? '已用过' : ' ' }));
+      keys.appendChild(keyEl(icoLabel('poison', '毒药不可用'), 'off', null, { sub: ex.poisonUsed ? '已用过' : ' ' }));
     }
     keys.appendChild(keyEl('空过', 'alt', () => submitSimple({ antidote: false, poison: 0 })));
     return;
@@ -3482,7 +3505,7 @@ function buildActionUI(v, p, keys, dlg) {
   // ---------- 二选一：上警 / 方向 ----------
   if (p.task === 'sheriff_run') {
     keys.append(
-      keyEl('🎩 上警', 'on', () => submitSimple({ run: true })),
+      keyEl(icoLabel('sheriff', '上警'), 'on', () => submitSimple({ run: true })),
       keyEl('不上警', 'alt', () => submitSimple({ run: false }))
     );
     return;
@@ -3511,7 +3534,7 @@ function markNeedTarget(v, candidates, tip) {
     const sel = el('div', 'pick-sel');
     sel.innerHTML = '已选 <b id="m-dialog-seat">未选择</b>';
     t.appendChild(sel);
-    const go = el('button', 'btn small m-goto-players', '👥 去玩家页选人');
+    const go = el('button', 'btn small m-goto-players', icoLabel('players', '去玩家页选人'));
     go.type = 'button';
     go.addEventListener('click', () => setGameTab('players'));
     t.appendChild(go);
@@ -3595,7 +3618,7 @@ function maybeShowRole(v) {
  */
 function openRulebook() {
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
+  const head = el('div', 'mhead', `<h2>${ico('rulebook')} 规则书</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', closeModalTop);
   head.appendChild(close);
@@ -3641,4 +3664,17 @@ function ensureCardBacks() {
   }
 }
 ensureCardBacks();
+
+/**
+ * 导航/操作图标（计划书 §3 第 78 行）的注入点，与桌面 app.js 同一套两步走：
+ *   ① 立刻注入 shared 的 `<symbol>` 定义（之后 JS 拼的按钮直接 `<use>` 引用）；
+ *   ② 等 `DOMContentLoaded` 再画 `[data-ww-icon]` —— **必须晚于 i18n.js 的挂载**
+ *      （i18n.js 先加载、先注册），否则 applyI18n 会把徽记连同 textContent 一起抹掉。
+ *      切语言时同理（见 toggleLang）。
+ */
+window.WWIcons.ensureDefs(document);
+function mountNavIcons() { window.WWIcons.mount(document); }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountNavIcons);
+else mountNavIcons();
+
 init().catch((e) => { document.body.innerHTML = `<div style="padding:40px;color:#e89ba4">初始化失败：${escapeHtml(e.message)}</div>`; });

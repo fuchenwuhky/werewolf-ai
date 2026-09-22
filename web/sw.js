@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v17-avatar'; // 预缓存清单加入 /shared/avatar-badge.js、/shared/avatar-image.js（M1 §4.1 自定义头像；前代 ww-v16-shared 加的是三个共享状态模块）
+const VERSION = 'ww-v18-icons'; // 预缓存清单加入 /shared/icons.js（§3 第 78 行核心导航/操作图标；前代 ww-v17-avatar 加的是自定义头像的两个模块）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -43,6 +43,7 @@ const SHELL = [
   '/shared/connection-state.js',
   '/shared/avatar-badge.js',
   '/shared/avatar-image.js',
+  '/shared/icons.js',
   '/ai-cast.js',
   '/ai-cast.html',
   '/ai-cast-page.js',

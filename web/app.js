@@ -105,6 +105,19 @@ function renderAvatarInto(node, profile) {
   window.WWAvatarBadge.renderInto(node, profile || null);
 }
 
+/**
+ * 核心导航/操作图标的接线（计划书 §3 第 78 行前半句）。
+ *
+ * 图标本身只有一份定义：`web/shared/icons.js` 里的 39 个 `<symbol>`（每个使用点一行 `<use>`）。
+ * 这里两个函数只负责"把徽记和文案拼到一起"：
+ *   · ico(id)             → 一枚徽记（currentColor，不写死色值）
+ *   · icoLabel(id, text)  → 徽记 + **去掉前导图标字形**的文案（`⚙ 设置` → 徽记 + `设置`）
+ * 去掉的只是**标签开头那个图标位**，文案内部与之后的 emoji 一律不动 —— 聊天内容、
+ * 玩家姓名、角色/状态语义字形都不经过这两个函数（见 icons.js 文件头的位置判据）。
+ */
+function ico(id) { return window.WWIcons.iconMarkup(id); }
+function icoLabel(id, text) { return window.WWIcons.labelMarkup(id, text); }
+
 // ---------------- 局域网配对门（整改 SEC-01 的前端半边） ----------------
 // LAN 模式下未配对的管理请求会拿到 401 {auth:'pairing'}：弹配对码输入层，
 // 配对成功写会话 Cookie 后自动刷新。配对码显示在服务本机的设置页上。
@@ -1225,20 +1238,20 @@ function openProfileManager() {
   const mk = el('button', 'btn', '＋ 新建档案');
   mk.addEventListener('click', () => openProfileEdit(null));
   btnrow.appendChild(mk);
-  const imp = el('button', 'btn ghost', '📥 导入档案包');
+  const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
   imp.addEventListener('click', () => openProfileImport());
   btnrow.appendChild(imp);
   // 回收区入口（FIX-04）：「删除＝归档代替删除」以前删掉就找不回来，这里是唯一的恢复入口。
-  const trashBtn = el('button', 'btn ghost', '🗑 回收站');
+  const trashBtn = el('button', 'btn ghost', icoLabel('trash', '回收站'));
   trashBtn.id = 'pm-trash-entry';
   trashBtn.addEventListener('click', openProfileTrash);
   btnrow.appendChild(trashBtn);
   body.appendChild(btnrow);
   // 计数异步补：失败不静默（标签直接写"读取失败"、title 给出原因），也不影响档案管理本身可用。
   api('GET', '/api/profiles/trash').then((r) => {
-    trashBtn.textContent = `🗑 回收站（${((r && r.items) || []).length}）`;
+    trashBtn.innerHTML = icoLabel('trash', `回收站（${((r && r.items) || []).length}）`);
   }).catch((e) => {
-    trashBtn.textContent = '🗑 回收站（读取失败）';
+    trashBtn.innerHTML = icoLabel('trash', '回收站（读取失败）');
     trashBtn.title = (e && e.message) || '回收区不可用';
   });
   body.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。能读本地文件或管理本服务的人就能看到所有档案。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
@@ -1736,7 +1749,7 @@ async function doRestoreProfile(it, btn, listEl, msgEl) {
 /** 回收区面板：列出被删除（进回收区）的档案，每项带「恢复」 */
 function openProfileTrash() {
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>🗑 回收站</h2>');
+  const head = el('div', 'mhead', `<h2>${ico('trash')} 回收站</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => { closeModal(); openProfileManager(); });
   head.appendChild(close);
@@ -1901,26 +1914,31 @@ async function loadGameMeta() {
  */
 function openGearMenu() {
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>⚙ 设置</h2>');
-  const close = el('button', 'btn ghost small', '✕');
+  const head = el('div', 'mhead', `<h2>${ico('settings')} 设置</h2>`);
+  const close = el('button', 'btn ghost small', ico('close'));
   close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
   const list = el('div', 'gear-list');
   const v = state.view;
+  // 齿轮菜单条目 = [文案, 徽记 id, 动作]，由下面的渲染处拼成「徽记 + 纯文本」。
+  // ⚠ 顺序只能是"文案在前、徽记 id 在后"：test/css.test.js:502 用一条形态断言
+  //   （`items.push([` 之后紧跟一个单引号字符串，该串以"结束本局"结尾）来证明
+  //   §3 行77「危险操作不能只靠红色表达」——危险条目必须**带可见文案**。
+  //   那个文件不在本批可改范围，所以这里不能把 icoLabel(...) 直接放在数组首元素的位置。
   const items = [
-    ['📖 规则书', () => openRulebook()],
-    [I18N.t('codex.entry'), () => openCodex()],
-    ['🎴 我的身份牌', () => { if (v && v.me && v.me.role) openInspect(v.me.role); }],
-    ['📝 私人笔记', () => toggleNotesDrawer()],
-    [`👁 上帝视角（当前${state.godMode ? '开' : '关'}）`, () => toggleGod()],
-    [`🌐 切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, () => switchLangDesktop()],
-    ['📱 手机 APP 端', () => { window.location.href = '/m/'; }],
+    ['规则书', 'rulebook', () => openRulebook()],
+    [I18N.t('codex.entry'), 'codex', () => openCodex()],
+    ['我的身份牌', 'card', () => { if (v && v.me && v.me.role) openInspect(v.me.role); }],
+    ['私人笔记', 'notes', () => toggleNotesDrawer()],
+    [`上帝视角（当前${state.godMode ? '开' : '关'}）`, 'god', () => toggleGod()],
+    [`切换语言（当前${I18N.getLang() === 'en' ? ' English' : ' 中文'}）`, 'lang', () => switchLangDesktop()],
+    ['手机 APP 端', 'mobile', () => { window.location.href = '/m/'; }],
   ];
-  if (v && !v.finished) items.push(['⏹ 结束本局', () => terminateGame()]);
-  items.push(['🏠 返回首页', () => backHome()]);
-  items.forEach(([label, fn], i) => {
-    const b = el('button', 'gear-item' + (i === items.length - 1 ? '' : ''), label);
+  if (v && !v.finished) items.push(['结束本局', 'end', () => terminateGame()]);
+  items.push(['返回首页', 'home', () => backHome()]);
+  items.forEach(([label, icon, fn], i) => {
+    const b = el('button', 'gear-item' + (i === items.length - 1 ? '' : ''), icoLabel(icon, label));
     if (/结束本局/.test(label)) b.classList.add('danger');
     b.addEventListener('click', () => { closeModal(); fn(); });
     list.appendChild(b);
@@ -1933,6 +1951,11 @@ function openGearMenu() {
 
 function switchLangDesktop() {
   I18N.setLang(I18N.getLang() === 'en' ? 'zh-CN' : 'en');
+  // 语言档位换的是 data-i18n 的文案，而 i18n 词典里的导航文案仍带前导图标字形
+  // （📖 角色图鉴…）：applyI18n 会整块重写 textContent，把徽记一起抹掉。
+  // 所以这里必须**在 setLang 之后**按 data-ww-icon 重画一遍 —— 否则切一次语言，
+  // 图标就退回到 emoji（这正是"两端行为一致"最容易被破坏的一步）。
+  window.WWIcons.mount(document);
   renderSetupDigest(); // 信息条与摘要是 JS 拼的，不跟着 data-i18n 自动重刷
   if (codexVisible()) window.Codex.render(); // 图鉴内容由 JS 拼，不跟着 data-i18n 自动重刷
 }
@@ -1999,7 +2022,7 @@ function openLegacyPendingPrompt(pending) {
   const seats = Object.keys(pending);
   if (!seats.length) return;
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>🏷 旧标记待确认</h2>');
+  const head = el('div', 'mhead', `<h2>${ico('tag')} 旧标记待确认</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
@@ -2193,7 +2216,12 @@ function openTagModal(seat) {
 
   const wrap = el('div');
   const name = (v.players.find((p) => p.seat === seat) || {}).name || '';
-  const head = el('div', 'mhead', `<h2>📝 ${seat} 号的私人笔记</h2>`);
+  // ⚠ 这里用声明式的 `data-ww-icon`（由 openModal 统一挂载），**不是** ico()：
+  // test/annotation-editor.test.js 会把本函数整段切出来丢进一个只有 el/escapeHtml/… 的
+  // vm 沙箱里真跑一遍（用来抓"正文没进 dirty 判断"这类闭包错误），沙箱里没有 ico 也没有
+  // window。调用任何外部辅助函数都会让那三条既有断言直接 ReferenceError。
+  // 所以：**会被整段抽出来单跑的弹层函数，一律不许调用沙箱里没有的全局**。
+  const head = el('div', 'mhead', `<h2 data-ww-icon="notes">${seat} 号的私人笔记</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => {
     if (dirty() && !confirm('有未保存的修改，确定放弃？')) return;
@@ -2328,7 +2356,7 @@ function renderNotesList() {
     um.appendChild(el('div', 'hint', '可撤销回修改前的内容'));
     u.appendChild(um);
     const uo = el('div', 'pm-ops');
-    const ub = el('button', 'btn ghost small', '↩ 撤销');
+    const ub = el('button', 'btn ghost small', icoLabel('undo', '撤销'));
     ub.addEventListener('click', async () => {
       const { seat, prev } = state.annoUndo;
       state.annoUndo = null;
@@ -2363,7 +2391,7 @@ function renderNotesList() {
   const entries = Object.entries(state.anno.seats || {})
     .filter(([, a]) => a && (a.leaning !== 'neutral' || (a.candidateRoleIds || []).length || a.claimedRoleId || a.note));
   if (!entries.length) {
-    box.appendChild(el('p', 'hint', '还没有笔记。点击圆桌座位上的 🏷 开始标注；这里是全部笔记的汇总列表。'));
+    box.appendChild(el('p', 'hint', `还没有笔记。点击圆桌座位上的 ${ico('tag')} 开始标注；这里是全部笔记的汇总列表。`));
     return;
   }
   entries.sort((x, y) => Number(x[0]) - Number(y[0])).forEach(([seat, a]) => {
@@ -2609,8 +2637,8 @@ function updatePausedBanner(v) {
     `<div class="pb-msg">${title}${p.code ? `（业务码 ${escapeHtml(String(p.code))}）` : ''}：${escapeHtml(String(p.message || ''))}</div>` +
     `<div class="pb-hint">${when}。当前进度已完整保存，额度恢复后点「继续对局」即可从断点续跑，已发生的发言不会重来。</div>` +
     `<div class="pb-actions">` +
-    `<button class="btn primary" id="btn-resume-paused">继续对局</button>` +
-    `<button class="btn ghost" id="btn-terminate-paused">终止本局</button>` +
+    `<button class="btn primary" id="btn-resume-paused">${icoLabel('resume', '继续对局')}</button>` +
+    `<button class="btn ghost" id="btn-terminate-paused">${icoLabel('end', '终止本局')}</button>` +
     `</div>`;
   $('#btn-resume-paused').addEventListener('click', resumePausedGame);
   $('#btn-terminate-paused').addEventListener('click', terminateGame);
@@ -2634,7 +2662,7 @@ async function resumePausedGame() {
     await poll();
   } catch (e) {
     alert(`恢复失败：${e.message}`);
-    if (btn) { btn.disabled = false; btn.textContent = '继续对局'; }
+    if (btn) { btn.disabled = false; btn.innerHTML = icoLabel('resume', '继续对局'); }
   }
 }
 
@@ -3254,7 +3282,7 @@ function buildSeatStructure(v, structKey) {
     if (window.AICast) window.AICast.decorate(snum, portraits.get(p.seat));
     const sname = el('span', 'sname');
     // 身份标注（NOTE-03）：常显入口（不能只在 hover 出现——计划 §4.3），与目标选择是兄弟节点
-    const tagBtn = el('button', 'btn small ghost tag-btn', '🏷');
+    const tagBtn = el('button', 'btn small ghost tag-btn', ico('tag'));
     tagBtn.type = 'button';
     tagBtn.title = '编辑 TA 的私人笔记（AI 看不到）';
     tagBtn.setAttribute('aria-label', `${p.seat}号私人笔记`);
@@ -3282,7 +3310,7 @@ function buildSeatStructure(v, structKey) {
     const rmeta = el('span', 'row-meta hint');
     rmain.append(rname, rmeta);
     const rvotes = el('span', 'votecount hidden');
-    const rtag = el('button', 'btn small ghost tag-btn', '🏷');
+    const rtag = el('button', 'btn small ghost tag-btn', ico('tag'));
     rtag.type = 'button';
     rtag.title = '编辑 TA 的私人笔记（AI 看不到）';
     rtag.setAttribute('aria-label', `${p.seat}号私人笔记`);
@@ -3384,7 +3412,7 @@ function patchSeatNode(node, p, i, ctx) {
   const tc = node.querySelector('.tag-chip');
   if (tc) {
     tc.classList.toggle('hidden', !sum);
-    if (sum) { tc.textContent = `🏷${sum}`; tc.title = '我的私人笔记摘要（AI 看不到）'; }
+    if (sum) { tc.innerHTML = ico('tag') + escapeHtml(sum); tc.title = '我的私人笔记摘要（AI 看不到）'; }
   }
   node.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
 }
@@ -3441,7 +3469,7 @@ function patchSeatRow(row, p, i, ctx) {
   const rsum = row.querySelector('.tag-chip');
   if (rsum) {
     rsum.classList.toggle('hidden', !sum);
-    if (sum) { rsum.textContent = `🏷${sum}`; rsum.title = '我的私人笔记摘要（AI 看不到）'; }
+    if (sum) { rsum.innerHTML = ico('tag') + escapeHtml(sum); rsum.title = '我的私人笔记摘要（AI 看不到）'; }
   }
   row.title = `${p.seat}号 ${p.name}${p.alive ? '' : '（已出局）'}${p.isSheriff ? ' · 警长' : ''}${info ? ` · ${info.name}` : ''}${canPick ? ' · 点击选为目标' : ''}`;
 }
@@ -3571,9 +3599,9 @@ function renderMyRoleCard(v) {
       <div class="mrc-role" style="color:${r.color}">${r.emoji} ${r.name}</div>
       <div class="mrc-sub">${v.me.seat}号 · ${v.me.alive ? '存活' : '出局'}${v.me.isSheriff ? ' · 👑警长' : ''}</div>
       <div class="btnrow">
-        <button class="btn small ghost" id="mrc-inspect" title="检视卡牌">🔍</button>
-        <button class="btn small ghost" id="mrc-task" title="查看任务">📋</button>
-        <button class="btn small ghost" id="mrc-strategy" title="查看策略卡">🧭</button>
+        <button class="btn small ghost" id="mrc-inspect" title="检视卡牌">${ico('inspect')}</button>
+        <button class="btn small ghost" id="mrc-task" title="查看任务">${ico('task')}</button>
+        <button class="btn small ghost" id="mrc-strategy" title="查看策略卡">${ico('strategy')}</button>
       </div>
     </div>`;
   $('#mrc-inspect').addEventListener('click', () => openInspect(v.me.role));
@@ -3588,11 +3616,11 @@ function openMyTask(v) {
     : '🌱 好人阵营目标：放逐场上所有狼人即获胜。';
   const mates = me.teammates && me.teammates.length ? `<p>🐺 你的狼队队友：${me.teammates.join('、')} 号（夜晚狼队频道可商议）</p>` : '';
   const wrap = el('div');
-  wrap.innerHTML = `<div class="mhead"><h2>📋 你的任务</h2></div><div class="mbody">
+  wrap.innerHTML = `<div class="mhead"><h2>${ico('task')} 你的任务</h2></div><div class="mbody">
     <p><b style="color:${r.color}">${r.emoji} ${r.name}</b> · 你是 ${me.seat} 号（${me.alive ? '存活' : '出局'}${me.isSheriff ? ' · 警长' : ''}）</p>
     <p>${escapeHtml(r.description)}</p>${mates}
     <p>${win}</p>
-    <p class="hint">小贴士：点角色卡上的 🧭 策略 可查看参考打法。</p>
+    <p class="hint">小贴士：点角色卡上的 ${ico('strategy')} 策略 可查看参考打法。</p>
   </div>`;
   openModal(wrap);
 }
@@ -3601,7 +3629,7 @@ function openStrategy(rid) {
   const list = (state.meta.roleStrategies || {})[rid] || [];
   const r = roleInfo(rid);
   const wrap = el('div');
-  wrap.innerHTML = `<div class="mhead"><h2>🧭 ${r.name} · 策略参考</h2></div><div class="mbody">
+  wrap.innerHTML = `<div class="mhead"><h2>${ico('strategy')} ${r.name} · 策略参考</h2></div><div class="mbody">
     <p class="hint">以下打法供参考，可灵活应变，不必照搬。</p>
     ${list.map((t) => `<p><b>【${t.name}】</b>${escapeHtml(t.text)}</p>`).join('') || '<p>暂无策略卡。</p>'}
   </div>`;
@@ -3636,7 +3664,7 @@ async function confirmDuel(v) {
 
 function mountDuelBtn(v, box) {
   if (!canDuelNow(v) || box.querySelector('.duel-now-btn')) return;
-  const b = el('button', 'btn danger duel-now-btn', '⚔️ 随时决斗');
+  const b = el('button', 'btn danger duel-now-btn', icoLabel('duel', '随时决斗'));
   b.title = '骑士白天随时可决斗：决中狼人入夜，决错以死谢罪';
   b.addEventListener('click', () => confirmDuel(v));
   box.appendChild(b);
@@ -3667,7 +3695,7 @@ async function confirmExplode(v) {
 
 function mountExplodeBtn(v, box) {
   if (!canExplodeNow(v) || box.querySelector('.explode-now-btn')) return;
-  const b = el('button', 'btn danger explode-now-btn', '🔮 随时自爆');
+  const b = el('button', 'btn danger explode-now-btn', icoLabel('explode', '随时自爆'));
   b.title = '狼人白天随时可自爆：公开身份、立即天黑';
   b.addEventListener('click', () => confirmExplode(v));
   box.appendChild(b);
@@ -3916,7 +3944,7 @@ function buildActionUI(v, p, box) {
       const ex = p.extra || {};
       $('#pending-hint').textContent = `⏳ 女巫用药（每晚限一瓶）`;
       if (ex.canAntidote) {
-        const saveBtn = el('button', 'btn', `💊 用解药救 ${ex.killTarget} 号`);
+        const saveBtn = el('button', 'btn', icoLabel('antidote', `用解药救 ${ex.killTarget} 号`));
         saveBtn.addEventListener('click', async () => {
           try {
             await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: { antidote: true, poison: 0 } });
@@ -3929,7 +3957,7 @@ function buildActionUI(v, p, box) {
         box.appendChild(el('span', 'hint', '或选择毒杀：'));
         box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
         const btnRow = el('div', 'btnrow');
-        btnRow.appendChild(confirmBtn('☠️ 使用毒药', () => ({ antidote: false, poison: Number(actionState.target) || 0 }))); // FIX-15：null→0，与改动前一致
+        btnRow.appendChild(confirmBtn(icoLabel('poison', '使用毒药'), () => ({ antidote: false, poison: Number(actionState.target) || 0 }))); // FIX-15：null→0，与改动前一致
         box.appendChild(btnRow);
       }
       const skip = el('button', 'btn ghost', '空过（都不用）');
@@ -3944,7 +3972,7 @@ function buildActionUI(v, p, box) {
     }
     case 'sheriff_run': {
       $('#pending-hint').textContent = '⏳ 警长竞选：是否上警？';
-      const run = el('button', 'btn primary', '🎩 上警');
+      const run = el('button', 'btn primary', icoLabel('sheriff', '上警'));
       const norun = el('button', 'btn', '不上警');
       run.addEventListener('click', () => submitSimple({ run: true }, run));
       norun.addEventListener('click', () => submitSimple({ run: false }, norun));
@@ -4067,6 +4095,10 @@ function openModal(inner, { onDismiss } = {}) {
   } else {
     modal.appendChild(inner);
   }
+  // 弹层内容是 JS 现拼的，声明式的 `[data-ww-icon]` 只有到这一刻才有实体：
+  // 在这里统一画一次（mount 幂等，重复打开同一弹层不会叠加徽记）。
+  // 静态 HTML 里那一批由 app.js 启动时的 DOMContentLoaded 与切语言后的重画负责。
+  window.WWIcons.mount(modal);
   mask.appendChild(modal);
   const title = modal.querySelector('h2, h3');
   if (title) { title.id = 'active-modal-title'; modal.setAttribute('aria-labelledby', title.id); }
@@ -4149,7 +4181,7 @@ function isComposing(e) { return !!(e.isComposing || e.keyCode === 229); }
  */
 function openRulebook() {
   const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>📖 规则书</h2>');
+  const head = el('div', 'mhead', `<h2>${ico('rulebook')} 规则书</h2>`);
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
@@ -4193,7 +4225,7 @@ function renderCodexTab(box) {
     c.innerHTML = `${roleArtHtml(r.id)}
       <h4>${r.emoji} ${r.name} <small style="color:${r.color}">${{ wolf: '狼人阵营', god: '神职', villager: '平民' }[r.category]}</small></h4>
       <p>${r.short}</p>
-      <button class="btn small ghost">🔍 检视</button>`;
+      <button class="btn small ghost">${icoLabel('inspect', '检视')}</button>`;
     c.querySelector('.btn').addEventListener('click', (e) => { e.stopPropagation(); openInspect(r.id); });
     grid.appendChild(c);
   }
@@ -4273,7 +4305,7 @@ function renderCoach(v) {
   box.innerHTML = '';
 
   const head = el('div', 'coach-head');
-  head.appendChild(el('h3', '', '🏁 结算'));
+  head.appendChild(el('h3', '', icoLabel('finish', '结算')));
   if (r && r.status === 'done') {
     const again = el('button', 'btn ghost small', r.mode === 'ai' ? '重新生成' : '用 AI 重新点评');
     again.addEventListener('click', () => requestCoach(true));
@@ -4333,19 +4365,19 @@ function renderCoach(v) {
 
   // 时间线回看 + 个人标注入口（复用现有流程，不重复发起付费生成）
   const tools = el('div', 'btnrow');
-  const timelineBtn = el('button', 'btn ghost small', '⏮ 回看完整时间线');
+  const timelineBtn = el('button', 'btn ghost small', icoLabel('timeline', '回看完整时间线'));
   timelineBtn.addEventListener('click', () => {
     const s = $('#stream');
     if (s) { s.scrollTop = 0; hideNewMsgPill(); }
   });
   tools.appendChild(timelineBtn);
-  const annoBtn = el('button', 'btn ghost small', '📝 我的标注');
+  const annoBtn = el('button', 'btn ghost small', icoLabel('notes', '我的标注'));
   annoBtn.addEventListener('click', () => toggleNotesDrawer());
   tools.appendChild(annoBtn);
   more.appendChild(tools);
 
   // AI 复盘入口（已有结果优先读取；生成中状态可恢复；失败明确重试；页面切换/刷新不自动重复发起）
-  more.appendChild(el('h4', null, '🎓 AI 复盘'));
+  more.appendChild(el('h4', null, icoLabel('coach', 'AI 复盘')));
   if (!r) {
     const btn = el('button', 'btn', '让教练点评这一局');
     const row = el('div', 'btnrow');
@@ -4471,6 +4503,20 @@ function ensureCardBacks() {
   }
 }
 ensureCardBacks();
+
+/**
+ * 导航/操作图标（计划书 §3 第 78 行）的注入点，分两步：
+ *   ① 立刻注入那份 shared 的 `<symbol>` 定义 —— 之后任何 JS 拼出来的按钮（齿轮菜单、
+ *      弹层标题、行动键）都能直接用 `<use>` 引用，不必各自带一份路径；
+ *   ② 等 `DOMContentLoaded` 再画 `[data-ww-icon]` —— **必须晚于 i18n.js 的挂载**
+ *      （i18n.js 先加载、先注册，所以它的 applyI18n 先跑），因为 applyI18n 会把
+ *      `data-i18n` 元素的 textContent 整块换成词典文案，连同徽记一起抹掉。
+ *      切语言时同理（见 switchLangDesktop / m.js 的 toggleLang）。
+ */
+window.WWIcons.ensureDefs(document);
+function mountNavIcons() { window.WWIcons.mount(document); }
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountNavIcons);
+else mountNavIcons();
 window.addEventListener('storage', async (e) => {
   if (!window.WWProfileState.isSelectionKey(e.key)) return;
   await loadProfiles();

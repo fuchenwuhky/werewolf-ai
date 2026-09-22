@@ -66,14 +66,14 @@
       <!-- 继续上局：有可恢复局才显示（模式 / 阶段 / 保存时间见 meta 行） -->
       <div id="m-resume-card" class="m-resume hidden">
         <div class="m-resume-info">
-          <b id="m-resume-title">▶ 继续上局</b>
+          <b id="m-resume-title" data-ww-icon="resume">继续上局</b>
           <span class="hint" id="m-resume-meta"></span>
         </div>
-        <button class="btn primary" id="m-resume-go" type="button">▶ 继续</button>
+        <button class="btn primary" id="m-resume-go" data-ww-icon="resume" type="button">继续</button>
       </div>
 
       <!-- 主行动 -->
-      <button class="btn primary big m-home-cta" id="m-play-new" type="button">⚔ 开始新局</button>
+      <button class="btn primary big m-home-cta" id="m-play-new" data-ww-icon="start" type="button">开始新局</button>
       <!-- AC-11/§4：模式选择改单选卡（红开关形似扣费主行动按钮——审查项） -->
       <div class="m-mode-cards" role="radiogroup" aria-label="对局模式">
         <button class="m-mode-card sel" id="m-mock-btn" type="button" role="radio" aria-checked="true" data-mode="mock">
@@ -94,18 +94,18 @@
 
       <!-- 次级入口：不占主视区 -->
       <div class="m-more-row">
-        <button class="btn ghost small" id="m-settings-btn" data-i18n="m.settings">⚙ 设置</button>
-        <button class="btn ghost small" id="m-codex-btn" data-i18n="codex.entry">📖 角色图鉴</button>
-        <button class="btn ghost small" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
+        <button class="btn ghost small" id="m-settings-btn" data-ww-icon="settings" data-i18n="m.settings">设置</button>
+        <button class="btn ghost small" id="m-codex-btn" data-ww-icon="codex" data-i18n="codex.entry">角色图鉴</button>
+        <button class="btn ghost small" id="btn-lang" data-ww-icon="lang" data-i18n-title="api.langSwitch" title="切换界面语言">中</button>
       </div>
-      <p class="hint m-home-note">API / 模型配置在「⚙ 设置」里（安装级，此设备共享）。</p>
+      <p class="hint m-home-note">API / 模型配置在「<span data-ww-icon="settings">设置</span>」里（安装级，此设备共享）。</p>
     </div>
 
     <!-- 底部主入口（FIN-04 §8.1：至多四个；局中由 #m-tabs 接管导航，两套底栏不同屏叠加） -->
     <nav class="m-tabbar" id="m-tabbar" aria-label="主页导航">
-      <button class="m-tab-btn active" id="m-tab-start" type="button">⚔ 开始</button>
-      <button class="m-tab-btn" id="m-tab-game" type="button">🎲 对局</button>
-      <button class="m-tab-btn" id="m-tab-codex" type="button">📖 资料</button>
+      <button class="m-tab-btn active" id="m-tab-start" data-ww-icon="start" type="button">开始</button>
+      <button class="m-tab-btn" id="m-tab-game" data-ww-icon="game" type="button">对局</button>
+      <button class="m-tab-btn" id="m-tab-codex" data-ww-icon="codex" type="button">资料</button>
       <button class="m-tab-btn" id="m-tab-me" type="button">👤 我的</button>
     </nav>
   </section>
@@ -115,9 +115,9 @@
        手机宽度放不下"左翻牌 + 右细节"的并排布局。 -->
   <section id="m-codex" class="m-screen hidden">
     <header class="m-head">
-      <button class="btn small" id="m-codex-back" data-i18n-title="codex.back" title="返回">←</button>
+      <button class="btn small" id="m-codex-back" data-ww-icon="back" data-i18n-title="codex.back" title="返回"></button>
       <h2 data-i18n="codex.title">角色图鉴</h2>
-      <button class="btn small ghost" id="cdx-rulebook" data-i18n="codex.rulebook">📖 完整规则书</button>
+      <button class="btn small ghost" id="cdx-rulebook" data-ww-icon="rulebook" data-i18n="codex.rulebook">完整规则书</button>
     </header>
     <p class="cdx-sub" id="cdx-sub"></p>
     <input id="cdx-search" type="search" data-i18n-placeholder="codex.search" placeholder="搜索身份…" data-i18n-aria="codex.search" aria-label="搜索身份">
@@ -127,7 +127,7 @@
 
   <!-- 屏3：规则确认（开始新局 · 第二步） -->
   <section id="m-rules" class="m-screen hidden">    <header class="m-head">
-      <button class="btn small" id="m-back" data-i18n-title="m.back" title="返回">←</button>
+      <button class="btn small" id="m-back" data-ww-icon="back" data-i18n-title="m.back" title="返回"></button>
       <h2 id="m-rules-title" data-i18n="m.rulesTitle">对局规则</h2>
     </header>
     <div class="m-scroll">
@@ -146,11 +146,11 @@
         <button class="btn ghost small" id="m-profile-manage" type="button">管理档案…</button>
       </div>
       <p class="hint" style="margin-top:10px" data-i18n="m.aiNamesHint">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
-      <a class="btn ghost" href="../ai-cast.html?from=mobile" target="_blank" rel="noopener">AI 来客名册 ↗</a>
+      <a class="btn ghost" data-ww-icon="aiCast" href="../ai-cast.html?from=mobile" target="_blank" rel="noopener">AI 来客名册 ↗</a>
     </div>
     <div class="m-foot">
       <span class="hint" id="m-err"></span>
-      <button class="btn primary big" id="m-start" data-i18n="m.start">⚔ 开始游戏</button>
+      <button class="btn primary big" id="m-start" data-ww-icon="start" data-i18n="m.start">开始游戏</button>
     </div>
   </section>
 
@@ -159,7 +159,7 @@
        玩家页把两列座位重排成 ≥96px 的卡片网格，笔记页切到 #m-notes-pane。 -->
   <section id="m-game" class="m-screen hidden tab-speech">
     <header class="m-bar">
-      <button class="m-gear" id="m-gear" title="设置" aria-label="设置" data-i18n-title="m.gearTitle">⚙</button>
+      <button class="m-gear" id="m-gear" data-ww-icon="settings" title="设置" aria-label="设置" data-i18n-title="m.gearTitle"></button>
       <div class="m-status">
         <img class="m-bar-mark" src="../assets/brand/wolf-emblem.svg" alt="" aria-hidden="true" width="20" height="20">
         <b id="m-day"></b>
@@ -167,7 +167,7 @@
         <span id="m-memory" class="m-phase-chip hidden"></span>
         <span id="m-owner" class="m-owner"></span>
       </div>
-      <button class="m-bar-btn" id="m-rulebook-btn" title="规则书" aria-label="规则书" data-i18n-title="game.rulebookTitle">📖</button>
+      <button class="m-bar-btn" id="m-rulebook-btn" data-ww-icon="rulebook" title="规则书" aria-label="规则书" data-i18n-title="game.rulebookTitle"></button>
     </header>
 
     <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
@@ -175,9 +175,9 @@
 
     <!-- 局内页签：发言 | 玩家 | 笔记（FIN-06 §10.1） -->
     <nav class="m-tabs" id="m-tabs" role="tablist" aria-label="局内页签">
-      <button class="m-tab-btn active" id="m-tabbtn-speech" role="tab" aria-selected="true" type="button">💬 发言</button>
-      <button class="m-tab-btn" id="m-tabbtn-players" role="tab" aria-selected="false" type="button">👥 玩家</button>
-      <button class="m-tab-btn" id="m-tabbtn-notes" role="tab" aria-selected="false" type="button">🏷 笔记</button>
+      <button class="m-tab-btn active" id="m-tabbtn-speech" data-ww-icon="speech" role="tab" aria-selected="true" type="button">发言</button>
+      <button class="m-tab-btn" id="m-tabbtn-players" data-ww-icon="players" role="tab" aria-selected="false" type="button">玩家</button>
+      <button class="m-tab-btn" id="m-tabbtn-notes" data-ww-icon="tag" role="tab" aria-selected="false" type="button">笔记</button>
     </nav>
 
     <!-- 主体：发言页（全宽流程） / 玩家页（座位卡片网格，复用两列座位容器） -->
@@ -223,8 +223,8 @@
   </div>
   <div class="flip-caption" id="m-flip-caption"></div>
   <div class="flip-tools">
-    <button class="btn primary" id="m-flip-done" data-i18n="m.start">开始游戏</button>
-    <button class="btn" id="m-inspect-btn" data-i18n="m.inspect">🔍 检视</button>
+    <button class="btn primary" id="m-flip-done" data-ww-icon="start" data-i18n="m.start">开始游戏</button>
+    <button class="btn" id="m-inspect-btn" data-ww-icon="inspect" data-i18n="m.inspect">检视</button>
   </div>
 </div>
 <script src="../i18n.js"></script>
@@ -240,6 +240,7 @@
 <script src="../shared/connection-state.js"></script>
 <script src="../shared/avatar-badge.js"></script>
 <script src="../shared/avatar-image.js"></script>
+<script src="../shared/icons.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

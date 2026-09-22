@@ -97,8 +97,8 @@
           <h1 id="app-title" data-i18n="app.title">AI 狼人杀</h1>
           <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
         </div>
-        <button class="btn ghost small hero-lang" id="btn-lang" data-i18n-title="api.langSwitch" title="切换界面语言">🌐 中</button>
-        <button class="btn ghost small hero-codex" id="btn-codex" data-i18n="codex.entry">📖 角色图鉴</button>
+        <button class="btn ghost small hero-lang" id="btn-lang" data-ww-icon="lang" data-i18n-title="api.langSwitch" title="切换界面语言">中</button>
+        <button class="btn ghost small hero-codex" id="btn-codex" data-ww-icon="codex" data-i18n="codex.entry">角色图鉴</button>
       </div>
     </header>
 
@@ -122,7 +122,7 @@
               <h2 data-i18n="resume.title">发现进行中的对局</h2>
               <p class="hint" id="resume-meta" style="margin:-4px 0 0"></p>
               <div class="btnrow">
-                <button class="btn primary" id="btn-resume" data-i18n="resume.continue">▶ 继续对局</button>
+                <button class="btn primary" id="btn-resume" data-ww-icon="resume" data-i18n="resume.continue">继续对局</button>
                 <button class="btn ghost" id="btn-discard" data-i18n="resume.discard">放弃并清除</button>
               </div>
             </div>
@@ -132,7 +132,7 @@
 
             <!-- 主行动区：开始按钮 + 确认要素行（这一局是什么）+ 费用说明 -->
             <div class="home-cta">
-              <button class="btn primary big" id="btn-start" data-i18n="start.button" disabled title="界面加载配置中…">🎮 开始游戏</button>
+              <button class="btn primary big" id="btn-start" data-ww-icon="start" data-i18n="start.button" disabled title="界面加载配置中…">开始游戏</button>
               <span class="hint">Mock 试玩不调用 API、完全免费；真实对局按你配置的模型服务商计费。</span>
               <span class="hint setup-warn" id="setup-warn" role="status"></span>
             </div>
@@ -143,10 +143,10 @@
 
           <!-- 次级入口行：低频资料与设置不占第一屏主体 -->
           <nav class="home-side" aria-label="资料与设置入口">
-            <button class="btn ghost home-entry" id="entry-codex" type="button">🎴 角色图鉴</button>
-            <a class="btn ghost home-entry" href="ai-cast.html" target="_blank" rel="noopener">🤖 AI 来客名册 ↗</a>
-            <button class="btn ghost home-entry" id="entry-rulebook" type="button">📖 规则书</button>
-            <button class="btn ghost home-entry" id="entry-settings" type="button">⚙ 开局设置 · 模型与密钥</button>
+            <button class="btn ghost home-entry" id="entry-codex" data-ww-icon="codex" type="button">角色图鉴</button>
+            <a class="btn ghost home-entry" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a>
+            <button class="btn ghost home-entry" id="entry-rulebook" data-ww-icon="rulebook" type="button">规则书</button>
+            <button class="btn ghost home-entry" id="entry-settings" data-ww-icon="settings" type="button">开局设置 · 模型与密钥</button>
           </nav>
         </div>
       </div>
@@ -217,7 +217,7 @@
               <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
               <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
               <div id="ai-names" class="ai-names"></div>
-              <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button><a class="btn ghost" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a></div>
+              <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button><a class="btn ghost" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a></div>
               <p class="hint" data-i18n="players.personaHint">人格提示词可在下方高级选项为每个 AI 定制（可选）</p>
               <details><summary class="hint" data-i18n="players.advanced">高级：AI 人格设置</summary><div id="ai-personas" class="ai-names"></div></details>
             </div>
@@ -289,7 +289,7 @@
               <div id="recovery-list" class="pm-list" style="display:none"></div>
               <div class="btnrow">
                 <button class="btn ghost" id="btn-device-profiles" type="button">👤 档案管理（导入 / 导出 / 战绩）</button>
-                <a class="btn ghost" href="/m/">📱 手机端页面</a>
+                <a class="btn ghost" data-ww-icon="mobile" href="/m/">手机端页面</a>
               </div>
               <p class="hint" id="pairing-status"></p>
             </div>
@@ -326,8 +326,8 @@
       </div>
       <div class="top-actions">
         <span class="alive-meter" id="g-alive" title="存活人数"></span>
-        <button class="btn ghost icon-btn" id="btn-notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记">📝</button>
-        <button class="btn ghost icon-btn" id="btn-gear" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置">⚙</button>
+        <button class="btn ghost icon-btn" id="btn-notes" data-ww-icon="notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记"></button>
+        <button class="btn ghost icon-btn" id="btn-gear" data-ww-icon="settings" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置"></button>
       </div>
     </header>
 
@@ -339,8 +339,8 @@
         <div id="my-role-card" class="my-role hidden"></div>
         <!-- 座位视图切换（FIN-05）：圆桌 / 列表共用同一份选择状态，切换不清草稿、不改目标、不重建对局 -->
         <div class="seat-tabs" role="group" aria-label="座位视图切换">
-          <button class="chip sel" id="seat-view-ring" type="button" aria-pressed="true">⚪ 圆桌</button>
-          <button class="chip" id="seat-view-list" type="button" aria-pressed="false">☰ 列表</button>
+          <button class="chip sel" id="seat-view-ring" data-ww-icon="ring" type="button" aria-pressed="true">圆桌</button>
+          <button class="chip" id="seat-view-list" data-ww-icon="list" type="button" aria-pressed="false">列表</button>
         </div>
         <aside id="seats" class="seats"></aside>
         <aside id="seats-list" class="seats-list hidden" aria-label="座位列表"></aside>
@@ -356,8 +356,8 @@
            与上帝抽屉同一套抽屉样式；Esc 关闭，焦点回顶栏按钮。 -->
       <aside id="notes-drawer" class="god-drawer hidden" aria-label="私人笔记">
         <div class="drawer-head">
-          <h3>📝 私人笔记</h3>
-          <button class="btn ghost small" id="btn-notes-close"><span>✕ 关闭</span></button>
+          <h3 data-ww-icon="notes">私人笔记</h3>
+          <button class="btn ghost small" id="btn-notes-close"><span data-ww-icon="close">关闭</span></button>
         </div>
         <p class="hint">只是你自己的推理笔记，AI 完全看不到；按对局与档案保存。已公开的身份会自动覆盖你的推测。</p>
         <div id="notes-list"></div>
@@ -371,8 +371,8 @@
 
     <aside id="god-drawer" class="god-drawer hidden">
       <div class="drawer-head">
-        <h3 data-i18n="god.title">👁 上帝 / 开发者面板</h3>
-        <button class="btn ghost small" id="btn-god-close" title="关闭面板（返回玩家视角）" data-i18n-title="god.closeTitle"><span data-i18n="common.close">✕ 关闭</span></button>
+        <h3 data-ww-icon="god" data-i18n="god.title">上帝 / 开发者面板</h3>
+        <button class="btn ghost small" id="btn-god-close" title="关闭面板（返回玩家视角）" data-i18n-title="god.closeTitle"><span data-ww-icon="close" data-i18n="common.close">关闭</span></button>
       </div>
       <div id="god-stats"></div>
       <h4 data-i18n="god.context">AI 上下文调试</h4>
@@ -402,14 +402,14 @@
        牌面用与身份牌同一套 .card-frame（SVG 画框）+ 同一张立绘，图鉴里看到的就是手上那张。 -->
   <section id="screen-codex" class="screen hidden">
     <header class="cdx-head">
-      <button class="btn ghost small" id="btn-codex-back" data-i18n="codex.back">← 返回</button>
+      <button class="btn ghost small" id="btn-codex-back" data-ww-icon="back" data-i18n="codex.back">返回</button>
       <div class="cdx-title">
         <h1 data-i18n="codex.title">角色图鉴</h1>
         <p class="cdx-sub" id="cdx-sub"></p>
       </div>
       <div class="cdx-tools">
         <input id="cdx-search" type="search" data-i18n-placeholder="codex.search" placeholder="搜索身份…" data-i18n-aria="codex.search" aria-label="搜索身份">
-        <button class="btn ghost small" id="btn-codex-rulebook" data-i18n="codex.rulebook">📖 完整规则书</button>
+        <button class="btn ghost small" id="btn-codex-rulebook" data-ww-icon="rulebook" data-i18n="codex.rulebook">完整规则书</button>
       </div>
     </header>
     <div class="cdx-filters" id="cdx-filters"></div>
@@ -433,7 +433,7 @@
     <div class="flip-caption" id="flip-caption"></div>
     <div class="flip-tools">
       <button class="btn primary" id="btn-flip-done" data-i18n="overlay.flipDone">我记住了，开始游戏</button>
-      <button class="btn" id="btn-inspect" data-i18n="overlay.inspect">🔍 检视卡牌</button>
+      <button class="btn" id="btn-inspect" data-ww-icon="inspect" data-i18n="overlay.inspect">检视卡牌</button>
     </div>
   </div>
 </div>
@@ -450,6 +450,7 @@
 <script src="shared/connection-state.js"></script>
 <script src="shared/avatar-badge.js"></script>
 <script src="shared/avatar-image.js"></script>
+<script src="shared/icons.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
