@@ -44,6 +44,15 @@ const GHOST_TOKEN = Symbol('no-such-game');
  * 因此可长缓存；`private` 是因为它属于本机玩家的私人资料，不得被共享缓存留存。
  */
 const AVATAR_CACHE_CONTROL = 'private, max-age=31536000, immutable';
+/**
+ * M2-b §6 的分页参数（计划书原话："对局列表默认每页 30、上限 100"、"事件默认 100、上限 200 条一批"）。
+ * 超上限一律**截断到上限**，不是 400：上限是服务端的保护线，客户端多要一页不该让整次请求失败；
+ * 响应里回显生效后的 limit，调用方看得见自己实际拿到多少。
+ */
+const GAMES_PAGE_DEFAULT = 30;
+const GAMES_PAGE_MAX = 100;
+const HISTORY_PAGE_DEFAULT = 100;
+const HISTORY_PAGE_MAX = 200;
 const { ROLES, BOARDS, validateBoard } = require('./engine/roles');
 const { DEFAULT_RULES, RULE_META, mergeRules } = require('./engine/rules');
 const { Game } = require('./engine/game');
@@ -229,18 +238,28 @@ class Api {
   /**
    * FIX-09：把"使用"落到档案的 lastUsedAt（档案列表按此字段倒序，见 store.list() 的注释）。
    *
-   * 服务端唯一可观测的"使用" = **用这份档案开了一局**（createGame 带着 profileId）。
+   * 服务端可观测的"使用"有两个入口，都走这一条实现：
+   *   · 用这份档案开了一局（createGame 带着 profileId）；
+   *   · 客户端显式调用 `POST /api/profiles/:id/touch`（M2-b §6 第一项，见 touchProfile）。
    * 取舍（明确写下来，别让读代码的人以为是遗漏）：
    *   · await 一次小文件原子写（与一次存档同量级，毫秒级），换取确定性——测试与"失败不影响开局"
    *     都能被断言，不用 fire-and-forget 制造竞态；
    *   · **任何失败只 warn**：使用痕迹不是关键数据，绝不能让"记不上最近使用时间"导致建局失败。
+   *
+   * M2-b：加一个 `raise` 开关，不改默认行为。建局路径（默认 false）逐字保持"只 warn、绝不
+   * 让开局失败"；`POST /profiles/:id/touch` 是用户**显式**发起的写请求，那里传 true——
+   * 写盘失败必须如实回错误，不能回 200 谎称"已记录"（见 touchProfile 的注释）。
+   *
+   * @returns {Promise<object|null>} 更新后的档案；无 profileId / 失败且不 raise 时为 null
    */
-  async _touchProfileUsage(profileId) {
-    if (!profileId) return;
+  async _touchProfileUsage(profileId, { raise = false } = {}) {
+    if (!profileId) return null;
     try {
-      await this.profiles.touch(profileId);
+      return await this.profiles.touch(profileId);
     } catch (e) {
       this.logger.warn('profiles', `记录最近使用失败（${profileId}）：${e.message}`);
+      if (raise) throw e;
+      return null;
     }
   }
 
@@ -982,6 +1001,16 @@ class Api {
         }
         return this.json(res, out.status, out.body);
       }
+      // M2-b §6：档案对局只读历史（仅已结束局，按事件游标分页）。
+      // ⚠ 顺序：必须排在下面 profileMatch 的「任意 DELETE = 移入回收站」之前 —— history 是 GET，
+      // 不被那条吃到；真正的理由是同一类顺序陷阱（长路由被短兜底吃掉）：profileMatch 只允许
+      // id 后面跟**一个**小写字母段，/games/<gameId>/history 不是它的形状，所以这条正则必须独立存在，
+      // 否则整条路由会静默落到 404「not found」。
+      const profileHistoryMatch = pathname.match(/^\/api\/profiles\/([0-9a-fA-F-]{36})\/games\/([^/]+)\/history$/);
+      if (profileHistoryMatch && method === 'GET') {
+        if (!mgmt) return this._denyManagement(res);
+        return this.profileGameHistory(res, profileHistoryMatch[1], profileHistoryMatch[2], query);
+      }
       const profileMatch = pathname.match(/^\/api\/profiles\/([0-9a-fA-F-]{36})(\/([a-z]+))?$/);
       if (profileMatch) {
         const pid = profileMatch[1];
@@ -1013,10 +1042,19 @@ class Api {
           if (!mgmt) return this._denyManagement(res);
           return this.profileStats(res, pid);
         }
+        // M2-b §6：记录真实最近使用（客户端在档案列表里"选用"这份档案时调用）。
+        // 授权门（管理会话 + Origin 可信）排在**存在性之前** —— 与 NEW-16 同一条纪律：
+        // 未配对调用者对"存在"与"不存在"的档案必须拿到逐字相同的 401，否则状态码差异
+        // 本身就成了"这个 id 是不是真档案"的探针。
+        if (psub === 'touch' && method === 'POST') {
+          if (!mgmt || !isTrustedOrigin(req)) return this._denyManagement(res);
+          if (!this._rateAllow(req, 'proftouch', 60)) return this.json(res, 429, { error: '操作过于频繁，请稍后再试' });
+          return this.touchProfile(res, pid);
+        }
         void pid;
         if (psub === 'games' && method === 'GET') {
           if (!mgmt) return this._denyManagement(res);
-          return this.profileGames(res, pid);
+          return this.profileGames(res, pid, query);
         }
         if (psub === 'export' && method === 'GET') {
           if (!mgmt) return this._denyManagement(res);
@@ -2251,6 +2289,51 @@ class Api {
     catch (_) { return fallback; }
   }
 
+  /**
+   * 严格读一份存档：把"文件坏了"与"文件不存在"分开。
+   *
+   * 旧实现用 `_readJson(file, null)` —— 坏 JSON 与缺失**同样**退化成 null，于是
+   * GET /api/profiles/:id/games 把一份损坏的存档当成"这份档案没有这一局"（甚至整页空），
+   * 静默少数据。计划书 §6 接口规则最后一条（"损坏数据返回明确错误，不能伪装成空列表"）
+   * 明确禁止这种伪装，所以这两条档案路由改走本方法。
+   *
+   * 刻意**不动** `_readJson` 的其它调用者（profileStats 等）：它们的语义（跳过坏档、
+   * 继续统计其余）是既有的，本轮不重写统计（范围外）。
+   *
+   * @returns {{ok:true, doc:object}|{ok:false, missing:true}|{ok:false, error:string}}
+   */
+  _readSaveDocStrict(file) {
+    let raw;
+    try {
+      raw = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      // 竞态（刚被删）或路径是个目录：按"不存在"处理，不冤枉成损坏
+      if (e && (e.code === 'ENOENT' || e.code === 'EISDIR')) return { ok: false, missing: true };
+      return { ok: false, error: `${path.basename(file)} 读取失败：${e.message}` };
+    }
+    let doc;
+    try {
+      doc = JSON.parse(raw);
+    } catch (e) {
+      return { ok: false, error: `${path.basename(file)} 不是合法 JSON：${e.message}` };
+    }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) {
+      return { ok: false, error: `${path.basename(file)} 结构损坏：顶层不是 JSON 对象` };
+    }
+    return { ok: true, doc };
+  }
+
+  /**
+   * 存档目录里"可能是一份对局存档"的文件名。
+   * 排除：`experiences.json`（经验池）、`.import-recovery-*.json` 等隐藏/中间文件
+   * （导入恢复记录与 tmp 族都不以 `.json` 结尾或以 `.` 开头）。其余 `.json` 一律参与
+   * 损坏检查 —— 坏档不因为"看不出属于谁"就放行。
+   */
+  _saveFileNames() {
+    return fs.readdirSync(this.saveDir)
+      .filter((f) => f.endsWith('.json') && f !== 'experiences.json' && !f.startsWith('.'));
+  }
+
   /** 档案战绩（方案 §3.7）：Mock/观战/终止/平局分桶，正式胜率只算真实自然局（动态阵营按 crush 还原） */
   profileStats(res, pid) {
     try {
@@ -2300,25 +2383,289 @@ class Api {
     } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
   }
 
-  /** 档案对局列表（仅本档案，字段白名单） */
-  profileGames(res, pid) {
+  /**
+   * 把任意"时间表示"归一成可比较的毫秒数（M2-b §6："日期统一解析为时间值排序，
+   * 不直接比较混合数字和 ISO 字符串"）。
+   *
+   * 为什么必须有这一步：存档里的 `savedAt` 有两种真实来源 ——
+   *   · `saveGame()` 写的是 `Date.now()`（number，ms）；
+   *   · 旧文档 / 缺字段回落的是 `mtime.toISOString()`（string），还有 RFC 2822（`Date#toString()`）
+   *     这类同样合法的时间串。
+   * 旧实现是 `String(b.savedAt).localeCompare(String(a.savedAt))`：数字 "1758…" 与
+   * ISO "2026-…" 按**字符串**比大小，'2' > '1' 就把所有 ISO 行都排在所有数字行前面 ——
+   * 与真实时间无关。这里改成解析后比数值。
+   *
+   * 兜底（确定、不崩、不静默乱序）：解析不出来 → 用 `fallbackMs`（调用点传该文件的 mtime）；
+   * 连 fallback 都没有 → 0（排最后）。相等时由调用点的次级键（文件名/gameId）定序，
+   * 所以同一份数据每次请求的顺序都一样。
+   */
+  _timeValue(raw, fallbackMs = 0) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+    if (raw instanceof Date) { const t = raw.getTime(); return Number.isFinite(t) ? t : fallbackMs; }
+    if (typeof raw === 'string' && raw.trim()) {
+      const s = raw.trim();
+      // 纯数字串按 ms 时间戳处理（与 saveGame 的 Date.now() 同一约定），再退回通用解析
+      if (/^\d+$/.test(s)) { const n = Number(s); if (Number.isSafeInteger(n)) return n; }
+      const t = Date.parse(s);
+      if (Number.isFinite(t)) return t;
+    }
+    return fallbackMs;
+  }
+
+  /**
+   * 分页参数解析（list / history 共用）。**只接受非负整数**，其余给 400 的可读原因：
+   * 静默 clamp 非法值（'abc'、'-1'、'1.5'）会让调用方以为自己拿到了完整数据。
+   * 缺省与空串都按"未提供"处理（`?offset=` 等同不传）。
+   * 超出上限（`max`）时**截断到上限**（上限是服务端保护线，见文件头常量注释）。
+   */
+  _pagingInt(query, name, def, max) {
+    const raw = query ? query.get(name) : null;
+    if (raw === null || raw === '') return { value: def };
+    if (!/^\d+$/.test(raw)) return { error: `${name} 必须是非负整数（收到 ${JSON.stringify(raw)}）` };
+    const n = Number(raw);
+    if (!Number.isSafeInteger(n)) return { error: `${name} 超出可表示范围（收到 ${JSON.stringify(raw)}）` };
+    return { value: max === undefined ? n : Math.min(n, max) };
+  }
+
+  /** 对局列表的查询参数：status 白名单 + offset/limit 边界（M2-b §6） */
+  _gamesListQuery(query) {
+    const rawStatus = query ? query.get('status') : null;
+    // 空串 = 未提供（前端"不筛选"时常见形态）；给了非空值就必须是三个白名单值之一
+    const status = rawStatus === null || rawStatus === '' ? 'all' : rawStatus;
+    if (!['all', 'unfinished', 'finished'].includes(status)) {
+      return { error: `status 只支持 all / unfinished / finished（收到 ${JSON.stringify(rawStatus)}）` };
+    }
+    const offset = this._pagingInt(query, 'offset', 0);
+    if (offset.error) return { error: offset.error };
+    const limit = this._pagingInt(query, 'limit', GAMES_PAGE_DEFAULT, GAMES_PAGE_MAX);
+    if (limit.error) return { error: limit.error };
+    return { status, offset: offset.value, limit: limit.value };
+  }
+
+  /**
+   * 合并"磁盘存档 + 内存对局"的对局行（M2-b §6："合并内存和磁盘记录，同一 gameId 只出现
+   * 一次，状态以内存为准"）。
+   *
+   * 规则（逐条对应计划书）：
+   *   · 磁盘行 = saveDir 里 ownerProfileId === pid 的存档；损坏的存档**不跳过**，收集成
+   *     `corrupt` 并让整次请求以明确错误结束（"不能伪装成空列表"）；
+   *   · 内存行 = `this.games` 里 ownerProfileId === pid 的条目。同一 gameId 覆盖磁盘行的
+   *     **状态字段**（finished/day/phase/winner/started/mock/inMemory），归属/昵称/savedAt
+   *     等摘要字段沿用磁盘行（内存条目本来就不带 savedAt）；
+   *   · 只有内存、没有磁盘文件的对局（写盘失败/夹具）也列出来 —— 旧实现只读磁盘，
+   *     这类局会凭空消失；
+   *   · 排序 = 解析后的时间值倒序（见 _timeValue），同值时按稳定次级键（gameId 或文件名）
+   *     倒序定序，保证多次请求顺序一致。
+   *
+   * 返回值只有 [公开摘要字段]，**不含** tokens/anchor/journal/agentStates/players[].role
+   * 等任何敏感或内部上下文（§6："列表只返回公开摘要"）。
+   */
+  _profileGameRows(pid, prof) {
+    const byId = new Map(); // key → { row, t, key }
+    const corrupt = [];
+    for (const f of this._saveFileNames()) {
+      const full = path.join(this.saveDir, f);
+      const read = this._readSaveDocStrict(full);
+      if (!read.ok) {
+        if (!read.missing) corrupt.push(read.error);
+        continue;
+      }
+      const doc = read.doc;
+      if (doc.ownerProfileId !== pid) continue;
+      const gm = (doc.game && typeof doc.game === 'object' && !Array.isArray(doc.game)) ? doc.game : {};
+      const id = gm.id;
+      // 没有 gameId 的档无法去重也无法定位（例如手工夹具）：用文件名当键，行照旧列出（兼容旧行为）
+      const key = (id === undefined || id === null || id === '') ? `\u0000file:${f}` : String(id);
+      let mtimeMs = 0;
+      let haveMtime = false;
+      try { mtimeMs = fs.statSync(full).mtimeMs; haveMtime = true; } catch (_) { /* 拿不到 mtime 就回落 null，不编时间 */ }
+      const rawSaved = doc.savedAt || null; // 与旧实现同形：文档值优先，缺失/假值回落 mtime
+      const row = {
+        id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock,
+        started: !!gm.started, inMemory: this.games.has(id),
+        resumable: !!(doc.anchor && gm.started && !gm.finished),
+        ownerProfileId: doc.ownerProfileId, ownerNickname: doc.ownerNicknameSnapshot || prof.nickname,
+        savedAt: rawSaved !== null ? rawSaved : (haveMtime ? new Date(mtimeMs).toISOString() : null),
+      };
+      // anchor 只留在内部条目里（供内存行重算 resumable），不进响应 —— 行字段集是公开摘要白名单
+      byId.set(key, { row, t: this._timeValue(rawSaved, haveMtime ? mtimeMs : 0), key, anchor: !!doc.anchor });
+    }
+    for (const [gid, entry] of this.games) {
+      if (!entry || !entry.game || entry.ownerProfileId !== pid) continue;
+      const gm = entry.game;
+      const base = byId.get(String(gid));
+      const t = base ? base.t : this._timeValue(entry.lastAccess || entry.createdAt || 0, 0);
+      const row = Object.assign({}, base ? base.row : {}, {
+        id: gid,
+        day: gm.day, phase: gm.phase,
+        finished: !!gm.finished, // 状态以内存为准（磁盘可能是上一拍快照）
+        winner: gm.winner || null,
+        mock: !!entry.mock,
+        started: !!gm.started,
+        inMemory: true,
+        // 派生字段必须跟着"以内存为准"重算，不能继承磁盘行里的旧结论：
+        // 磁盘快照说 finished:true 时它的 resumable=false（旧结论），而内存说这局还在跑 ⇒ 仍可恢复。
+        // 判据 = 磁盘有没有锚点（唯一的重建来源）+ 内存的权威状态。
+        resumable: !!(base && base.anchor) && !!gm.started && !gm.finished,
+        ownerProfileId: pid,
+        ownerNickname: (base && base.row.ownerNickname) || entry.ownerNicknameSnapshot || prof.nickname,
+        savedAt: base ? base.row.savedAt : new Date(t).toISOString(),
+      });
+      byId.set(String(gid), { row, t, key: String(gid) });
+    }
+    if (corrupt.length) {
+      const detail = corrupt.slice(0, 3).join('；') + (corrupt.length > 3 ? `；…另有 ${corrupt.length - 3} 份损坏存档` : '');
+      throw Object.assign(new Error(`存档目录存在损坏数据（${corrupt.length} 份），已拒绝返回可能不完整的对局列表：${detail}`), { code: 500 });
+    }
+    return [...byId.values()]
+      .sort((a, b) => (b.t - a.t) || b.key.localeCompare(a.key))
+      .map((x) => x.row);
+  }
+
+  /**
+   * 档案对局列表（仅本档案，字段白名单；M2-b §6 分页 / 筛选 / 合并内存+磁盘）。
+   *
+   * 兼容性：无参数调用与旧版同形 —— `rows` 仍在（默认每页 30 条，见 §6 原文），只是多回
+   * `total / hasMore / offset / limit / status` 这几个**新增**字段。旧调用方读 `rows` 不受影响。
+   *
+   * @param {URLSearchParams} [query] status=all|unfinished|finished、offset、limit
+   */
+  profileGames(res, pid, query) {
     try {
       const prof = this.profiles.get(pid);
       if (prof.archivedAt) return this.json(res, 404, { error: '该档案已归档' });
-      const rows = [];
-      for (const f of fs.readdirSync(this.saveDir)) {
-        if (!f.endsWith('.json') || f === 'experiences.json') continue;
-        const doc = this._readJson(path.join(this.saveDir, f), null);
-        if (!doc || doc.ownerProfileId !== pid) continue;
-        const gm = doc.game || {};
-        rows.push({ id: gm.id, day: gm.day, phase: gm.phase, finished: !!gm.finished, winner: gm.winner || null, mock: !!doc.mock,
-          started: !!gm.started, inMemory: this.games.has(gm.id),
-          resumable: !!(doc.anchor && gm.started && !gm.finished),
-          ownerProfileId: doc.ownerProfileId, ownerNickname: doc.ownerNicknameSnapshot || prof.nickname,
-          savedAt: doc.savedAt || fs.statSync(path.join(this.saveDir, f)).mtime.toISOString() });
-      }
-      return this.json(res, 200, { rows: rows.sort((a, b) => String(b.savedAt).localeCompare(String(a.savedAt))) });
+      const q = this._gamesListQuery(query);
+      if (q.error) return this.json(res, 400, { error: q.error });
+      const all = this._profileGameRows(pid, prof); // 损坏数据在这里抛（明确错误，不退化成空列表）
+      const filtered = all.filter((r) => q.status === 'all' || (q.status === 'finished' ? r.finished : !r.finished));
+      const rows = filtered.slice(q.offset, q.offset + q.limit);
+      return this.json(res, 200, {
+        rows,
+        total: filtered.length,
+        hasMore: q.offset + rows.length < filtered.length,
+        offset: q.offset,
+        limit: q.limit,
+        status: q.status,
+      });
     } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
+  }
+
+  /**
+   * GET /api/profiles/:id/games/:gameId/history（M2-b §6）：已结束对局的**只读**事件历史，
+   * 按事件游标（seq）分页。
+   *
+   * 为什么这条路径不可能启动引擎或调用模型（逐条对应代码，不是承诺）：
+   *   · 内存侧只做 `this.games.get(gameId)` —— Api#getGame 只查 Map，**不**从锚点重建
+   *     （重建 = new Game + 回填 AI 记忆，那是 /resume 的事）；
+   *   · 磁盘侧只 `JSON.parse` 存档文件（_readSaveDocStrict），绝不构造 Game、绝不取
+   *     agentFactory / 绝不进 runGame；
+   *   · 事件只做"过滤 + 截断 + 白名单映射"，没有任何写盘或续跑分支。
+   *
+   * 下游可见性：只下发 `visibleTo === 'all'` 的公开事件，且字段白名单
+   * （seq/day/phase/type/actor/text/ts）—— 座位私有事件（发牌身份、狼队密谈、查验结果）
+   * 与 `visibleTo: 'god'` 的事件、`data`（可能带内部结构）一律不出现在响应里。
+   *
+   * 错误语义：
+   *   · 非管理会话 → 401（授权先于存在性，NEW-16）；
+   *   · 档案不存在/已归档 → 404；gameId 形状非法（含路径分隔符等）→ 400；
+   *   · 对局不存在 **或** 不属于该档案 → 同一条 404（不给"这个 gameId 属于谁"的探针）；
+   *   · 对局未结束 → 409（与 /resume 的"仍在运行中"同一种状态冲突语义）；
+   *   · 存档损坏或已结束局缺事件流 → 500 + 可读原因（绝不退化成空历史）。
+   *
+   * @param {URLSearchParams} [query] after（事件游标，默认 0）、limit（默认 100、上限 200）
+   */
+  profileGameHistory(res, pid, gameId, query) {
+    try {
+      const prof = this.profiles.get(pid);
+      if (prof.archivedAt) return this.json(res, 404, { error: '该档案已归档' });
+      // gameId 进文件名：先按白名单收敛（Windows 上 '\' 与 ':' 都能跳出 saveDir，路径穿越
+      // 会让这条路由变成"读任意 .json"）。合法对局 id 是 tokenId() 的 [A-Za-z0-9] 串。
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(String(gameId))) {
+        return this.json(res, 400, { error: 'gameId 非法' });
+      }
+      const after = this._pagingInt(query, 'after', 0);
+      if (after.error) return this.json(res, 400, { error: after.error });
+      const limit = this._pagingInt(query, 'limit', HISTORY_PAGE_DEFAULT, HISTORY_PAGE_MAX);
+      if (limit.error) return this.json(res, 400, { error: limit.error });
+
+      const file = path.join(this.saveDir, `${gameId}.json`);
+      const read = this._readSaveDocStrict(file);
+      const doc = read.ok ? read.doc : null;
+      const live = this.games.get(gameId) || null;
+      const ownedByDisk = !!doc && doc.ownerProfileId === pid;
+      const ownedByMem = !!live && !!live.game && live.ownerProfileId === pid;
+      if (!ownedByDisk && !ownedByMem) {
+        if (!read.ok && !read.missing) {
+          return this.json(res, 500, { error: `存档损坏，无法读取该对局历史：${read.error}` });
+        }
+        return this.json(res, 404, { error: '对局不存在或不属于该档案' });
+      }
+      // 状态以内存为准：内存里这局还在跑 ⇒ 即使磁盘是"已结束"的旧快照也不能当历史放开
+      const finished = (live && live.game) ? !!live.game.finished : !!(doc && doc.game && doc.game.finished);
+      if (!finished) return this.json(res, 409, { error: '该对局尚未结束，历史仅对已结束对局开放' });
+
+      const eventLists = [
+        live && live.game ? live.game.events : null,
+        doc && doc.game ? doc.game.events : null,
+        doc && doc.anchor ? doc.anchor.events : null, // 旧存档的终局事件只落在 anchor 里
+      ];
+      const events = eventLists.find((x) => Array.isArray(x) && x.length)
+        || eventLists.find((x) => Array.isArray(x))
+        || null;
+      if (events === null) {
+        return this.json(res, 500, { error: `存档缺少事件流（${path.basename(file)}），无法生成该对局历史` });
+      }
+      // 只保留公开事件，并**显式按 seq 排序**（不依赖存档里数组的物理顺序）
+      const pub = events
+        .filter((e) => e && e.visibleTo === 'all' && Number.isFinite(Number(e.seq)))
+        .sort((a, b) => Number(a.seq) - Number(b.seq));
+      const tail = pub.filter((e) => Number(e.seq) > after.value);
+      const page = tail.slice(0, limit.value)
+        .map((e) => ({
+          seq: Number(e.seq), day: e.day, phase: e.phase, type: e.type,
+          actor: e.actor === undefined ? null : e.actor, text: e.text || '', ts: e.ts,
+        }));
+      const nextAfter = page.length ? page[page.length - 1].seq : after.value;
+      return this.json(res, 200, {
+        gameId,
+        finished: true,
+        rows: page,
+        total: tail.length,
+        hasMore: page.length < tail.length,
+        after: after.value,
+        limit: limit.value,
+        nextAfter,
+      });
+    } catch (e) { return this.json(res, this.statusOf(e, 500), { error: e.message }); }
+  }
+
+  /**
+   * POST /api/profiles/:id/touch（M2-b §6 第一项）：记录"真实最近使用"。
+   *
+   * 复用建局路径的**同一条**实现（_touchProfileUsage → ProfileStore.touch），不另写一份写盘
+   * 逻辑，行为不可能漂移。
+   *
+   * 为什么不制造资料编辑 revision 冲突（计划书原话）：`ProfileStore.touch` 只改
+   * `lastUsedAt`，**不动 revision、不动 updatedAt**（使用 ≠ 编辑）。所以客户端手里的
+   * 过期 expectedRevision 在 touch 之后依旧成立 —— 由真实 HTTP 用例钉住：
+   * touch（可连发多次）之后，用 touch 之前的 revision PATCH 仍必须 200。
+   *
+   * 与建局路径**唯一**差别：那里的 touch 失败只 warn（不能让开局失败），这里是用户显式
+   * 发起的写请求，失败必须如实报错，不能回 200 假装记上了（传 raise:true）。
+   *
+   * 已归档档案：与 stats/games 同一条语义（404「该档案已归档」）。store.touch 对归档档案是
+   * "不写盘的 no-op"，若这里回 200 就等于谎称记录成功（诚实边界见本轮报告）。
+   */
+  async touchProfile(res, pid) {
+    try {
+      const prof = this.profiles.get(pid); // 不存在 → NotFoundError(404)
+      if (prof.archivedAt) return this.json(res, 404, { error: '该档案已归档' });
+      await this._touchProfileUsage(pid, { raise: true });
+      const after = this.profiles.get(pid);
+      return this.json(res, 200, { ok: true, profileId: pid, lastUsedAt: after.lastUsedAt, revision: after.revision });
+    } catch (e) {
+      return this.json(res, this.statusOf(e, 500), { error: e.message });
+    }
   }
 
   /**
