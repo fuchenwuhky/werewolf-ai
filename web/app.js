@@ -127,11 +127,27 @@ function persistSetupDraft() {
  */
 function applySetupDraft(draft) {
   if (!state.meta) return;
+  // ⚠ M2-d 修复（ui:check 实测抓到的真缺陷）：**没有草稿时绝不能碰设置屏状态**。
+  //   下面这些行会把 state.setup 整体重放一遍（rules 回默认；mode 走
+  //   resolveMode({existingMode:undefined}) ⇒ 'mock'；mySeat 回 savedSeatChoice() 并写回 <select>）。
+  //   而 startGame() 是**直接读 DOM** 的（`$('#my-seat').value`、`input[name=mode]:checked`），
+  //   所以这次重放会把玩家刚刚做出的选择（例如"我参战"）悄悄改掉，开局落到试玩/随机座位 ⇒
+  //   **身份翻牌遮罩不再出现**；又因为全程没有任何异常，只看控制台是查不出来的
+  //   （ui-check 的 7b 段就是这样红的：遮罩三连红，而"无 console.error/warning"却通过）。
+  //   默认值本来就由 init 落好（见下面 `state.setup.mySeat = savedSeatChoice()`），重放纯属多余。
+  //   有草稿时仍照常恢复 —— §8.2 :263「切档不继承上一档案草稿」的契约不变。
   const d = draft || {};
   state.setup.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
   state.setup.mySeat = savedSeatChoice();
-  // §8.2 :262 新草稿默认试玩；恢复既有草稿时保持它原来的模式（不许静默切换）
-  state.setup.mode = window.WWDraftStore.resolveMode({ existingMode: d.mode });
+  // ⚠ M2-d 修复（ui:check 的 `--full 7b` 实测抓到的真缺陷）：
+  //   草稿里的 `mode` 是**开局模式**（'play' 我当玩家 / 'watch' 纯观战），
+  //   与 `WWDraftStore.resolveMode` 管的是**模型轴**（'mock' 试玩 / 'real' 真实）**完全是两回事**。
+  //   之前把它送进 resolveMode ⇒ 'play' 不在 MODES(['mock','real']) 里 ⇒ 被判非法 ⇒ 回落 'mock'
+  //   ⇒ `state.setup.mode` 被改成 'mock'，而 startGame() 是直接读 DOM/设置屏状态的
+  //   ⇒ 开局落到"试玩"（纯流程脚本、无真人身份牌）⇒ **身份翻牌遮罩不再出现**。
+  //   症状是静默的（无异常、无 console 报错），只能靠运行时门禁的 7b 段照出来。
+  //   契约不变：§8.2 :262「恢复既有草稿/对局时保持它原来的模式，不能静默切换」。
+  state.setup.mode = (d.mode === 'play' || d.mode === 'watch') ? d.mode : state.setup.mode;
   applyBoardTemplate(d.boardId && state.meta.boards[d.boardId] ? d.boardId : 'adv12');
   if (d.boardId === 'custom' && d.boardCounts) {
     state.setup.boardId = 'custom';
@@ -1897,6 +1913,11 @@ function openProfileEdit(existing, draft) {
   });
 
   const go = el('button', 'btn', existing ? '保存' : '创建');
+  // §5.2：**保存/创建成功之后，这份表单就不再是"未保存的内容"** —— 必须立刻把 dirty 摘掉。
+  // 为什么非摘不可（ui-check 实测抓到的真缺陷）：新建档案成功后下面会紧接着 `onSelectProfile(新档案)`
+  // 去"选用"它，而此刻表单仍开着、`nameI.value`（新昵称）≠ `existing.nickname`（空）⇒ dirty 仍为 true
+  // ⇒ 切档守卫弹出原生 confirm ⇒ **整个页面被对话框挡住**（CDP 求值直接超时）。
+  const markSaved = () => { state.profileFormDirty = null; };
   go.addEventListener('click', async () => {
     const nick = nameI.value.trim();
     if (!nick) { err.textContent = '昵称不能为空'; return; }
@@ -1910,6 +1931,7 @@ function openProfileEdit(existing, draft) {
       } else {
         const r = await api('POST', '/api/profiles', { nickname: nick, avatarId, bio: bioI.value.trim() });
         prof = r.profile;
+        markSaved(); // 新建成功：这份内容已经是服务端状态，紧接着的"选用新档案"不该再问"要不要丢弃" 
         onSelectProfile(prof.id);
       }
       if (prof && Number.isInteger(prof.revision)) rev = prof.revision;
@@ -1924,6 +1946,7 @@ function openProfileEdit(existing, draft) {
         const merged = Img.mergeAvatarResult(state.profiles, resp);
         if (merged && Number.isInteger(merged.revision)) rev = merged.revision;
       }
+      markSaved(); // 资料与头像都已落库 ⇒ 表单不再是"未保存的内容"（再切档不该弹确认框）
       await loadProfiles();
       closeModal();
       openProfileManager();
@@ -2697,17 +2720,6 @@ function openTagModal(seat) {
     day: cur.day || (v ? v.day : null),
     phase: cur.phase || (v ? v.phase : null),
   };
-  const dirty = () => JSON.stringify(draft) !== JSON.stringify({
-    leaning: cur.leaning || 'neutral',
-    candidateRoleIds: [...(cur.candidateRoleIds || [])],
-    claimedRoleId: cur.claimedRoleId || null,
-    confidence: cur.confidence || 'low',
-    note: cur.note || '',
-    evidenceSeq: cur.evidenceSeq || null,
-    day: cur.day || (v ? v.day : null),
-    phase: cur.phase || (v ? v.phase : null),
-  });
-
   // §9.3 :302 笔记草稿按 **owner + gameId + seat** 保存（**不按当前浏览档案归属**）：
   // 打开时先看看这个座位有没有上次没提交的草稿 —— 切到别的档案看一眼战绩再回来，内容必须还在。
   // ⚠ 这里只能走 `state` 上的钩子（钩子在本文件 openTagModal **之前**登记到 `state.noteDraftHook`）：
@@ -2718,6 +2730,17 @@ function openTagModal(seat) {
   if (savedDraft && typeof savedDraft === 'object') {
     for (const k of Object.keys(draft)) if (savedDraft[k] !== undefined && savedDraft[k] !== null) draft[k] = savedDraft[k];
   }
+  /**
+   * dirty 的基准是**打开这一刻（含草稿恢复之后）的样子**，不是"服务端已保存的值"。
+   * 为什么（两件事都要成立）：
+   *   · 恢复出来的草稿**不会**被当成"未保存的修改"：否则每次打开一个还有草稿的座位，
+   *     点 X/遮罩/取消都会弹"有未保存的修改，确定放弃？"——而关掉弹层并不会删掉草稿，
+   *     这个对话框纯属噪音，还会在 ui-check 里把页面挡住（那里没有原生对话框的自动处理器）；
+   *   · **在本次打开里真改过** ⇒ 照样判 dirty（下面的既有用例钉的就是这一条）。
+   * 二者都不损失数据：草稿只在"保存成功"或"显式清除"时才删。
+   */
+  const openedAs = JSON.stringify(draft);
+  const dirty = () => JSON.stringify(draft) !== openedAs;
   /** 草稿变更即落**会话存储**（切档/关弹层都不销毁它；保存成功或显式清除才删） */
   const persist = () => { if (hook) hook.save(seat, draft); };
 

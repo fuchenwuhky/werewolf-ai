@@ -1962,6 +1962,10 @@ function openProfileEdit(existing, draft) {
     if (!nick) { err.textContent = '昵称不能为空'; return; }
     err.textContent = '';
     go.disabled = true;
+    // §5.2：保存/创建**成功之后**，这份表单就不再是"未保存的内容"，必须立刻把 dirty 摘掉 ——
+    // 新建档案紧接着会 `onSelectProfile(新档案)`"新建即选用"，此刻表单还开着且昵称已填，
+    // dirty 仍为 true 就会弹原生 confirm 把整页挡住（桌面端已被 ui:check 实测抓到同类缺陷）。
+    const markSaved = () => { state.profileFormDirty = null; };
     try {
       let prof = existing;
       if (existing) {
@@ -1970,6 +1974,7 @@ function openProfileEdit(existing, draft) {
       } else {
         const r = await api('POST', '/api/profiles', { nickname: nick, avatarId, bio: bioI.value.trim() });
         prof = r.profile;
+        markSaved(); // 新建成功：紧接着的"新建即选用"不该再问"要不要丢弃未保存内容"
         onSelectProfile(prof.id); // 新建即选用
       }
       if (prof && Number.isInteger(prof.revision)) rev = prof.revision;
@@ -1984,6 +1989,7 @@ function openProfileEdit(existing, draft) {
         const merged = Img.mergeAvatarResult(state.profiles, resp);
         if (merged && Number.isInteger(merged.revision)) rev = merged.revision;
       }
+      markSaved(); // 资料与头像都已落库 ⇒ 表单不再是"未保存的内容"
       await loadProfiles();
       openProfileManager();
     } catch (e) {
@@ -3423,7 +3429,6 @@ function openTagModal(seat) {
     phase: cur.phase || (v ? v.phase : null),
   });
   const draft = blank();
-  const dirty = () => JSON.stringify(draft) !== JSON.stringify(blank());
 
   // §9.3 :302 笔记草稿按 **owner + gameId + seat** 保存（**不按当前浏览档案归属**）：
   // 打开时先看看这个座位有没有上次没提交的草稿 —— 切到别的档案看一眼战绩再回来，内容必须还在。
@@ -3435,6 +3440,17 @@ function openTagModal(seat) {
   if (savedDraft && typeof savedDraft === 'object') {
     for (const k of Object.keys(draft)) if (savedDraft[k] !== undefined && savedDraft[k] !== null) draft[k] = savedDraft[k];
   }
+  /**
+   * dirty 的基准是**打开这一刻（含草稿恢复之后）的样子**，不是"服务端已保存的值"。
+   * 为什么（两件事都要成立）：
+   *   · 恢复出来的草稿**不会**被当成"未保存的修改"：否则每次打开一个还有草稿的座位，
+   *     点 X/遮罩/取消都会弹"有未保存的修改，确定放弃？"——而关掉弹层并不会删掉草稿，
+   *     这个对话框纯属噪音，还会在 ui-check 里把页面挡住（那里没有原生对话框的自动处理器）；
+   *   · **在本次打开里真改过** ⇒ 照样判 dirty（下面的既有用例钉的就是这一条）。
+   * 二者都不损失数据：草稿只在"保存成功"或"显式清除"时才删。
+   */
+  const openedAs = JSON.stringify(draft);
+  const dirty = () => JSON.stringify(draft) !== openedAs;
   /** 草稿变更即落**会话存储**（切档/关弹层都不销毁它；保存成功或显式清除才删） */
   const persist = () => { if (hook) hook.save(seat, draft); };
 
