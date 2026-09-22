@@ -247,6 +247,19 @@ function lintSource(code, file) {
 }
 
 /**
+ * 路径键：gitScope 里**所有**集合（ignored / trackedDirs）与比较都走它，统一忽略大小写。
+ *
+ * 为什么不能按字节比较（本次实测的真实缺陷，完整推导见下方 ② 的说明）：
+ *   git 只在**它自己的索引查找失败**时才把目录折叠成 `dir/`；而索引查找失败最典型的成因就是
+ *   「索引里的路径与磁盘上的目录名大小写不一致」（POSIX 上直接 `mv Ghost ghost`、Windows 上
+ *   `core.ignorecase=false` 时同样如此）。于是 `ignored` 键是磁盘名、`trackedDirs` 键是索引名，
+ *   两边一大小写不一致，`trackedDirs.has(rel)` 就永远为假 —— "绝不剪枝"恰好在唯一被触发的
+ *   情形下失效，被跟踪的源码被静默排掉。忽略大小写后，两个集合的这一类差异不再能骗过它。
+ *   方向仍然是"宁可多扫"：小写相同只可能是同一条路径，多保留一个目录最多多看几个文件。
+ */
+const pathKey = (p) => p.toLowerCase();
+
+/**
  * 扫描范围里「不该看的生成物」集合 —— 真值取自 `.gitignore`，不再靠 skip 里的目录名硬编码。
  *
  * 为什么必须改（本次修复的直接动因）：生成物清单的真值在 `.gitignore` 里，硬编码的目录名
@@ -264,7 +277,28 @@ function lintSource(code, file) {
  *      运行时数据目录最可能变成这样），`--directory` 会把该目录整条列出来，按目录剪枝就会连
  *      **被跟踪的源码一起排掉**。所以这里同时取 `git ls-files -z` 的被跟踪清单，
  *      凡是「有被跟踪文件住在里面」的目录一律**不剪枝**（宁可多扫，绝不漏扫源码）。
- *      实测当前仓库 17 个被忽略目录条目中有 0 个含被跟踪文件，但这条不能靠"现在恰好没有"。
+ *      实测当前仓库 25 个被忽略条目中有 0 个含被跟踪文件，但这条不能靠"现在恰好没有"。
+ *
+ * ══ 本次（缺口 B）实测：② 这条分支**不是**死代码，而且它原先在唯一能触发的情形下是**失效**的 ══
+ * 先弄清 git 什么时候才会把目录折叠成一条（真实 `git init` 的临时仓库实测，git 2.53）：
+ *   · 目录里**有任何索引条目**（含"已从工作区删除但索引里还在"的文件）→ git 一律**递归**进去，
+ *     逐条列出里面的未跟踪项（`ghost/junk.log`、`ghost/sub/`…），从不给出 `ghost/`；
+ *     索引里的路径与磁盘目录名**大小写不一致**、且 `core.ignorecase=false`（POSIX 默认行为，
+ *     Windows 上也能显式配出来）→ git 自己的路径查找失败 → **折叠成 `ghost/`**。
+ * 也就是说：② 的前提「ignored 里出现了目录条目」只在**最后那一种**情形下成立，而那种情形下
+ * `ignored` 取的是**磁盘名**（`ghost`）、`trackedDirs` 取的是**索引名**（`Ghost/keep.js` → `Ghost`），
+ * 两个 Set 按字节比较永远不相等 —— 承诺"绝不剪枝"的 `trackedDirs.has(rel)` 恰好为假，
+ * 于是**被跟踪的源码真的被排掉了**（`test/lint-gitscope.test.js` 用真实 git 仓库把这个红→绿钉住）。
+ * 修法：两个集合都用 `pathKey()`（忽略大小写）后的键比较。方向上仍然只会**多扫**：
+ * 小写相同只可能是同一条路径的大小写差异，而"多保留一个目录"最多让门禁多看几个文件。
+ *
+ * 顺带修掉的第二个真缺陷：取被忽略项时**必须带 `-z`**。`core.quotePath` 默认 true，
+ * 含非 ASCII 的路径会被 C-quote 成 `"\347\224\237\346\210\220\347\211\251/"` 这种字面量，
+ * 它永远不等于磁盘上的真实相对路径 —— 被忽略的非 ASCII 目录因此**永远剪不掉**（只会多扫）。
+ * 实测（git 2.53 / Windows）：`生成物/` 在 `-z` 下是 `生成物/`，不带 `-z` 是 `"\347\224\237…/"`。
+ * 本仓库当前 25 个被忽略条目全为 ASCII，故两处修法在当下都是**行为中立**的
+ * （修复前后 `listFiles()` 的数量一致，本次实测同为 198 个 JS 文件；此后其他批次新增文件
+ * 会让这个数字自然变大，与本修法无关）。
  *
  * git 不可用时（脱离仓库的拷贝等）返回 null，退回 skip 的静态兜底：宁可漏排生成物，也不误排源码。
  *
@@ -272,17 +306,20 @@ function lintSource(code, file) {
  */
 function gitScope() {
   try {
+    // `-z` 不是可选项：见上方"第二个真缺陷"——不带 `-z` 时非 ASCII 路径会被 C-quote 成字面量，
+    // 与磁盘上的真实路径永不相等（被忽略项因此永远匹配不上）。
     const ignoredRes = spawnSync(
       'git',
-      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory'],
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'],
       { cwd: ROOT, encoding: 'utf8' }
     );
     if (ignoredRes.error || ignoredRes.status !== 0) return null;
     const ignored = new Set(
       String(ignoredRes.stdout || '')
-        .split('\n')
-        .map((l) => l.trim().replace(/\/+$/, '').split('\\').join('/'))
+        .split('\0')
+        .map((l) => l.replace(/\/+$/, '').split('\\').join('/'))
         .filter(Boolean)
+        .map(pathKey)
     );
     const trackedDirs = new Set();
     const trackedRes = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
@@ -294,7 +331,7 @@ function gitScope() {
           const i = d.lastIndexOf('/');
           if (i < 0) break;
           d = d.slice(0, i);
-          trackedDirs.add(d);
+          trackedDirs.add(pathKey(d));
         }
       }
     }
@@ -315,9 +352,10 @@ function listFiles() {
       if (skip.has(e.name)) continue;
       const p = path.join(dir, e.name);
       if (scope) {
-        const rel = path.relative(ROOT, p).split(path.sep).join('/');
+        // 集合里的键都过了 pathKey()（忽略大小写）：见 gitScope ② 的实测缺陷
+        const key = pathKey(path.relative(ROOT, p).split(path.sep).join('/'));
         // 被忽略的目录里若住着被跟踪的文件，绝不剪枝（见 gitScope ②）
-        if (scope.ignored.has(rel) && !(e.isDirectory() && scope.trackedDirs.has(rel))) continue;
+        if (scope.ignored.has(key) && !(e.isDirectory() && scope.trackedDirs.has(key))) continue;
       }
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.js')) out.push(path.relative(ROOT, p));
