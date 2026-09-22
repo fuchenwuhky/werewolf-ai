@@ -95,18 +95,25 @@ test('口径自检：字符簇折叠成 1，且裸 ✓/✗/≥/→ 不算 emoji�
  */
 const REQUIRED_LITERALS = [
   {
-    file: 'web/app.js', line: 423, window: 25,
+    file: 'web/app.js', line: 558, window: 25,
     literal: '👤 ${escapeHtml(profile.nickname)}',
     note: '顶栏档案信息里的**玩家姓名**前缀（"不许误删玩家姓名 emoji"的直接落点）',
   },
   // ⚠ 这两条 line 是 M2-c 施工后的**位置重锚**：字面量、window（25）、note 全都没动，只有记录的行号跟着
   //   新增的玩家中心代码下移（app.js +70：openPlayerCenter/pcFetch/fillPc* 的"先取数再一次画完"；
   //   m.js +317：手机端玩家中心独立页）。判据强度不变 —— 仍是"±25 行内必须逐字命中"。
-  { file: 'web/app.js', line: 1245, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
+  // ⚠ M2-d 再次重锚 app.js 的两条（423→558、1245→1361）：本批在 app.js 前面插了五条共享模块的薄接线
+  //   （state 上的 dirty 引用、request-guard/prefs-queue 工厂、开局草稿的 load/apply），字面量逐字未动、
+  //   window 仍为 25、两条都仍在（整文件命中 1 次）。
+  // ⚠ m.js 那条也**在本批**漂了（1709→1788）：本批给 m.js 也加了同一套薄接线与守卫（state 上的两个 dirty
+  //   引用、request-guard/prefs-queue 工厂、归档阻止、笔记草稿钩子），字面量逐字未动、整文件仍命中 1 次。
+  //   施工中途我曾写过"m.js 的 1709 未漂、无需动"——那句是**错的**（当时还没改 m.js，改完就漂了）；
+  //   现按事实改为 1788。锚点一条一条在目标文件的 ±25 窗口内逐字核过，不是只看数字。
+  { file: 'web/app.js', line: 1361, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
   { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
   { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
   { file: 'web/m/index.html', line: 109, window: 25, literal: '👤 我的', note: '手机端"我的"页签' },
-  { file: 'web/m/m.js', line: 1709, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
+  { file: 'web/m/m.js', line: 1788, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
 ];
 
 test('非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {

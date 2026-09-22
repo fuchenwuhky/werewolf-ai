@@ -4,7 +4,13 @@
  * 同一份实现被桌面 app.js 与手机 m.js 引用，这里在 Node 下直接断言行为。
  * 契约：键名由调用方传入（默认 'ww_profile_id'，两端当前共用同一个键）；
  * 读/写/清一律吞掉 storage 异常（隐私模式不该让切档报错）；
- * 选中 id 的落地解析只认"存在且未归档"，其余按 第一个未归档 → 服务端默认档案 → null 回落。
+ * 选中 id 的落地解析只认"存在且未归档"，其余按 **四级回退** 回落：
+ *   本地有效 → 服务端最近使用（lastUsedAt 最大且未归档）→ **有效**默认档案（必须真在可用列表里）
+ *   → 其余可用（第一个未归档）；四级都没有可用档案 ⇒ null。
+ * ⚠ M2-d 契约变更：下面这组夹具**没有** lastUsedAt、且 defaultProfileId='srv' 不在列表里，
+ *   所以第②③级都被跳过、直接落到第④级（'a'）—— 前五条期望因此**一字未改**；
+ *   而"全部归档"与"空列表"两条旧期望（'srv'）在四级回退下变为 null（计划书 §5.1 原文是
+ *   「**有效**默认档案」，返回一个不在列表里的 id 会让上层拿着"不存在的当前档案"发请求）。
  */
 'use strict';
 const test = require('node:test');
@@ -43,7 +49,7 @@ test('storage 不可用时一律不抛：读给 null，写/清静默忽略（两
   assert.doesNotThrow(() => M.clearSelectedId(deadStore, 'ww_profile_id'));
 });
 
-test('选中 id 落地解析：只认未归档，归档/失效按 第一个可用 → 服务端默认 → null 回落', () => {
+test('选中 id 落地解析：本地有效 → 最近使用 → 有效默认 → 其余可用；都没有可用档案给 null', () => {
   const profiles = [
     { id: 'arch', archivedAt: '2026-09-01' },
     { id: 'a', nickname: 'A' },
@@ -54,9 +60,12 @@ test('选中 id 落地解析：只认未归档，归档/失效按 第一个可�
   assert.strictEqual(M.resolveSelectedId(profiles, 'missing', 'srv'), 'a');
   assert.strictEqual(M.resolveSelectedId(profiles, null, 'srv'), 'a');
   assert.strictEqual(M.resolveSelectedId(profiles, '', 'srv'), 'a', '空串与"没选过"同义');
-  assert.strictEqual(M.resolveSelectedId([{ id: 'arch', archivedAt: 'x' }], 'arch', 'srv'), 'srv', '全部归档 → 服务端默认档案');
+  // M2-d 契约变更（两条）：计划书 §5.1 原文是「**有效**默认档案」——'srv' 根本不在列表里
+  // （它既不存在、更谈不上可用），所以第③级被跳过；又没有其余可用档案 ⇒ 结果是 null。
+  // 旧期望 'srv' 会让上层拿到一个"不存在的当前档案"（发给 /api/profiles/srv/... 只会 404）。
+  assert.strictEqual(M.resolveSelectedId([{ id: 'arch', archivedAt: 'x' }], 'arch', 'srv'), null, '全部归档且默认档案不在可用列表里 → null');
   assert.strictEqual(M.resolveSelectedId([], null, undefined), null, '什么都没有时给 null');
-  assert.strictEqual(M.resolveSelectedId([], null, 'srv'), 'srv');
+  assert.strictEqual(M.resolveSelectedId([], null, 'srv'), null, '空列表 + 缺席的默认档案 → null（默认档案不是兜底字符串）');
 });
 
 test('档案偏好：没有档案/没有偏好回落默认值，且默认值是**新对象**（改它不污染下一次）', () => {

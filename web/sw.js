@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v19-phase'; // 预缓存清单加入 /shared/phase-label.js（两端共用的阶段表；前代 ww-v18-icons 加的是核心导航/操作图标）
+const VERSION = 'ww-v20-m2d'; // 预缓存清单加入 /shared/{prefs-queue,request-guard,switch-guard,draft-store,stats-bucket}.js（M2-d 客户端共用的纯逻辑模块；前代 ww-v19-phase 加的是阶段表）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -45,6 +45,11 @@ const SHELL = [
   '/shared/avatar-image.js',
   '/shared/icons.js',
   '/shared/phase-label.js',
+  '/shared/prefs-queue.js',
+  '/shared/request-guard.js',
+  '/shared/switch-guard.js',
+  '/shared/draft-store.js',
+  '/shared/stats-bucket.js',
   '/ai-cast.js',
   '/ai-cast.html',
   '/ai-cast-page.js',

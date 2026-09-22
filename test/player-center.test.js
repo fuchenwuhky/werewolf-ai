@@ -228,7 +228,11 @@ test('对局与战绩 / 数据管理接的是**真实接口**（无示例数据�
   }
   assert.ok(open.includes("pcFetch('/api/profiles/trash')"), '桌面端没有接回收站计数接口');
   assert.ok(open.includes("pcFetch('/api/import/recoveries')"), '桌面端没有接待清理恢复记录接口');
-  assert.ok(/Promise\.all\(\[/.test(open) && /state\.profileId !== pid/.test(open),
+  // M2-d §5.2：保护从"只比档案 id"升级为**代次票据**（request-guard，A→B→A 绕一圈也能作废，
+  // 只比 id 挡不住这一类）。判据仍是"落笔前必须再判一次"，两种写法任一存在即算通过 ——
+  // 两种都没有（也就是把保护整个删掉）照样判红。
+  assert.ok(/Promise\.all\(\[/.test(open)
+    && (/state\.profileId !== pid/.test(open) || /getRequestGuard\(\)\.isCurrent\(ticket\)/.test(open)),
     'openPlayerCenter 没有并行取数 / 没有"取数期间切档就整份作废"的保护');
 
   const games = blockOf(app, /function fillPcGames\(box, res\)[\s\S]*?\n\}/);

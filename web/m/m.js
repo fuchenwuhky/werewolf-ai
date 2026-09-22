@@ -35,6 +35,10 @@ const state = {
   hiddenSnap: null,
   // 防双击双提交（FIN-03：双击只产生一次业务提交）
   submitting: false,
+  // ---- M2-d §5.2：切档守卫要读的两个"未保存"信号（判据留在各自的弹层里，这里只存引用）----
+  noteDirty: null,        // 笔记弹层的 dirty()（弹层关闭即清空）
+  profileFormOpen: false, // 资料编辑弹层是否还开着
+  profileFormDirty: null, // 资料编辑弹层的 dirty()（同上）
 };
 /**
  * 阶段值 → 中文名：**唯一真值在 web/shared/phase-label.js**（与桌面端 app.js 引用的是同一个文件、
@@ -43,6 +47,46 @@ const state = {
  * 这里只保留这个名字，是为了不动下面 3 处使用点（`PHASE_LABEL[phase] || phase` 的兜底语义不变）。
  */
 const PHASE_LABEL = window.WWPhaseLabel.PHASE_LABEL;
+
+/**
+ * M2-d（计划书 §5.2/§5.3）共享纯逻辑模块的**薄接线**（与桌面端 app.js 引用同一批文件）。
+ * 这里只做"谁触发、画哪块 DOM"：判断与状态机全在 web/shared/ 里，Node 单测直接覆盖。
+ */
+let requestGuard = null;
+let prefsQueue = null;
+
+/** §5.2 请求代际：每次档案**真的变化**时换代，迟到的响应据此丢弃 */
+function getRequestGuard() {
+  if (!requestGuard) requestGuard = window.WWRequestGuard.createRequestGuard({ profileId: state.profileId });
+  return requestGuard;
+}
+
+/** §5.3 偏好写入串行队列（同一档案串行、合并连续修改、409 重读后重试一次） */
+function getPrefsQueue() {
+  if (!prefsQueue) {
+    prefsQueue = window.WWPrefsQueue.createPrefsQueue({
+      revisionOf: (pid) => { const p = (state.profiles || []).find((x) => x.id === pid); return p ? p.revision : undefined; },
+      baseOf: (pid) => { const p = (state.profiles || []).find((x) => x.id === pid); return (p && p.preferences) || {}; },
+      patch: (pid, preferences, ctx) => api('PATCH', `/api/profiles/${pid}`, { expectedRevision: ctx.expectedRevision, preferences }),
+      reload: async (pid) => {
+        const r = await api('GET', '/api/profiles');
+        const cur = (r.profiles || []).find((x) => x.id === pid);
+        if (!cur) { const e = new Error('档案已不存在（可能已被删除或归档）'); e.status = 404; throw e; }
+        return cur;
+      },
+    });
+  }
+  return prefsQueue;
+}
+
+/** §5.2 本窗口是否有未保存的资料或笔记（切档先确认；别的窗口切档只提示、不销毁） */
+function hasUnsavedDraft() {
+  try {
+    if (typeof state.noteDirty === 'function' && state.noteDirty()) return true;
+    if (state.profileFormOpen && typeof state.profileFormDirty === 'function' && state.profileFormDirty()) return true;
+  } catch (_) { /* 守卫自身不许把切档弄卡 */ }
+  return false;
+}
 
 // ---------------- 系统返回栈（FIN-06 §10.5/§10.6） ----------------
 // 返回优先级：关闭最上层面板 → 当前功能页返回（页签/规则页）→ 离局确认。
@@ -269,8 +313,12 @@ function runSheetTeardown() {
   sheetTeardown = null;
   try { fn(); } catch (_) { /* 清理失败不得阻断关层 */ }
 }
-function closeModalDom() { $('#m-modal').innerHTML = ''; syncLayerScrollLock(); }
-function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; runSheetTeardown(); $('#m-sheet').innerHTML = ''; syncLayerScrollLock(); }
+// M2-d §5.2：任何一次清空弹层都意味着"上一层已被销毁"——它登记的 dirty() 引用必须一起失效，
+// 否则切档守卫会拿着一个已经不在页面上的表单，一直弹"有未保存内容"。
+// （笔记/资料编辑器在**打开弹层之后**才登记自己的 dirty，见 openTagModal / openProfileEdit 末尾。）
+function forgetOverlayDirty() { state.noteDirty = null; state.profileFormOpen = false; state.profileFormDirty = null; }
+function closeModalDom() { $('#m-modal').innerHTML = ''; forgetOverlayDirty(); syncLayerScrollLock(); }
+function closeSheetDom() { if (sheetViewportCleanup) sheetViewportCleanup(); sheetViewportCleanup = null; runSheetTeardown(); $('#m-sheet').innerHTML = ''; forgetOverlayDirty(); syncLayerScrollLock(); }
 /** UI 关闭中部弹窗（X / 取消 / 按钮） */
 function closeModalTop() {
   const top = backStack[backStack.length - 1];
@@ -439,6 +487,14 @@ async function init() {
   window.addEventListener('online', () => { if (state.game && state.game.gameId) poll(); });
   window.addEventListener('storage', async (e) => {
     if (!window.WWProfileState.isSelectionKey(e.key)) return;
+    // §5.2：**另一个窗口**切换了当前档案。本窗口正有未保存的资料/笔记时决策是 `defer` ——
+    // 不弹原生确认框（那是本窗口自己的切档才该问的），更不许把正在填的内容删掉；
+    // 只如实提示"那边切到了哪个档案，草稿仍归原档案"。
+    const decision = window.WWSwitchGuard.decideSwitch({ dirty: hasUnsavedDraft(), source: window.WWSwitchGuard.OTHER_WINDOW });
+    if (decision.action === 'defer') {
+      const other = (state.profiles || []).find((x) => x.id === e.newValue);
+      flash(`${decision.reason}${other ? `（另一窗口切到了「${other.nickname}」）` : ''}`);
+    }
     await loadProfiles();
     if (!state.game) await loadResumeCard();
   });
@@ -1085,15 +1141,10 @@ function winnerText(w) {
   return w || '已结束';
 }
 
-/** 统计概览的一行文案（分母口径与桌面端一致：只有可判定的真实局进胜率） */
+/** 统计概览的一行文案：**唯一真值在 web/shared/stats-bucket.js**（桌面端引用同一份）——
+ *  §5.3 的两条硬口径（胜率分母=有效胜负局、分母为零显示「暂无」）不会在两端写歪成两个样子。 */
 function pcStatsText(s) {
-  const wins = s.wins || 0;
-  const losses = s.losses || 0;
-  const b = s.byBucket || {};
-  const rate = (wins + losses) ? ` · 胜率 ${Math.round((wins / (wins + losses)) * 100)}%` : '';
-  return `真实对局 ${s.real || 0} 局（胜率分母）· ${wins} 胜 ${losses} 负`
-    + `${s.draws ? ` ${s.draws} 平` : ''}${rate} · 试玩 ${b.mock || 0} · 观战 ${b.spectate || 0}`
-    + ` · 终止 ${b.terminated || 0} · 存档合计 ${s.total || 0}`;
+  return window.WWStatsBucket.formatAggregate(s);
 }
 
 /** ② 对局与战绩：统计概览 + 进行中 + 最近完成（全部走真实接口；三段各自加载，互不牵连） */
@@ -1106,7 +1157,10 @@ async function renderPcGames() {
 
   // 三段各自独立加载（与桌面端 fillPcGames 同一套取舍）：/stats 挂了不该把"进行中"也变成空白。
   // 落笔前一律比对发起时的档案 id —— §5.2：切档后迟到的响应不得覆盖新档案的页面。
-  const fresh = () => state.profileId === pid;
+  // M2-d：再叠一层**代次票据**（request-guard）—— 只比 id 挡不住 A→B→A 绕一圈回来时
+  // "旧 A 的响应冒充当前 A"这一类；两条件是"与"，比原来更严，不是放宽。
+  const ticket = getRequestGuard().begin(pid);
+  const fresh = () => state.profileId === pid && getRequestGuard().isCurrent(ticket);
   const seg = (title) => {
     const wrap = el('div');
     wrap.appendChild(pcSub(title));
@@ -1236,7 +1290,19 @@ function renderPcData() {
   arch.disabled = !p;
   arch.addEventListener('click', async () => {
     if (!p) return;
-    if (usable.length <= 1) { flash('最后一个可用档案不能归档（可先新建一个）'); return; }
+    // M2-d §5.2：两条阻止（原因与顺序由 web/shared/switch-guard.js 决定，可单测）——
+    //   ① 该档案还有**未结束的对局** ⇒ 不可归档，返回明确原因，**不得悄悄终止对局**；
+    //   ② 最后一个可用档案。未结束局数走服务端真实计数，不是猜的。
+    let unfinished = 0;
+    try {
+      const r = await api('GET', `/api/profiles/${p.id}/games?status=unfinished&limit=100`);
+      unfinished = (r && Number(r.total)) || ((r && r.rows) || []).length;
+    } catch (e) {
+      flash(`读取「${p.nickname}」的进行中对局失败：${e.message}（为避免丢掉进行中的对局，已取消本次归档）`);
+      return;
+    }
+    const blocked = window.WWSwitchGuard.archiveBlockReason({ unfinished, usableCount: usable.length });
+    if (blocked) { flash(blocked); return; }
     if (!confirm(`归档「${p.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
     try {
       await api('PATCH', `/api/profiles/${p.id}`, { expectedRevision: p.revision, archive: true });
@@ -1406,6 +1472,7 @@ function openSheet(title, bodyEl, footEl, opts) {
   const wasOpen = !!root.firstChild; // 弹层内换页（档案列表↔编辑）：同一层换内容，返回深度不加深
   if (sheetViewportCleanup) sheetViewportCleanup(); // 换页前先摘掉上一层的视口监听（避免叠加）
   runSheetTeardown(); // 换页同理：上一页的一次性清理必须先跑（例如裁切页的位图）
+  forgetOverlayDirty(); // M2-d §5.2：换页/重开 = 上一页的表单已经不在 DOM 上，它的 dirty() 一并失效
   root.innerHTML = '';
   const mask = el('div', 'm-sheet-mask');
   const sheet = el('div', 'm-sheet');
@@ -1485,7 +1552,12 @@ async function loadProfiles() {
   // M1：拉列表 + 选中 id 落地收在共享模块（两端原本逐字相同），这里只接上本端的界面刷新
   await window.WWProfileState.loadProfiles({
     api, state, storage: localStorage,
-    onLoaded: () => { renderProfileStrip(); applyProfilePrefs(currentProfilePrefs()); }, // 档案级偏好跟随当前档案（FIN-07 行4）
+    onLoaded: () => {
+      renderProfileStrip();
+      applyProfilePrefs(currentProfilePrefs()); // 档案级偏好跟随当前档案（FIN-07 行4）
+      // M2-d §5.2：档案落地后推进请求代次（档案真的变了才换，同档案的并发请求不受影响）
+      getRequestGuard().setCurrent(state.profileId);
+    },
     onFailed: (msg) => renderProfileStrip(`档案加载失败：${msg}`),
   });
 }
@@ -1527,33 +1599,25 @@ async function saveProfilePrefs(prefs) {
     layout: prefs.layout || 'reading',
     reducedMotion: !!prefs.reducedMotion,
   };
-  const prof = state.profiles.find((x) => x.id === state.profileId);
+  const pid = state.profileId;
+  const prof = state.profiles.find((x) => x.id === pid);
   if (!prof) { applyProfilePrefs(currentProfilePrefs()); return; }
-  const patch = () => api('PATCH', `/api/profiles/${prof.id}`, { expectedRevision: prof.revision, preferences: payload });
-  try {
-    let r;
-    try {
-      r = await patch();
-    } catch (e) {
-      if (e.status !== 409) throw e;
-      const fresh = await api('GET', '/api/profiles');
-      const cur = (fresh.profiles || []).find((x) => x.id === prof.id);
-      if (!cur) throw e;
-      Object.assign(prof, cur); // 用服务端最新 revision 覆盖内存那条，再重试这一次
-      r = await patch();
-    }
-    prof.preferences = r.profile.preferences;
-    prof.revision = r.profile.revision;
-    applyProfilePrefs(prof.preferences);
-    // 成功也要有反馈（与桌面端同款文案）：手机端原来保存成功是**完全静默**的，
-    // 改了字号/布局后没有任何确认，用户不知道到底存没存进档案。
-    flash('已保存到当前档案 ✓');
-  } catch (e) {
-    applyProfilePrefs(prof.preferences); // 回退
-    flash(e.status === 409
-      ? '偏好保存失败：另一个窗口改过这个档案，版本对不上（已重新读取仍未成功）。请刷新页面后再试。'
-      : `偏好保存失败已回退：${e.message}`);
-  }
+  // M2-d §5.3：写入收进**串行队列**（合并尚未发送的连续修改；409 时重读版本、
+  // 无冲突字段合并后重试一次，同字段冲突保留草稿）。判断全在 web/shared/prefs-queue.js，
+  // 与桌面端同一份 —— 两端不会各自演化出不同的冲突处理。
+  const ticket = getRequestGuard().begin(pid);
+  const out = await getPrefsQueue().submit(pid, payload);
+  if (out.profile) { prof.preferences = out.profile.preferences; prof.revision = out.profile.revision; }
+  // §5.3：完成时若已切档 ⇒ **只更新原档案缓存**（上面一行），当前页面一个像素都不动
+  if (!getRequestGuard().isCurrent(ticket)) return;
+  applyProfilePrefs(prof.preferences); // 成功回显服务端值；失败/冲突回滚到档案既有值
+  // 成功也要有反馈（与桌面端同款文案）：手机端原来保存成功是**完全静默**的，
+  // 改了字号/布局后没有任何确认，用户不知道到底存没存进档案。
+  if (out.status === 'saved') flash('已保存到当前档案 ✓');
+  else if (out.status === 'conflict') {
+    flash(`偏好保存冲突：另一窗口改了同一字段（${Object.keys(out.conflict).join('、')}），`
+      + '无冲突的字段已保存；你改的内容仍留在控件上（草稿未丢），请重新选择后再保存。');
+  } else flash(`偏好保存失败已回退：${(out.error && out.error.message) || '未知错误'}`);
 }
 
 /**
@@ -1616,6 +1680,11 @@ function renderHomeProfile(err) {
 }
 
 function onSelectProfile(pid) {
+  // §5.2：本窗口有未保存的资料或笔记 ⇒ 切档先确认（用户取消就停在这里，草稿一个字都不动）
+  const decision = window.WWSwitchGuard.decideSwitch({ dirty: hasUnsavedDraft(), source: window.WWSwitchGuard.SELF });
+  if (decision.action === 'confirm' && !confirm(`${decision.reason}\n\n仍要切换档案吗？（未保存的内容会留在原档案的草稿里）`)) return;
+  // §5.2 先换代再写存储：切档之前发出的请求回来时一律作废（迟到响应不得覆盖新档案页面）
+  getRequestGuard().setCurrent(pid);
   // M1：写选中键 + 昵称预填收在共享模块（两端原本逐字相同），这里只接本端的界面刷新
   window.WWProfileState.selectProfile({ state, storage: localStorage, profileId: pid, nameInput: $('#m-my-name') });
   applyProfilePrefs(currentProfilePrefs()); // 切档 → 外观偏好跟着档案走
@@ -1656,7 +1725,17 @@ function openProfileManager() {
     op('编辑', (pp) => openProfileEdit(pp));
     if (!p.archivedAt) {
       op('归档', async (pp) => {
-        if (usableCount <= 1) { alert('最后一个可用档案不能归档（可先新建一个）'); return; }
+        // M2-d §5.2：与「归档当前档案」同一套阻止（未结束对局优先，其次最后一个可用档案）
+        let unfinished = 0;
+        try {
+          const r = await api('GET', `/api/profiles/${pp.id}/games?status=unfinished&limit=100`);
+          unfinished = (r && Number(r.total)) || ((r && r.rows) || []).length;
+        } catch (e) {
+          alert(`读取「${pp.nickname}」的进行中对局失败：${e.message}\n为避免归档时丢掉进行中的对局，本次操作已取消。`);
+          return;
+        }
+        const blocked = window.WWSwitchGuard.archiveBlockReason({ unfinished, usableCount });
+        if (blocked) { alert(blocked); return; }
         if (!confirm(`归档「${pp.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
         try {
           await api('PATCH', `/api/profiles/${pp.id}`, { expectedRevision: pp.revision, archive: true });
@@ -1916,6 +1995,15 @@ function openProfileEdit(existing, draft) {
   foot.appendChild(go);
   openSheet(existing ? '编辑档案' : '新建档案', body, foot, { icon: existing ? 'edit' : 'create' });
   syncAvatarUi();
+  // M2-d §5.2 登记给切档守卫：资料表单被改过（昵称/简介/选了新头像/改用内置图）⇒ 切档先确认。
+  // 必须在 openSheet **之后**登记 —— 打开任何弹层都会清掉上一层的 dirty 引用（见 closeSheet/openSheet）。
+  state.profileFormOpen = true;
+  state.profileFormDirty = () => (
+    nameI.value !== (existing ? existing.nickname : '')
+    || bioI.value !== (existing ? (existing.bio || '') : '')
+    || !!pendingBlob
+    || removeCustom
+  );
 }
 
 /**
@@ -3294,6 +3382,27 @@ function clearSeatAnnotation(seat) {
     });
 }
 
+/**
+ * 笔记草稿的会话存储钩子（§9.3 :302）：键是 **owner + gameId + seat**。
+ * `owner` 用**开局时固化的对局归属**（`state.game.ownerProfileId`），而不是"现在浏览器选中的档案"——
+ * 局中允许切到别的档案去看战绩，回来时这个座位的草稿必须还在原地。
+ * 为什么做成 state 上的钩子：openTagModal 会被 test/annotation-editor.test.js 整段抽出、
+ * 在没有 window 的沙箱里单跑，函数体里读不了新全局（详见 openTagModal 里的说明）。
+ */
+state.noteDraftHook = (() => {
+  const at = (seat) => {
+    const g = state.game;
+    if (!g || !g.gameId) return null; // 没有对局 ⇒ 没有草稿归属，宁可不写也不写到错的键上
+    return { ownerProfileId: g.ownerProfileId || null, gameId: g.gameId, seat };
+  };
+  return {
+    at,
+    load: (seat) => { const a = at(seat); return a ? window.WWDraftStore.readNoteDraft(sessionStorage, a) : null; },
+    save: (seat, draft) => { const a = at(seat); if (a) window.WWDraftStore.writeNoteDraft(sessionStorage, a, draft); },
+    clear: (seat) => { const a = at(seat); if (a) window.WWDraftStore.clearNoteDraft(sessionStorage, a); },
+  };
+})();
+
 /** 标注编辑器（NOTE-04）：底部弹层。倾向/把握/候选（≤3）/自称/笔记/依据，保存取消常驻底部 */
 function openTagModal(seat) {
   const v = state.view;
@@ -3315,6 +3424,19 @@ function openTagModal(seat) {
   });
   const draft = blank();
   const dirty = () => JSON.stringify(draft) !== JSON.stringify(blank());
+
+  // §9.3 :302 笔记草稿按 **owner + gameId + seat** 保存（**不按当前浏览档案归属**）：
+  // 打开时先看看这个座位有没有上次没提交的草稿 —— 切到别的档案看一眼战绩再回来，内容必须还在。
+  // ⚠ 这里只能走 `state` 上的钩子（钩子在本文件 openTagModal **之前**登记到 `state.noteDraftHook`）：
+  //   本函数被 test/annotation-editor.test.js **整段抽出来**丢进一个只有 el/state/… 的 vm 沙箱里单跑，
+  //   引用任何新全局都会让那条既有用例当场 ReferenceError。
+  const hook = state.noteDraftHook || null;
+  const savedDraft = hook ? hook.load(seat) : null;
+  if (savedDraft && typeof savedDraft === 'object') {
+    for (const k of Object.keys(draft)) if (savedDraft[k] !== undefined && savedDraft[k] !== null) draft[k] = savedDraft[k];
+  }
+  /** 草稿变更即落**会话存储**（切档/关弹层都不销毁它；保存成功或显式清除才删） */
+  const persist = () => { if (hook) hook.save(seat, draft); };
 
   const body = el('div');
   const pname = (v.players.find((p) => p.seat === seat) || {}).name || '';
@@ -3414,7 +3536,7 @@ function openTagModal(seat) {
     });
     save.disabled = true;
     const okFlag = await saveAnnotations(seat, entry);
-    if (okFlag) closeSheet();
+    if (okFlag) { if (hook) hook.clear(seat); closeSheet(); } // 保存成功 ⇒ 该座位草稿已落盘，删掉
     else save.disabled = false; // 保存失败：弹层不关，草稿保留
   });
   foot.appendChild(save);
@@ -3424,12 +3546,22 @@ function openTagModal(seat) {
       save.disabled = true; clr.disabled = true;
       // FIX-07：真正删除（DELETE），不是写一份空标注 —— 否则座位键留在 doc.seats 里，计数只增不减
       const okFlag = await clearSeatAnnotation(seat);
-      if (okFlag) closeSheet();
+      if (okFlag) { if (hook) hook.clear(seat); closeSheet(); } // 显式清除 = 该座位草稿作废
       else { save.disabled = false; clr.disabled = false; }
     });
     foot.appendChild(clr);
   }
   openSheet(`${seat} 号的私人笔记`, body, foot, { vetoClose, icon: 'notes' });
+  // 草稿落盘用**事件委托**挂一次：弹层里几十个控件（倾向/把握/候选/自称/正文/依据）逐个挂必然漏，
+  // 漏掉的那个字段在切档或换座位时就串了。各控件自己的监听器先跑，冒泡到这里时 draft 已经是最新的。
+  // ⚠ 挂在**本弹层的 body 上**（不是 #m-sheet 根节点）：弹层根节点的 innerHTML 每次重开都被清空，
+  //   但挂在根节点上的监听器会跨弹层活下来 —— 那样已关闭弹层的旧 draft 会在下一层被"复活"再写回去。
+  body.addEventListener('input', persist);
+  body.addEventListener('change', persist);
+  body.addEventListener('click', persist);
+  // §5.2 登记给切档守卫：本窗口有未保存笔记 ⇒ 切档先确认。
+  // 必须在 openSheet **之后**登记 —— 打开/换页都会清掉上一层的 dirty 引用。
+  state.noteDirty = dirty;
 }
 
 /** 旧格式兜底（无归属档案的旧局 404 / 共享模型缺失）：本地身份标记 {seat: roleId}，只存 localStorage */
