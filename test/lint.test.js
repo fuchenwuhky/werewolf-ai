@@ -8,6 +8,8 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { lintSource, lintAll, listFiles, stripCommentsAndStrings } = require('../scripts/lint.js');
 
 const rules = (code, file) => lintSource(code, file).map((v) => v.rule);
@@ -102,4 +104,53 @@ test('门禁自检：本仓库当前必须零违规（等价于把 lint 接入 n
   assert.ok(files.length >= 40, `应扫描到全部源码，实际 ${files.length} 个文件`);
   assert.ok(files.every((f) => f.endsWith('.js')));
   assert.ok(!files.some((f) => /node_modules|saves|logs/.test(f)), '不应扫描运行时产物目录');
+});
+
+/**
+ * 作用域**过窄**（误排源码）是本文件唯一必须钉住的退化方向：
+ * 「漏扫生成物」只会让读数漂移，而「漏扫源码」会让门禁静默失效 —— 违规代码照样合进去。
+ *
+ * 这里用**独立遍历**（不复用 lint 自己的 skip/gitignore 逻辑，否则等于拿实现验实现）枚举
+ * 六棵带被跟踪 .js 的目录与根目录，逐条要求它们出现在扫描范围内 ——
+ * 实测 `git ls-files '*.js'` 的分布就是这六棵树 + 根（test 88 / src 44 / scripts 43 / web 17 /
+ * desktop 1 / design 1 + server.js + eslint.config.js = 196）。
+ * 于是「有人往 skip 里塞 'web'/'src'/'test'/'scripts'/'desktop'/'design'」或
+ * 「gitignore 规则写宽了连源码一起忽略」都会当场判红，而不是悄悄少检查几个文件。
+ *
+ * 独立遍历里只按**名字**跳过 `node_modules` / `dist`（任何深度）：那两处是依赖与打包产物，
+ * 不是源码，且 disk 上真的存在（`desktop/node_modules`、`desktop/dist`）——
+ * 不跳就会把依赖里的 .js 当源码，反而误报。
+ *
+ * 刻意**不**依赖 git：本仓库有 `hasGit() → t.skip` 的先例，但那是既有写法；
+ * 新守卫用独立遍历就能表达同一条不变式，不必再引入"没有 git 就跳过"的空档。
+ */
+test('作用域：六棵源码树与根目录的 .js 一个都不能漏（防误排源码）', () => {
+  const ROOT = path.join(__dirname, '..');
+  const norm = (p) => p.split(path.sep).join('/');
+  const found = [];
+  const trees = ['src', 'scripts', 'test', 'web', 'desktop', 'design'];
+  for (const tree of trees) {
+    const abs = path.join(ROOT, tree);
+    assert.ok(fs.existsSync(abs), `源码树 ${tree}/ 不存在 —— 结构变了，请复核本用例`);
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory() && (e.name === 'node_modules' || e.name === 'dist')) continue;
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith('.js')) found.push(norm(path.relative(ROOT, p)));
+      }
+    };
+    walk(abs);
+  }
+  for (const e of fs.readdirSync(ROOT, { withFileTypes: true })) {
+    if (e.isFile() && e.name.endsWith('.js')) found.push(e.name);
+  }
+  assert.ok(found.length >= 100, `独立遍历应枚举到全部源码，实际只找到 ${found.length} 个 .js —— 遍历本身失效了`);
+  const scanned = new Set(listFiles().map(norm));
+  const missing = found.filter((f) => !scanned.has(f)).sort();
+  assert.deepStrictEqual(
+    missing,
+    [],
+    `lint 扫描范围漏了 ${missing.length} 个源码文件（skip/gitignore 是不是把源码目录也排掉了？）：\n  ` + missing.join('\n  ')
+  );
 });

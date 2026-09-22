@@ -23,6 +23,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const Module = require('module');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -245,14 +246,79 @@ function lintSource(code, file) {
   return out;
 }
 
+/**
+ * 扫描范围里「不该看的生成物」集合 —— 真值取自 `.gitignore`，不再靠 skip 里的目录名硬编码。
+ *
+ * 为什么必须改（本次修复的直接动因）：生成物清单的真值在 `.gitignore` 里，硬编码的目录名
+ * 「漏一个就漏一类」，而漏掉的那一类会让读数随「本机跑没跑过打包/验收脚本」漂移。
+ * 实测：`output/playwright/verify-ux-v2.js` 被 `.gitignore:15` 忽略，却是浏览器验收脚本的产物 ——
+ * 它被当源码数了进去，于是主工作树 `npm run lint` 报 **197** 个 JS 文件，干净 worktree 只有 **196** 个。
+ * 而静态 skip 集**压根不认**这 6 个被忽略的生成目录：`.playwright-cli/`、`desktop/dist/`、
+ * `desktop/node_modules/`、`migrations/`、`output/playwright/`、`profiles/` —— 每一个都可能复制同样的漂移。
+ *
+ * 为什么**不会**误排源码（本函数的核心不变式，两层保证）：
+ *   ① `git ls-files --others` 只列**未跟踪**项 ⇒ 被跟踪的文件永远不在 ignored 里。
+ *      反例正是 `output/`：它整体**没有**被忽略，下面还躺着被跟踪的
+ *      `output/review-2026-09-20/reproduce.cjs` —— 所以「把 'output' 加进 skip」是错的修法。
+ *   ② 万一某天出现「整个目录被忽略、但目录里仍有被跟踪文件」（`profiles/`、`migrations/` 这类
+ *      运行时数据目录最可能变成这样），`--directory` 会把该目录整条列出来，按目录剪枝就会连
+ *      **被跟踪的源码一起排掉**。所以这里同时取 `git ls-files -z` 的被跟踪清单，
+ *      凡是「有被跟踪文件住在里面」的目录一律**不剪枝**（宁可多扫，绝不漏扫源码）。
+ *      实测当前仓库 17 个被忽略目录条目中有 0 个含被跟踪文件，但这条不能靠"现在恰好没有"。
+ *
+ * git 不可用时（脱离仓库的拷贝等）返回 null，退回 skip 的静态兜底：宁可漏排生成物，也不误排源码。
+ *
+ * @returns {{ignored: Set<string>, trackedDirs: Set<string>}|null}
+ */
+function gitScope() {
+  try {
+    const ignoredRes = spawnSync(
+      'git',
+      ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory'],
+      { cwd: ROOT, encoding: 'utf8' }
+    );
+    if (ignoredRes.error || ignoredRes.status !== 0) return null;
+    const ignored = new Set(
+      String(ignoredRes.stdout || '')
+        .split('\n')
+        .map((l) => l.trim().replace(/\/+$/, '').split('\\').join('/'))
+        .filter(Boolean)
+    );
+    const trackedDirs = new Set();
+    const trackedRes = spawnSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' });
+    if (!trackedRes.error && trackedRes.status === 0) {
+      for (const f of String(trackedRes.stdout || '').split('\0')) {
+        if (!f) continue;
+        let d = f;
+        for (;;) {
+          const i = d.lastIndexOf('/');
+          if (i < 0) break;
+          d = d.slice(0, i);
+          trackedDirs.add(d);
+        }
+      }
+    }
+    return { ignored, trackedDirs };
+  } catch {
+    return null;
+  }
+}
+
 function listFiles() {
   const out = [];
   // release/ 是打包产物（内含源码副本，天生是快照）：扫它没意义，改动源码后还会产生假报错
   const skip = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist', 'release']);
+  // 生成物/构建目录一律以 .gitignore 为准（见 gitScope 注释）；skip 只当 git 不可用时的兜底
+  const scope = gitScope();
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (skip.has(e.name)) continue;
       const p = path.join(dir, e.name);
+      if (scope) {
+        const rel = path.relative(ROOT, p).split(path.sep).join('/');
+        // 被忽略的目录里若住着被跟踪的文件，绝不剪枝（见 gitScope ②）
+        if (scope.ignored.has(rel) && !(e.isDirectory() && scope.trackedDirs.has(rel))) continue;
+      }
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.js')) out.push(path.relative(ROOT, p));
     }
