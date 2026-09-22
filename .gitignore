@@ -38,6 +38,16 @@ desktop/dist/
 # 系统
 .DS_Store
 Thumbs.db
+
+# 编辑器/工具临时产物。曾观察到某次编辑在 web/ 下短暂生成
+# `<name>.<pid>.<uuid>.tmpdir/app.js.tmp`：它自己会消失，但只要有一次用
+# `git add -A` 就会把它带进提交 —— 这类产物一律不入库，靠规则而不是靠纪律拦住。
+*.tmpdir/
+*.tmp
+*~
+*.orig
+*.rej
+*.bak
 # 运行时数据目录（档案仓根与迁移目录）。**必须锚定到仓库根**：
 # 不锚定的 `profiles/` 会连同源码目录 `src/profiles/` 一起忽略 —— 已跟踪的文件不受影响，
 # 所以表面上一切正常，但**往 src/profiles/ 新增文件会被静默忽略、永远不会进提交**。
