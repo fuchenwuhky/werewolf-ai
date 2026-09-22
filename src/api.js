@@ -73,7 +73,7 @@ const { PACES, detectPace, parseApiKeys, resolveChannels, canFanOut } = require(
 const { probeKeys } = require('./ai/probe');
 const { scheduler: defaultScheduler } = require('./ai/scheduler');
 const { AuthManager, isTrustedOrigin, isLoopbackAddress } = require('./auth');
-const { ProfileStore, isValidId, avatarUrlOf } = require('./profiles/store');
+const { ProfileStore, ValidationError, isValidId, avatarUrlOf } = require('./profiles/store');
 const { AnnotationStore, hasMeaningfulAnnotations } = require('./annotations/store');
 const { ProfileMigration, readLegacyExperienceOwner } = require('./profiles/migration');
 const { AVATAR_MIME, MAX_AVATAR_BYTES } = require('./profiles/avatar');
@@ -1976,19 +1976,74 @@ class Api {
     }
   }
 
+  /**
+   * 统计某档案名下「进行中」（started 且未 finished）的对局数：**内存 ∪ 磁盘**，同 gameId 只算一次。
+   *
+   * 为什么磁盘侧也必须数（M2-d，计划书 §5.2「有未结束对局的 owner 档案不可进入回收站」）：
+   * 旧实现只遍历 `this.games`（内存）。一局**只存在于存档**时（服务重启过，或从锚点载入但还没
+   * resume），它照样占着这份 owner 档案，却数不到 ⇒ 档案被移进回收区后这局存档变成**孤儿**：
+   * 没有任何一处会报错，只是它再也回不到任何档案名下。计划书 §2：发现数据丢失必须立即修复。
+   *
+   * 去重口径与 `_profileGameRows` 一致：内存与磁盘同 id 时只算一次（内存是权威、磁盘是快照），
+   * 所以内存里已结算而磁盘快照还停在"进行中"时，不会把同一局重复计两次。
+   * 磁盘档没有 gameId 的（手工夹具）：用文件名占键（绝不与内存 id 撞键），**照常计入**——
+   * 判据只认 game.started / game.finished，"这局还在跑"与有没有 id 无关。
+   *
+   * 损坏取舍 = **保守拒绝（fail-closed）**：`_readSaveDocStrict` 读不出的存档**无法确定归属**，
+   * 于是**无法排除**它就是本档案的未结束局。这里绝不把「读不出」当成「没有进行中」——那正是
+   * 本项目反复出现的静默失败形态，也违反计划书 §6「损坏数据返回明确错误」——而是把坏档原因
+   * 交回调用方去拒删（文案点名文件）。
+   * 代价（如实声明）：`saveDir` 里**任何**一份坏档都会暂时拦住**所有**档案的删除，不只它可能
+   * 属于的那一份。这是刻意取舍：误删档案不可逆，拒删只耽误一次操作，且文案已点名文件，
+   * 用户修好或移走即可放行。
+   *
+   * @returns {{active:number, corrupt:string[]}} active = 去重后的进行中局数；corrupt = 读不出的存档原因
+   */
+  _activeGameCount(pid) {
+    const activeIds = new Set();
+    const corrupt = [];
+    for (const f of this._saveFileNames()) {
+      const read = this._readSaveDocStrict(path.join(this.saveDir, f));
+      if (!read.ok) {
+        if (!read.missing) corrupt.push(read.error); // 竞态刚被删（missing）不算损坏，不冤枉
+        continue;
+      }
+      const doc = read.doc;
+      if (doc.ownerProfileId !== pid) continue;
+      const gm = (doc.game && typeof doc.game === 'object' && !Array.isArray(doc.game)) ? doc.game : {};
+      if (gm.started !== true || gm.finished === true) continue;
+      const id = gm.id;
+      activeIds.add((id === undefined || id === null || id === '') ? `\u0000file:${f}` : String(id));
+    }
+    for (const [gid, entry] of this.games) {
+      if (!entry || !entry.game || entry.ownerProfileId !== pid) continue;
+      if (!entry.game.started || entry.game.finished) continue;
+      activeIds.add(String(gid)); // 与磁盘同 id 时 Set 天然去重
+    }
+    return { active: activeIds.size, corrupt };
+  }
+
   /** 删除（仅归档态）：统计该档案进行中对局数后移入回收区 */
   async trashProfile(res, pid) {
     try {
-      let active = 0;
-      for (const entry of this.games.values()) {
-        if (entry.ownerProfileId === pid && entry.game.started && !entry.game.finished) active++;
-      }
+      // M2-d：进行中计数 = 内存 ∪ 磁盘（只数内存会漏掉"服务重启后仅存于存档"的局 → 孤儿存档）
+      const scan = this._activeGameCount(pid);
       if (!this.profiles.list({ includeArchived: true }).some((p) => p.id === pid)) {
         return this.json(res, 404, { error: '档案不存在' });
       }
       const prof = this.profiles.get(pid);
       if (!prof.archivedAt) return this.json(res, 409, { error: '请先归档再删除' });
-      const info = await this.profiles.trash(pid, { activeGames: active });
+      // 坏档只在"404 档案不存在 / 409 未归档"之后、且没有确证的进行中局时才拦：
+      //  · 放在 404/409 之前会把这两条既有语义顶掉（请求先被 400 拒，用户看不到真正的原因）；
+      //  · scan.active > 0 时让 profiles.trash 抛它那句更精确的「N 局进行中」，坏档留到下次重试再说。
+      if (scan.active === 0 && scan.corrupt.length) {
+        throw new ValidationError(
+          `存档目录有 ${scan.corrupt.length} 份读不出的存档（${scan.corrupt.join('；')}），`
+          + '无法确认其中没有该档案尚未结束的对局；为避免误删档案导致存档丢失归属，已保守拒绝删除。'
+          + '请先修复或移走这些文件后重试。',
+        );
+      }
+      const info = await this.profiles.trash(pid, { activeGames: scan.active });
       // FIX-11：删除路径同样保证默认标记不指向已消失的档案（归档态在 PATCH 已重指向过；
       // 这里覆盖"标记被旧版本/外部改写成已删档案"的存量状态，避免下次启动重建「默认玩家」）
       await this._repointDefaultProfile(pid);
