@@ -326,6 +326,9 @@
       </div>
       <div class="top-actions">
         <span class="alive-meter" id="g-alive" title="存活人数"></span>
+        <!-- 顶栏入口：与首页的 #btn-profiles-entry 是**同一个**玩家中心（四组同构，见 web/app.js#openPlayerCenter）
+             —— 计划书 §5「桌面首页与顶栏提供一致入口」。图标走共享徽记，不再用 emoji。 -->
+        <button class="btn ghost icon-btn" id="btn-player-center" data-ww-icon="players" title="玩家中心（资料 / 战绩 / 外观 / 数据）" aria-label="玩家中心"></button>
         <button class="btn ghost icon-btn" id="btn-notes" data-ww-icon="notes" title="私人笔记（谁是谁的推测，AI 看不到）" aria-label="私人笔记"></button>
         <button class="btn ghost icon-btn" id="btn-gear" data-ww-icon="settings" data-i18n-title="m.gearTitle" title="设置（规则书 / 结束本局 / 退出）" aria-label="设置"></button>
       </div>

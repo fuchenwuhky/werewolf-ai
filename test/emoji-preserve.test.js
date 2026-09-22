@@ -99,11 +99,14 @@ const REQUIRED_LITERALS = [
     literal: '👤 ${escapeHtml(profile.nickname)}',
     note: '顶栏档案信息里的**玩家姓名**前缀（"不许误删玩家姓名 emoji"的直接落点）',
   },
-  { file: 'web/app.js', line: 1175, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
+  // ⚠ 这两条 line 是 M2-c 施工后的**位置重锚**：字面量、window（25）、note 全都没动，只有记录的行号跟着
+  //   新增的玩家中心代码下移（app.js +70：openPlayerCenter/pcFetch/fillPc* 的"先取数再一次画完"；
+  //   m.js +317：手机端玩家中心独立页）。判据强度不变 —— 仍是"±25 行内必须逐字命中"。
+  { file: 'web/app.js', line: 1245, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
   { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
   { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
   { file: 'web/m/index.html', line: 109, window: 25, literal: '👤 我的', note: '手机端"我的"页签' },
-  { file: 'web/m/m.js', line: 1392, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
+  { file: 'web/m/m.js', line: 1709, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
 ];
 
 test('非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {

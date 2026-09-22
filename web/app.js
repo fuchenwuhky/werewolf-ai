@@ -241,9 +241,12 @@ async function initSetup() {
     if (!sec.hidden) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   const profilesEntry = $('#btn-profiles-entry');
-  if (profilesEntry) profilesEntry.addEventListener('click', openProfileManager);
+  if (profilesEntry) profilesEntry.addEventListener('click', openPlayerCenter);
   const deviceProfiles = $('#btn-device-profiles');
-  if (deviceProfiles) deviceProfiles.addEventListener('click', openProfileManager);
+  if (deviceProfiles) deviceProfiles.addEventListener('click', openPlayerCenter);
+  // 局中顶栏入口（§5「桌面首页与顶栏提供一致入口」）：与首页/设备与数据卡是同一个玩家中心
+  const topbarPlayer = $('#btn-player-center');
+  if (topbarPlayer) topbarPlayer.addEventListener('click', openPlayerCenter);
   renderAbout();
   $('#btn-discard').addEventListener('click', () => {
     if (confirm('确定放弃当前进行中的对局？该对局将无法继续。')) {
@@ -1027,6 +1030,13 @@ function currentProfilePrefs() {
   return window.WWProfileState.prefsOf(state.profiles, state.profileId);
 }
 
+/**
+ * 偏好控件（同一套语义在桌面端有**两组**控件：开局设置页 #pref-*、玩家中心 #pc-pref-*）。
+ * 回显两组都写 —— 只写一组就会出现"同一份偏好在两个入口显示不同值"。
+ * 为什么不共用一组 id：同一文档里 id 必须唯一，第二处只能另起前缀。
+ */
+const PREF_CONTROL_PAIRS = [['#pref-font', '#pc-pref-font'], ['#pref-layout', '#pc-pref-layout'], ['#pref-motion', '#pc-pref-motion']];
+
 /** 偏好应用：html[data-pref-*] → style.css 共享变量（双端同一套语义） */
 function applyProfilePrefs(prefs) {
   const p = prefs || {};
@@ -1034,11 +1044,11 @@ function applyProfilePrefs(prefs) {
   root.dataset.prefFont = Number(p.fontScale) > 1 ? 'lg' : (Number(p.fontScale) > 0 && Number(p.fontScale) < 1 ? 'sm' : 'std');
   root.dataset.prefLayout = p.layout === 'compact' ? 'compact' : 'reading';
   root.dataset.prefMotion = p.reducedMotion ? '0' : '1';
-  // 控件回显（设置页存在时）
-  const f = document.querySelector('#pref-font'), l = document.querySelector('#pref-layout'), m = document.querySelector('#pref-motion');
-  if (f) f.value = root.dataset.prefFont;
-  if (l) l.value = root.dataset.prefLayout;
-  if (m) m.checked = !!p.reducedMotion;
+  // 控件回显（两组界面各自存在时都要写）
+  const [fontIds, layoutIds, motionIds] = PREF_CONTROL_PAIRS;
+  for (const id of fontIds) { const n = document.querySelector(id); if (n) n.value = root.dataset.prefFont; }
+  for (const id of layoutIds) { const n = document.querySelector(id); if (n) n.value = root.dataset.prefLayout; }
+  for (const id of motionIds) { const n = document.querySelector(id); if (n) n.checked = !!p.reducedMotion; }
 }
 
 /**
@@ -1084,8 +1094,11 @@ async function saveProfilePrefs(prefs) {
   }
 }
 
-function onPrefControlChange() {
-  const f = document.querySelector('#pref-font'), l = document.querySelector('#pref-layout'), m = document.querySelector('#pref-motion');
+/**
+ * 偏好控件 → 即时生效 + 落档案（桌面端两组控件共用一份；谁触发的谁把三个控件传进来）。
+ * ⚠ 不要把它直接当 change 监听器：形参就是三个控件，事件对象会被当成 f 传进来。
+ */
+function commitPrefsFromControls(f, l, m) {
   const prefs = {
     fontScale: f && f.value === 'lg' ? 1.2 : (f && f.value === 'sm' ? 0.9 : 1),
     layout: l && l.value === 'compact' ? 'compact' : 'reading',
@@ -1093,6 +1106,16 @@ function onPrefControlChange() {
   };
   applyProfilePrefs(prefs); // 先即时生效
   saveProfilePrefs(prefs);  // 再落档案（失败自动回退）
+}
+
+/** 开局设置页那组控件（#pref-*）的监听器：无参，读数走 id 查询 */
+function onPrefControlChange() {
+  commitPrefsFromControls(document.querySelector('#pref-font'), document.querySelector('#pref-layout'), document.querySelector('#pref-motion'));
+}
+
+/** 玩家中心那组控件（#pc-pref-*）的监听器：与设置页写同一份数据（§5 组③） */
+function onPcPrefControlChange() {
+  commitPrefsFromControls(document.querySelector('#pc-pref-font'), document.querySelector('#pc-pref-layout'), document.querySelector('#pc-pref-motion'));
 }
 
 function profileLabel(p) {
@@ -1170,24 +1193,111 @@ function onSelectProfile(pid) {
   renderSetupDigest();
 }
 
-function openProfileManager() {
+/**
+ * 玩家中心（计划书 §5，桌面端）：四组与手机端**同构** —— 组名与顺序逐字一致
+ * （①个人资料 ②对局与战绩 ③外观与操作 ④数据管理）。
+ * 入口三处共用这一个函数：首页 hero 的「玩家中心」`#btn-profiles-entry`、
+ * 设备与数据卡 `#btn-device-profiles`、局中顶栏 `#btn-player-center`。
+ *
+ * 旧名 `openProfileManager` 保留为别名：openProfileTrash / openProfileEdit / openProfileImport
+ * 的"返回档案列表"路径都走它，且 scripts/ui-check.js 整段真路（档案 / 头像 / 回收区）依赖本函数
+ * 渲染出的 `#pm-trash-entry` / `#pm-trash-list` / `.pm-row[data-profile-id]` / `.pm-ops` 次序
+ * （第 1 个键是「选用」、第 2 个是「编辑」）/ `.btnrow` 按钮族 —— 这些结构不许顺手改。
+ */
+const PC_GROUPS = [
+  { id: 'profile', title: '个人资料' },
+  { id: 'games', title: '对局与战绩' },
+  { id: 'appearance', title: '外观与操作' },
+  { id: 'data', title: '数据管理' },
+];
+
+/**
+ * 取一份数据，失败与超时都翻成**可渲染的结果**（永不 reject）。
+ * 玩家中心要先取数再一次画完，所以任何一个慢接口都不能把弹层拖住：
+ * 2.5s 没回来就按"读取失败（超时）"渲染，其余段落照常。
+ */
+function pcFetch(path) {
+  if (!path) return Promise.resolve({ ok: false, err: new Error('尚未加载档案') });
+  return Promise.race([
+    api('GET', path).then((data) => ({ ok: true, data })).catch((err) => ({ ok: false, err })),
+    new Promise((res) => { setTimeout(() => res({ ok: false, err: new Error('读取超时（2.5 秒）') }), 2500); }),
+  ]);
+}
+
+/**
+ * 打开玩家中心。**先取数、再一次画完**，不是"先画骨架再异步填" —— 后者会让弹层在打开后
+ * 继续长高，④组（数据管理）的按钮跟着往下位移：玩家/脚本按下的位置已经不是它了
+ * （脚本的 realClick 会先在元素几何上做命中测试、再发鼠标事件，几何一变就落到别处，
+ *  实测表现为"点回收站没反应"，且只在打开后的几十毫秒内出现，是间歇性红）。
+ */
+async function openPlayerCenter() {
+  const pid = state.profileId; // 取数期间的档案：切了就整份作废（落笔前再比一次）
+  const [stats, un, fin, trash, rec] = await Promise.all([
+    pcFetch(pid ? `/api/profiles/${pid}/stats` : null),
+    pcFetch(pid ? `/api/profiles/${pid}/games?status=unfinished&limit=5` : null),
+    pcFetch(pid ? `/api/profiles/${pid}/games?status=finished&limit=5` : null),
+    pcFetch('/api/profiles/trash'),
+    pcFetch('/api/import/recoveries'),
+  ]);
+  if (state.profileId !== pid) return; // §5.2：等数据期间切了档，旧档案的数据不许画到新档案下
+
   const wrap = el('div');
   const head = el('div', 'mhead', '<h2>👤 玩家档案</h2>');
   const close = el('button', 'btn ghost small', '✕');
   close.addEventListener('click', () => { closeModal(); });
   head.appendChild(close);
   const body = el('div', 'mbody');
-  body.appendChild(el('p', 'hint', '同一台设备可以建多个玩家档案：战绩、笔记、AI 经验池互相隔离。API 配置是整台设备共享的，切换档案不会改动它。档案的唯一身份是 UUID，昵称允许重名。'));
+
+  // 四组按 PC_GROUPS 的**固定顺序**先建骨架，再按 id 把内容填进各自的盒子；
+  // 页面里的组顺序因此只由 PC_GROUPS 决定（守卫 test/player-center.test.js 钉它，打乱即判红）。
+  const boxes = new Map();
+  for (const g of PC_GROUPS) {
+    const sec = el('section', 'pc-group');
+    sec.dataset.wwGroup = g.id;
+    sec.appendChild(el('h3', 'pc-group-head', g.title));
+    const box = el('div');
+    sec.appendChild(box);
+    body.appendChild(sec);
+    boxes.set(g.id, box);
+  }
+  const usableCount = state.profiles.filter((p) => !p.archivedAt).length;
+  fillPcProfile(boxes.get('profile'), usableCount);
+  fillPcGames(boxes.get('games'), { stats, un, fin });
+  fillPcAppearance(boxes.get('appearance'));
+  fillPcData(boxes.get('data'), { trash, rec });
+  wrap.append(head, body);
+  openModal(wrap);
+}
+
+/** 旧名别名：既有调用点与"返回档案列表"路径继续可用（少一次回归面） */
+function openProfileManager() { openPlayerCenter(); }
+
+/** ① 个人资料：头像、昵称、简介、当前档案（列表每一行 = 切档 + 该档案的数据操作） */
+function fillPcProfile(box, usableCount) {
+  box.appendChild(el('p', 'hint', '同一台设备可以建多个玩家档案：战绩、笔记、AI 经验池互相隔离。API 配置是整台设备共享的，切换档案不会改动它。档案的唯一身份是 UUID，昵称允许重名。'));
+  const cur = state.profiles.find((p) => p.id === state.profileId && !p.archivedAt);
+  const me = el('div', 'home-profile');
+  const av = el('span', 'pm-name-av');
+  me.appendChild(av);
+  renderAvatarInto(av, cur); // 与首页/顶栏同一条渲染路径，缺失也回落内置徽记
+  const who = el('span', 'home-who');
+  who.appendChild(elText('b', null, cur ? cur.nickname : '默认档案'));
+  who.appendChild(elText('div', 'hint', cur && cur.bio ? cur.bio : '简介还没写（点「编辑」补上）'));
+  me.appendChild(who);
+  const edit = el('button', 'btn ghost small', cur ? '编辑资料' : '新建档案');
+  edit.id = 'pc-edit-current';
+  edit.addEventListener('click', () => openProfileEdit(cur || null));
+  me.appendChild(edit);
+  box.appendChild(me);
 
   const list = el('div', 'pm-list');
   const rows = [...state.profiles].sort((a, b) => (a.archivedAt ? 1 : 0) - (b.archivedAt ? 1 : 0) || String(b.lastUsedAt || '').localeCompare(String(a.lastUsedAt || '')));
-  const usableCount = state.profiles.filter((p) => !p.archivedAt).length;
   for (const p of rows) {
     const row = el('div', 'pm-row' + (p.archivedAt ? ' archived' : '') + (p.id === state.profileId ? ' current' : ''));
     row.dataset.profileId = p.id; // 供脚本/验收精确定位某一行（昵称允许重名，不能按昵称找）
     const main = el('div', 'pm-main');
     // 名前行：真实头像（自定义图或内置徽记）+ 昵称/归档/当前"三态文案"。
-    // 这里显示的就是首页/顶栏用的同一条渲染路径，玩家中心一眼能看出改没改成功。
+    // 与首页/顶栏是同一条渲染路径，玩家中心一眼能看出改没改成功。
     const name = el('div', 'pm-name');
     const avBox = el('span', 'pm-name-av');
     name.appendChild(avBox);
@@ -1219,14 +1329,7 @@ function openProfileManager() {
       });
     }
     if (!p.archivedAt) {
-      op('归档', async (pp) => {
-        if (usableCount <= 1) { alert('最后一个可用档案不能归档（可先新建一个）'); return; }
-        if (!confirm(`归档「${pp.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
-        try {
-          await api('PATCH', `/api/profiles/${pp.id}`, { expectedRevision: pp.revision, archive: true });
-          await loadProfiles(); openProfileManager();
-        } catch (e) { alert(`归档失败：${e.message}`); }
-      });
+      op('归档', (pp) => archiveProfile(pp, usableCount));
     } else {
       op('恢复', async (pp) => {
         try {
@@ -1247,32 +1350,246 @@ function openProfileManager() {
     row.appendChild(ops);
     list.appendChild(row);
   }
-  body.appendChild(list);
+  box.appendChild(list);
 
   const btnrow = el('div', 'btnrow');
   const mk = el('button', 'btn', '＋ 新建档案');
   mk.addEventListener('click', () => openProfileEdit(null));
   btnrow.appendChild(mk);
+  box.appendChild(btnrow);
+}
+
+/** 归档一个档案：列表行与④组「归档当前档案」共用（可用档案只剩一个时必须挡住 —— 否则会没有档案可用） */
+async function archiveProfile(pp, usableCount) {
+  if (usableCount <= 1) { alert('最后一个可用档案不能归档（可先新建一个）'); return; }
+  if (!confirm(`归档「${pp.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
+  try {
+    await api('PATCH', `/api/profiles/${pp.id}`, { expectedRevision: pp.revision, archive: true });
+    await loadProfiles(); openProfileManager();
+  } catch (e) { alert(`归档失败：${e.message}`); }
+}
+
+/** 统计概览的一行文案（分母口径与档案列表里的「战绩」按钮一致：只有可判定的真实局进胜率） */
+function statsLine(s) {
+  const wins = s.wins || 0;
+  const losses = s.losses || 0;
+  const b = s.byBucket || {};
+  const rate = (wins + losses) ? ` · 胜率 ${Math.round((wins / (wins + losses)) * 100)}%` : '';
+  return `真实对局 ${s.real || 0} 局（胜率分母）· ${wins} 胜 ${losses} 负${s.draws ? ` ${s.draws} 平` : ''}${rate}`
+    + ` · 试玩 ${b.mock || 0} · 观战 ${b.spectate || 0} · 终止 ${b.terminated || 0} · 存档合计 ${s.total || 0}`;
+}
+
+function pcWinnerText(w) {
+  if (w === 'wolf') return '狼阵营胜';
+  if (w === 'good') return '好人阵营胜';
+  return w || '已结束';
+}
+
+/**
+ * ② 对局与战绩：统计概览 + 进行中 + 最近完成。
+ * 数据由 openPlayerCenter 先取好（真实接口 /stats、/games?status=…），这里只负责画 —— 三段各自
+ * 失败只影响自己那一段（一段的失败文案不会把整组变空白）。
+ */
+function fillPcGames(box, res) {
+  if (!state.profileId) { box.appendChild(el('p', 'hint', '尚未加载档案。')); return; }
+  const R = res || {};
+  const failText = (label, r) => `${label}读取失败：${(r && r.err && r.err.message) || '未知错误'}`;
+
+  const stats = el('p', 'hint');
+  stats.textContent = R.stats && R.stats.ok
+    ? `统计概览：${statsLine(R.stats.data)}`
+    : failText('统计概览', R.stats);
+  box.appendChild(stats);
+
+  const unBox = el('div');
+  unBox.appendChild(el('h4', 'pc-sub', '进行中'));
+  if (R.un && R.un.ok) {
+    const rows = (R.un.data && R.un.data.rows) || [];
+    if (!rows.length) unBox.appendChild(el('p', 'hint', '没有进行中的对局。'));
+    for (const g of rows) unBox.appendChild(pcGameRow(g, true));
+  } else {
+    unBox.appendChild(el('p', 'hint', failText('进行中', R.un)));
+  }
+  box.appendChild(unBox);
+
+  const finBox = el('div');
+  finBox.appendChild(el('h4', 'pc-sub', '最近完成'));
+  if (R.fin && R.fin.ok) {
+    const d = R.fin.data || {};
+    const rows = d.rows || [];
+    if (!rows.length) finBox.appendChild(el('p', 'hint', '还没有已结束的对局。'));
+    for (const g of rows) finBox.appendChild(pcGameRow(g, false));
+    if (d.total > rows.length) finBox.appendChild(elText('p', 'hint', `共 ${d.total} 局已结束；列表只展示最近 ${rows.length} 局。`));
+  } else {
+    finBox.appendChild(el('p', 'hint', failText('最近完成', R.fin)));
+  }
+  box.appendChild(finBox);
+}
+
+/** 对局行：进行中给「继续对局」，已结束给「历史」（只读事件流） */
+function pcGameRow(g, resumable) {
+  const row = el('div', 'pc-row' + (resumable ? ' current' : ''));
+  const main = el('div', 'pc-main');
+  main.appendChild(elText('div', 'pc-name', resumable ? `${g.mock ? '🧪' : '💳'} ${g.id}` : `${g.mock ? '🧪' : '💳'} ${pcWinnerText(g.winner)}`));
+  const phase = g.phase ? ` · ${PHASE_LABEL[g.phase] || g.phase}` : '';
+  const tail = resumable ? ' · 进行中' : (g.savedAt ? ` · ${new Date(g.savedAt).toLocaleString()}` : '');
+  main.appendChild(elText('div', 'hint', `第 ${g.day || 0} 天${phase}${tail}`));
+  row.appendChild(main);
+  const ops = el('div', 'pm-ops');
+  const btn = el('button', 'btn small', resumable ? '继续对局' : '历史');
+  btn.addEventListener('click', () => { if (resumable) pcResumeFromRow(g, btn); else openPcHistory(g.id); });
+  ops.appendChild(btn);
+  row.appendChild(ops);
+  return row;
+}
+
+/** 从玩家中心的一行恢复对局：取令牌后走与首页「继续对局」**同一个** resumeGame() */
+async function pcResumeFromRow(g, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const t = await api('GET', `/api/games/${g.id}/tokens`);
+    state.resume = { gameId: g.id, playerToken: t.player, godToken: t.god, mock: !!g.mock };
+    closeModal();
+    await resumeGame();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    alert(`恢复失败：${e.message}`);
+  }
+}
+
+/** 已结束对局的只读历史（M2-b 接口）：正文一律 textContent —— 事件文案是引擎/模型产出 */
+async function openPcHistory(gameId) {
+  const pid = state.profileId;
+  if (!pid) return;
+  const wrap = el('div');
+  const head = el('div', 'mhead', `<h2>${ico('timeline')} 对局历史</h2>`);
+  const close = el('button', 'btn ghost small', '✕');
+  close.addEventListener('click', () => { closeModal(); openProfileManager(); });
+  head.appendChild(close);
+  const body = el('div', 'mbody');
+  body.appendChild(elText('p', 'hint', `只读历史 · ${gameId}：来自存档事件，不启动引擎、不调用模型。`));
+  const listBox = el('div');
+  listBox.textContent = '加载中…';
+  body.appendChild(listBox);
+  wrap.append(head, body);
+  openModal(wrap);
+  try {
+    const r = await api('GET', `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=100`);
+    listBox.textContent = '';
+    const rows = r.rows || [];
+    for (const e of rows) {
+      const row = el('div', 'pc-row');
+      const main = el('div', 'pc-main');
+      main.appendChild(elText('div', 'pc-name', `第 ${e.day || 0} 天 · ${PHASE_LABEL[e.phase] || e.phase || ''}`));
+      main.appendChild(elText('div', 'hint', e.text || ''));
+      row.appendChild(main);
+      listBox.appendChild(row);
+    }
+    if (!rows.length) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
+    if (r.hasMore) listBox.appendChild(elText('p', 'hint', `还有更多事件（共 ${r.total} 条），这里先显示前 ${rows.length} 条。`));
+  } catch (e) {
+    listBox.textContent = '';
+    listBox.appendChild(elText('p', 'hint', `历史加载失败：${e.message}`));
+  }
+}
+
+/** ③ 外观与操作：字号 / 阅读布局 / 减少动态效果 —— 与开局设置页 #pref-* 同一份偏好实现 */
+function fillPcAppearance(box) {
+  const cur = currentProfilePrefs();
+  const mkSel = (id, options, value) => {
+    const sel = el('select');
+    sel.id = id;
+    for (const [val, label] of options) {
+      const o = el('option', null, label);
+      o.value = val;
+      sel.appendChild(o);
+    }
+    sel.value = value;
+    sel.addEventListener('change', onPcPrefControlChange);
+    return sel;
+  };
+  const curFont = Number(cur.fontScale) > 1 ? 'lg' : (Number(cur.fontScale) > 0 && Number(cur.fontScale) < 1 ? 'sm' : 'std');
+  const rowF = el('div', 'pc-field');
+  rowF.appendChild(el('span', null, '界面字号'));
+  rowF.appendChild(mkSel('pc-pref-font', [['sm', '小'], ['std', '标准'], ['lg', '大']], curFont));
+  const rowL = el('div', 'pc-field');
+  rowL.appendChild(el('span', null, '阅读布局'));
+  rowL.appendChild(mkSel('pc-pref-layout', [['reading', '阅读'], ['compact', '紧凑']], cur.layout === 'compact' ? 'compact' : 'reading'));
+  const rowM = el('div', 'pc-field');
+  rowM.appendChild(el('span', null, '减少动态效果'));
+  const mchk = el('input');
+  mchk.type = 'checkbox';
+  mchk.id = 'pc-pref-motion';
+  mchk.checked = !!cur.reducedMotion;
+  mchk.addEventListener('change', onPcPrefControlChange);
+  rowM.appendChild(mchk);
+  box.append(rowF, rowL, rowM);
+  box.appendChild(el('p', 'hint', '档案级偏好：保存到当前档案，切档后各自生效（与「开局设置 · 外观与操作」是同一份数据）。'));
+}
+
+/** ④ 数据管理：导出、导入、归档、回收站和待清理恢复记录（数据由 openPlayerCenter 先取好） */
+function fillPcData(box, res) {
+  const cur = state.profiles.find((p) => p.id === state.profileId && !p.archivedAt);
+  const usableCount = state.profiles.filter((p) => !p.archivedAt).length;
+  const R = res || {};
+
+  const row = el('div', 'btnrow');
+  const exp = el('button', 'btn ghost', '导出当前档案');
+  exp.id = 'pc-export';
+  exp.disabled = !cur;
+  exp.title = cur ? `导出「${cur.nickname}」为档案包（含战绩 / 笔记）` : '先选一个档案';
+  exp.addEventListener('click', () => { if (cur) window.open(`/api/profiles/${cur.id}/export`, '_blank', 'noopener'); });
+  row.appendChild(exp);
   const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
   imp.addEventListener('click', () => openProfileImport());
-  btnrow.appendChild(imp);
-  // 回收区入口（FIX-04）：「删除＝归档代替删除」以前删掉就找不回来，这里是唯一的恢复入口。
+  row.appendChild(imp);
+  // 回收区入口（FIX-04）：id 与文案保持不变 —— scripts/ui-check.js 靠 #pm-trash-entry 走整段回收区真路
   const trashBtn = el('button', 'btn ghost', icoLabel('trash', '回收站'));
   trashBtn.id = 'pm-trash-entry';
   trashBtn.addEventListener('click', openProfileTrash);
-  btnrow.appendChild(trashBtn);
-  body.appendChild(btnrow);
-  // 计数异步补：失败不静默（标签直接写"读取失败"、title 给出原因），也不影响档案管理本身可用。
-  api('GET', '/api/profiles/trash').then((r) => {
-    trashBtn.innerHTML = icoLabel('trash', `回收站（${((r && r.items) || []).length}）`);
-  }).catch((e) => {
+  row.appendChild(trashBtn);
+  box.appendChild(row);
+  // 计数用取好的那份：**打开就定形**，不给它一次异步改字的机会（改字=重排=按钮位移）
+  if (R.trash && R.trash.ok) {
+    trashBtn.innerHTML = icoLabel('trash', `回收站（${((R.trash.data && R.trash.data.items) || []).length}）`);
+  } else {
     trashBtn.innerHTML = icoLabel('trash', '回收站（读取失败）');
-    trashBtn.title = (e && e.message) || '回收区不可用';
+    trashBtn.title = (R.trash && R.trash.err && R.trash.err.message) || '回收区不可用';
+  }
+
+  const row2 = el('div', 'btnrow');
+  const arch = el('button', 'btn ghost', '归档当前档案');
+  arch.id = 'pc-archive';
+  arch.disabled = !cur;
+  arch.title = cur ? '归档后从选择器隐藏，战绩与笔记保留，可随时恢复' : '先选一个档案';
+  arch.addEventListener('click', () => { if (cur) archiveProfile(cur, usableCount); });
+  row2.appendChild(arch);
+  box.appendChild(row2);
+
+  box.appendChild(el('p', 'hint', '待清理恢复记录（导入中断后留下的中间文件）'));
+  const recLine = el('p', 'hint');
+  const recBtn = el('button', 'btn ghost small', '重试清理');
+  if (R.rec && R.rec.ok) {
+    const n = ((R.rec.data && R.rec.data.items) || []).length;
+    recLine.textContent = n ? `有 ${n} 条待清理恢复记录` : '没有待清理的恢复记录 ✓';
+    if (!n) recBtn.style.display = 'none';
+  } else {
+    recLine.textContent = '恢复记录不可用（需管理会话）';
+    recBtn.style.display = 'none';
+  }
+  recBtn.addEventListener('click', async () => {
+    recBtn.disabled = true;
+    try {
+      const r = await api('POST', '/api/import/recoveries/retry');
+      recLine.textContent = r.remaining ? `仍有 ${r.remaining} 条待清理（残留文件被占用）` : '没有待清理的恢复记录 ✓';
+      recBtn.disabled = !r.remaining;
+    } catch (e) { recLine.textContent = `重试失败：${e.message}`; recBtn.disabled = false; }
   });
-  body.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。能读本地文件或管理本服务的人就能看到所有档案。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
-  wrap.append(head, body);
-  openModal(wrap);
+  box.append(recLine, recBtn);
+
+  box.appendChild(el('p', 'hint', '说明：这些档案是同一设备上的数据分类，不是密码保护。能读本地文件或管理本服务的人就能看到所有档案。手机浏览器连的是电脑服务时，读写的也是电脑那一份。'));
 }
+
 
 /** 表单内联错误行（沿用档案表单原有配色，不再多写一处色值） */
 function formErrorLine() {

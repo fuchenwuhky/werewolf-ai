@@ -1891,3 +1891,29 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .start-review-row > b { color: var(--text); font-weight: 600; overflow-wrap: anywhere; }
 .start-review-row.needs-config > b { color: var(--gold-bright); }
 .start-review .btnrow { margin-top: var(--sp-4); }
+
+/* ---------- 玩家中心（计划书 §5）：四组固定分组的容器与标题 ----------
+   组**顺序**不在这里：桌面端由 web/app.js 的 PC_GROUPS 决定、手机端写死在 m/index.html 的
+   data-ww-group 里（守卫 test/player-center.test.js 两端交叉比对）。这里只管长什么样。
+   .pc-group / .pc-sub 手机端 m.css 另有密度覆盖（m.css 在 @import style.css 之后，后者胜出）。 */
+.pc-group { margin: 0 0 var(--sp-4); }
+.pc-group-head {
+  margin: var(--sp-3) 0 var(--sp-2); font-family: var(--font-cn-title);
+  font-size: var(--fs-lg); color: var(--gold-bright); letter-spacing: 1px;
+}
+.pc-group:first-child .pc-group-head { margin-top: 0; }
+.pc-sub { margin: var(--sp-3) 0 var(--sp-1); color: var(--gold-bright); font-size: var(--fs-sm); font-weight: 600; letter-spacing: 1px; }
+/* 行样式：两端共用（手机端 m.css 只覆盖 .pc-group 的密度与头像尺寸，不重复这批属性） */
+.pc-field { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin: var(--sp-2) 0; }
+.pc-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); margin: 0 0 var(--sp-2);
+  background: rgba(10, 14, 26, .6); border: 1px solid rgba(146, 174, 235, .14); border-radius: var(--r-md);
+}
+.pc-row.current { border-color: rgba(var(--sem-gold-rgb), .55); }
+.pc-main { min-width: 0; }
+.pc-main .hint { overflow-wrap: anywhere; }
+.pc-name { font-weight: 700; color: var(--text); overflow-wrap: anywhere; }
+.pc-hist { display: flex; flex-direction: column; gap: var(--sp-1); max-height: 52vh; overflow-y: auto; }
+.pc-hist-row { display: flex; align-items: baseline; gap: var(--sp-2); }
+.pc-hist-txt { overflow-wrap: anywhere; }

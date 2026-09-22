@@ -131,6 +131,26 @@ window.addEventListener('popstate', (e) => {
   syncLayerScrollLock(); // 一次返回可能连关多层：循环结束后按最终状态重算滚动锁
 });
 
+/**
+ * 从对局列表的一行恢复对局：取令牌 → 写本机句柄 → 进对局。
+ * 「我的对局」弹层与玩家中心②组**共用这一份** —— 两处各写一遍必然漂移
+ * （其中一处迟早会漏掉句柄落盘或 mock 标记）。
+ */
+async function resumeFromRow(r, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const t = await api('GET', `/api/games/${r.id}/tokens`);
+    const handle = { gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: Date.now() };
+    state.resume = { handle, fromDisk: !r.inMemory };
+    try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', handle); } catch (_) { /* 隐私模式忽略 */ }
+    $('#m-modal').innerHTML = '';
+    resumeGame();
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    flash(`恢复失败：${e.message}`);
+  }
+}
+
 /** AC-11：我的对局列表（当前档案）——可恢复局置顶可继续，已结束局只读展示 */
 async function showMyGamesSheet() {
   if (!state.profileId) { flash('尚未选择档案', ''); return; }
@@ -154,17 +174,7 @@ async function showMyGamesSheet() {
       row.appendChild(main);
       const ops = el('div', 'pm-ops');
       const go = el('button', 'btn small', '继续');
-      go.addEventListener('click', async () => {
-        go.disabled = true;
-        try {
-          const t = await api('GET', `/api/games/${r.id}/tokens`);
-          const handle = { gameId: r.id, playerToken: t.player, godToken: t.god, mock: !!r.mock, savedAt: Date.now() };
-          state.resume = { handle, fromDisk: !r.inMemory };
-          try { window.WWGameDraft.writeHandle(localStorage, 'mww_current', handle); } catch (_) {}
-          $('#m-modal').innerHTML = '';
-          resumeGame();
-        } catch (e) { go.disabled = false; flash(`恢复失败：${e.message}`); }
-      });
+      go.addEventListener('click', () => resumeFromRow(r, go));
       ops.appendChild(go);
       row.appendChild(ops);
       body.appendChild(row);
@@ -172,7 +182,7 @@ async function showMyGamesSheet() {
     for (const r of finished) {
       const row = el('div', 'pm-row');
       const main = el('div', 'pm-main');
-      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${r.winner ? (r.winner === 'wolf' ? '狼阵营胜' : r.winner === 'good' ? '好人阵营胜' : r.winner) : '已结束'}`));
+      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${winnerText(r.winner)}`));
       main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.savedAt ? new Date(r.savedAt).toLocaleString() : ''}`));
       row.appendChild(main);
       body.appendChild(row);
@@ -357,6 +367,7 @@ async function init() {
   applyBoard('adv12');
   renderBoardGrid();
   wireSettings();
+  wirePlayerCenter(); // 屏2b 玩家中心：返回键 + ③ 外观与操作那三个控件（内容渲染在 renderPlayerCenter）
   $('#m-next').addEventListener('click', gotoRules);
   $('#m-back').addEventListener('click', () => { if (!dismissTop()) showScreen('m-boards'); });
   $('#m-start').addEventListener('click', startGame);
@@ -408,7 +419,8 @@ async function init() {
     await showMyGamesSheet(); // AC-11：按档案列出可恢复/已结束对局，而非一句提示
   });
   $('#m-tab-codex').addEventListener('click', () => openCodex());
-  $('#m-tab-me').addEventListener('click', openProfileManager);
+  // 「我的」= 独立页面（计划书 §5），不再只打开档案管理弹层；弹层仍是子流程（列表/编辑/回收站）
+  $('#m-tab-me').addEventListener('click', openPlayerCenter);
   // ---- FIN-06 局内页签 ----
   $('#m-tabbtn-speech').addEventListener('click', () => setGameTab('speech'));
   $('#m-tabbtn-players').addEventListener('click', () => setGameTab('players'));
@@ -567,28 +579,9 @@ function openSettingsModal() {
   prefBox.append(rowF, rowL, rowM);
   body.appendChild(prefBox);
 
-  // AC-08：待清理恢复记录的移动端可见入口（列出计数 + 重试）
+  // AC-08：待清理恢复记录的移动端可见入口（列出计数 + 重试）—— 与玩家中心④数据管理共用一份实现
   body.appendChild(el('p', 'hint', '🧹 待清理恢复记录'));
-  const recLine = el('div', 'hint');
-  recLine.textContent = '检查中…';
-  body.appendChild(recLine);
-  const recBtn = el('button', 'btn ghost small', '重试清理');
-  recBtn.style.marginBottom = '10px';
-  recBtn.addEventListener('click', async () => {
-    recBtn.disabled = true;
-    try {
-      const r = await api('POST', '/api/import/recoveries/retry');
-      recLine.textContent = r.remaining ? `仍有 ${r.remaining} 条待清理（残留文件被占用）` : '没有待清理的恢复记录 ✓';
-      recBtn.disabled = !r.remaining;
-    } catch (e) { recLine.textContent = `重试失败：${e.message}`; recBtn.disabled = false; }
-  });
-  body.appendChild(recBtn);
-  try {
-    api('GET', '/api/import/recoveries').then((r) => {
-      recLine.textContent = r.items.length ? `有 ${r.items.length} 条待清理恢复记录` : '没有待清理的恢复记录 ✓';
-      if (!r.items.length) recBtn.style.display = 'none';
-    }).catch(() => { recLine.textContent = '恢复记录不可用（需管理会话）'; recBtn.style.display = 'none'; });
-  } catch (_) {}
+  body.appendChild(recoveryBlock());
 
   const list = el('div', 'gear-list');
   const add = (label, fn, danger) => {
@@ -998,6 +991,307 @@ function openCodex(replace) {
 
 function closeCodexDom() { showScreen(state.codexFrom || 'm-boards'); }
 
+// ---------------- 屏2b：玩家中心（计划书 §5） ----------------
+/**
+ * 手机「我的」= **独立页面**（与 #m-boards / #m-codex / #m-rules / #m-game 同级的 `section.m-screen`），
+ * 不再是"点一下就弹底部弹层"。四组的**顺序与组名**写死在 index.html 的 DOM 里
+ * （`data-ww-group="profile|games|appearance|data"`，标题逐字取自计划书 §5），
+ * 本文件只按顺序把各组内容填进去 —— 这里不做任何排序或搬移，**顺序是结构事实**
+ * （守卫见 test/player-center.test.js：组的次序被打乱即判红）。
+ * 原有底部弹层仍保留给子流程：档案列表 / 编辑资料 / 裁切头像 / 回收站。
+ */
+function openPlayerCenter() {
+  // 从哪一屏进来，返回就回哪一屏（与 #m-codex 的 codexFrom 同一套做法）
+  state.playerFrom = ['m-boards', 'm-rules', 'm-game', 'm-codex'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  showScreen('m-player');
+  trackOverlay('screen-player', closePlayerCenterDom);
+  renderPlayerCenter();
+}
+
+function closePlayerCenterDom() { showScreen(state.playerFrom || 'm-boards'); }
+
+/** 一次性接线（返回键 + ③ 外观与操作那三个控件）；内容渲染见 renderPlayerCenter() */
+function wirePlayerCenter() {
+  $('#m-player-back').addEventListener('click', () => { if (!dismissTop()) showScreen('m-boards'); });
+  for (const id of ['#m-pc-pref-font', '#m-pc-pref-layout', '#m-pc-pref-motion']) {
+    const n = $(id);
+    if (n) n.addEventListener('change', onPcPrefControlChange);
+  }
+}
+
+/** 四组一起重画：切档或子流程回来后调它，避免"只刷新了一组" */
+function renderPlayerCenter() {
+  renderPcProfile();
+  renderPcData();
+  applyProfilePrefs(currentProfilePrefs()); // ③ 外观与操作：控件是静态 HTML，回显与设置弹窗同源
+  renderPcGames(); // ② 异步：自管加载态与切档竞态
+}
+
+/** 组内小标题（统计概览 / 进行中 / 最近完成） */
+const pcSub = (text) => el('h4', 'pc-sub', text);
+
+/** ① 个人资料：头像、昵称、简介、当前档案（数据全部来自 state.profiles，不造假数据） */
+function renderPcProfile() {
+  const box = $('#m-pc-profile');
+  if (!box) return;
+  box.innerHTML = '';
+  const usable = state.profiles.filter((x) => !x.archivedAt);
+  const p = usable.find((x) => x.id === state.profileId);
+  const idRow = el('div', 'pc-id');
+  const av = el('span', 'pc-av');
+  idRow.appendChild(av);
+  renderAvatarInto(av, p); // 与首页档案行/列表同一条渲染路径：自定义图或内置徽记，永不空白
+  const who = el('div', 'pc-who');
+  who.appendChild(elText('b', 'pc-nick', p ? p.nickname : (usable.length ? '未选择档案' : '默认档案')));
+  who.appendChild(elText('div', 'hint', p && p.bio ? p.bio : '简介还没写（点「编辑资料」补上）'));
+  if (p && p.createdAt) who.appendChild(elText('div', 'hint', `创建于 ${String(p.createdAt).slice(0, 10)}`));
+  idRow.appendChild(who);
+  box.appendChild(idRow);
+
+  const field = el('label', 'pc-field');
+  field.appendChild(el('span', null, '当前档案'));
+  const sel = el('select');
+  sel.id = 'm-pc-profile-select';
+  for (const q of usable) {
+    const o = el('option');
+    o.value = q.id;
+    o.textContent = profileLabel(q); // 昵称不可信：textContent
+    sel.appendChild(o);
+  }
+  if (state.profileId) sel.value = state.profileId;
+  sel.disabled = !usable.length;
+  // 切档走与规则页选择器**同一个** onSelectProfile（写选中键 + 预填昵称 + 偏好跟着档案走），
+  // 然后整页重画 —— 旧档案的头像/战绩不被留在页面上（§5.2）。
+  sel.addEventListener('change', (e) => { onSelectProfile(e.target.value); renderPlayerCenter(); });
+  field.appendChild(sel);
+  box.appendChild(field);
+
+  const ops = el('div', 'btnrow');
+  const edit = el('button', 'btn', icoLabel(p ? 'edit' : 'create', p ? '编辑资料' : '新建档案'));
+  edit.id = 'm-pc-edit';
+  edit.addEventListener('click', () => openProfileEdit(p || null));
+  ops.appendChild(edit);
+  const manage = el('button', 'btn ghost', icoLabel('players', '档案列表…'));
+  manage.id = 'm-pc-manage';
+  manage.addEventListener('click', openProfileManager); // 子流程仍在弹层里（选用/归档/删除/导出）
+  ops.appendChild(manage);
+  box.appendChild(ops);
+}
+
+/** 已结束局的一句话结论（列表与玩家中心共用，避免两处文案各写一套） */
+function winnerText(w) {
+  if (w === 'wolf') return '狼阵营胜';
+  if (w === 'good') return '好人阵营胜';
+  return w || '已结束';
+}
+
+/** 统计概览的一行文案（分母口径与桌面端一致：只有可判定的真实局进胜率） */
+function pcStatsText(s) {
+  const wins = s.wins || 0;
+  const losses = s.losses || 0;
+  const b = s.byBucket || {};
+  const rate = (wins + losses) ? ` · 胜率 ${Math.round((wins / (wins + losses)) * 100)}%` : '';
+  return `真实对局 ${s.real || 0} 局（胜率分母）· ${wins} 胜 ${losses} 负`
+    + `${s.draws ? ` ${s.draws} 平` : ''}${rate} · 试玩 ${b.mock || 0} · 观战 ${b.spectate || 0}`
+    + ` · 终止 ${b.terminated || 0} · 存档合计 ${s.total || 0}`;
+}
+
+/** ② 对局与战绩：统计概览 + 进行中 + 最近完成（全部走真实接口；三段各自加载，互不牵连） */
+async function renderPcGames() {
+  const box = $('#m-pc-games');
+  if (!box) return;
+  const pid = state.profileId;
+  box.innerHTML = '';
+  if (!pid) { box.appendChild(el('p', 'hint', '尚未选择档案。')); return; }
+
+  // 三段各自独立加载（与桌面端 fillPcGames 同一套取舍）：/stats 挂了不该把"进行中"也变成空白。
+  // 落笔前一律比对发起时的档案 id —— §5.2：切档后迟到的响应不得覆盖新档案的页面。
+  const fresh = () => state.profileId === pid;
+  const seg = (title) => {
+    const wrap = el('div');
+    wrap.appendChild(pcSub(title));
+    const body = el('div');
+    body.appendChild(el('p', 'hint', '加载中…'));
+    wrap.appendChild(body);
+    box.appendChild(wrap);
+    return body;
+  };
+  const fail = (body, label) => (e) => {
+    if (!fresh()) return;
+    body.innerHTML = '';
+    body.appendChild(el('p', 'hint', `${label}读取失败：${e.message}`));
+  };
+
+  const stats = seg('统计概览');
+  const unBox = seg('进行中');
+  const finBox = seg('最近完成');
+
+  api('GET', `/api/profiles/${pid}/stats`).then((st) => {
+    if (!fresh()) return;
+    stats.innerHTML = '';
+    stats.appendChild(el('p', 'hint', pcStatsText(st)));
+  }).catch(fail(stats, '统计概览'));
+
+  api('GET', `/api/profiles/${pid}/games?status=unfinished&limit=5`).then((un) => {
+    if (!fresh()) return;
+    unBox.innerHTML = '';
+    if (!un.rows.length) { unBox.appendChild(el('p', 'hint', '没有进行中的对局。回「开始」页开一局吧。')); return; }
+    for (const r of un.rows) unBox.appendChild(pcGameRow(r, true));
+  }).catch(fail(unBox, '进行中'));
+
+  api('GET', `/api/profiles/${pid}/games?status=finished&limit=5`).then((fin) => {
+    if (!fresh()) return;
+    finBox.innerHTML = '';
+    if (!fin.rows.length) { finBox.appendChild(el('p', 'hint', '还没有已结束的对局。')); return; }
+    for (const r of fin.rows) finBox.appendChild(pcGameRow(r, false));
+    if (fin.total > fin.rows.length) {
+      finBox.appendChild(elText('p', 'hint', `共 ${fin.total} 局已结束，这里展示最近 ${fin.rows.length} 局。`));
+    }
+    const more = el('button', 'btn ghost small', icoLabel('list', '全部对局…'));
+    more.id = 'm-pc-all-games';
+    more.addEventListener('click', showMyGamesSheet); // 看全的分页列表仍在弹层里（同一份接口）
+    finBox.appendChild(more);
+  }).catch(fail(finBox, '最近完成'));
+}
+
+/** ②组的一行对局：进行中给「继续」，已结束给「历史」（day / phase / savedAt 都可能缺，逐项拼） */
+function pcGameRow(r, resumable) {
+  const row = el('div', 'pc-row' + (resumable ? ' current' : ''));
+  const main = el('div', 'pc-main');
+  main.appendChild(elText('div', 'pc-name', resumable
+    ? `${r.mock ? '🧪' : '💳'} ${r.id}`
+    : `${r.mock ? '🧪' : '💳'} ${winnerText(r.winner)}`));
+  const parts = [`第 ${r.day || 0} 天`];
+  if (r.phase) parts.push(PHASE_LABEL[r.phase] || r.phase);
+  if (resumable) parts.push('进行中');
+  else if (r.savedAt || r.date) parts.push(new Date(r.savedAt || r.date).toLocaleString());
+  main.appendChild(elText('div', 'hint', parts.join(' · ')));
+  row.appendChild(main);
+  const btn = el('button', resumable ? 'btn small' : 'btn ghost small', resumable ? '继续' : '历史');
+  btn.id = `m-pc-${resumable ? 'resume' : 'history'}-${r.id}`;
+  btn.addEventListener('click', () => { if (resumable) resumeFromRow(r, btn); else openPcHistory(r.id); });
+  row.appendChild(btn);
+  return row;
+}
+
+/**
+ * 已结束对局的只读历史（子流程弹层）：GET /api/profiles/:id/games/:gameId/history（M2-b 落地）。
+ * 正文一律 textContent —— 事件文案是引擎/模型产出，绝不进 innerHTML。
+ */
+async function openPcHistory(gameId) {
+  const pid = state.profileId;
+  if (!pid) { flash('尚未选择档案', ''); return; }
+  const body = el('div');
+  body.appendChild(el('p', 'hint', '只读历史：来自存档事件，不会启动引擎、也不会调用模型。'));
+  const listBox = el('div', 'pc-hist');
+  listBox.textContent = '加载中…';
+  body.appendChild(listBox);
+  const foot = el('div', 'btnrow');
+  const close = el('button', 'btn ghost', '关闭');
+  close.addEventListener('click', closeSheet);
+  foot.appendChild(close);
+  openSheet(`对局历史 · ${gameId}`, body, foot, { icon: 'timeline' });
+  try {
+    const r = await api('GET', `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=100`);
+    listBox.textContent = '';
+    const rows = r.rows || [];
+    for (const e of rows) {
+      const line = el('div', 'pc-hist-row');
+      line.appendChild(elText('span', 'hint', `第 ${e.day || 0} 天 · ${PHASE_LABEL[e.phase] || e.phase || ''}`));
+      line.appendChild(elText('span', 'pc-hist-txt', e.text || ''));
+      listBox.appendChild(line);
+    }
+    if (!rows.length) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
+    if (r.hasMore) listBox.appendChild(el('p', 'hint', `还有更多事件（共 ${r.total} 条），这里先显示前 ${rows.length} 条。`));
+  } catch (e) {
+    listBox.textContent = '';
+    listBox.appendChild(el('p', 'hint', `历史加载失败：${e.message}`));
+  }
+}
+
+/** ④ 数据管理：导出、导入、归档、回收站和待清理恢复记录（全部接现有接口与现有弹层） */
+function renderPcData() {
+  const box = $('#m-pc-data');
+  if (!box) return;
+  box.innerHTML = '';
+  const usable = state.profiles.filter((x) => !x.archivedAt);
+  const p = usable.find((x) => x.id === state.profileId);
+
+  const ops = el('div', 'btnrow');
+  const exp = el('button', 'btn ghost', '导出当前档案');
+  exp.id = 'm-pc-export';
+  exp.disabled = !p;
+  exp.title = p ? `导出「${p.nickname}」为档案包（含战绩/笔记）` : '先选一个档案';
+  exp.addEventListener('click', () => { if (p) window.open(`/api/profiles/${p.id}/export`, '_blank', 'noopener'); });
+  ops.appendChild(exp);
+  const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
+  imp.id = 'm-pc-import';
+  imp.addEventListener('click', openProfileImport);
+  ops.appendChild(imp);
+  box.appendChild(ops);
+
+  const ops2 = el('div', 'btnrow');
+  const arch = el('button', 'btn ghost', '归档当前档案');
+  arch.id = 'm-pc-archive';
+  arch.disabled = !p;
+  arch.addEventListener('click', async () => {
+    if (!p) return;
+    if (usable.length <= 1) { flash('最后一个可用档案不能归档（可先新建一个）'); return; }
+    if (!confirm(`归档「${p.nickname}」？归档后从选择器隐藏，战绩与笔记保留，可随时恢复。`)) return;
+    try {
+      await api('PATCH', `/api/profiles/${p.id}`, { expectedRevision: p.revision, archive: true });
+      await loadProfiles();
+      renderPlayerCenter();
+      flash('已归档 ✓');
+    } catch (e) { flash(`归档失败：${e.message}`); }
+  });
+  ops2.appendChild(arch);
+  const trash = el('button', 'btn ghost', icoLabel('trash', '回收站'));
+  trash.id = 'm-pc-trash';
+  trash.addEventListener('click', openProfileTrash);
+  ops2.appendChild(trash);
+  box.appendChild(ops2);
+
+  box.appendChild(el('p', 'hint', '删除只是把档案移进回收区，战绩与笔记都还在；导入会新建 UUID，不覆盖现有档案。'));
+  box.appendChild(el('p', 'hint', '待清理恢复记录（导入中断后留下的中间文件）'));
+  box.appendChild(recoveryBlock()); // 与「设置」弹窗共用同一份实现，两处不漂移
+}
+
+/**
+ * 「待清理恢复记录」块（AC-08）：计数 + 重试清理。
+ * 手机端**两处**要它（设置弹窗、玩家中心④数据管理），所以收成一份实现 ——
+ * 各写一遍必然漂移（一边显示条数、另一边永远停在"检查中…"）。
+ * 失败不静默：文案直接写清原因（不可用时把重试键收起来）。
+ */
+function recoveryBlock() {
+  const box = el('div');
+  const line = el('div', 'hint');
+  line.textContent = '检查中…';
+  const btn = el('button', 'btn ghost small', '重试清理');
+  btn.style.marginBottom = '10px';
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    try {
+      const r = await api('POST', '/api/import/recoveries/retry');
+      line.textContent = r.remaining ? `仍有 ${r.remaining} 条待清理（残留文件被占用）` : '没有待清理的恢复记录 ✓';
+      btn.disabled = !r.remaining;
+    } catch (e) {
+      line.textContent = `重试失败：${e.message}`;
+      btn.disabled = false;
+    }
+  });
+  api('GET', '/api/import/recoveries').then((r) => {
+    const n = (r.items || []).length;
+    line.textContent = n ? `有 ${n} 条待清理恢复记录` : '没有待清理的恢复记录 ✓';
+    if (!n) btn.style.display = 'none';
+  }).catch(() => {
+    line.textContent = '恢复记录不可用（需管理会话）';
+    btn.style.display = 'none';
+  });
+  box.append(line, btn);
+  return box;
+}
+
 /** 细节弹层：内容与桌面版右侧栏同源（Codex.detailHtml），只是换个容器。
  *  两个坑：① openModal 只把**无类名容器**的孩子提升到 .modal 下，给它一个 .modal 类会变成
  *  ".modal 套 .modal"，内层是 position:fixed，外层高度塌成 0（实测只剩一条 4px 的线）；
@@ -1022,7 +1316,8 @@ function showCodexDetail(rid) {
 
 // ---------------- 屏3：规则确认 ----------------
 function showScreen(id) {
-  ['m-boards', 'm-codex', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  // 'm-player'（屏2b 玩家中心）与其余四屏同级：切换即整屏显隐，与 #m-codex 同一套做法
+  ['m-boards', 'm-codex', 'm-player', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
 }
 
 function gotoRules() {
@@ -1200,6 +1495,13 @@ function currentProfilePrefs() {
   return window.WWProfileState.prefsOf(state.profiles, state.profileId);
 }
 
+/**
+ * 偏好控件（同一套语义在手机端有**两组**控件：设置弹窗 #m-pref-*、玩家中心 #m-pc-pref-*）。
+ * 回显必须两组都写 —— 只写一组就会出现"两个开关各说各话"（玩家中心显示旧值）。
+ * 为什么不共用同一组 id：同一文档里 id 必须唯一，第二处只能另起前缀。
+ */
+const PREF_CONTROL_PAIRS = [['#m-pref-font', '#m-pc-pref-font'], ['#m-pref-layout', '#m-pc-pref-layout'], ['#m-pref-motion', '#m-pc-pref-motion']];
+
 /** 偏好应用：html[data-pref-*] → style.css 共享变量（与桌面端同一套语义/CSS） */
 function applyProfilePrefs(prefs) {
   const p = prefs || {};
@@ -1207,10 +1509,10 @@ function applyProfilePrefs(prefs) {
   root.dataset.prefFont = Number(p.fontScale) > 1 ? 'lg' : (Number(p.fontScale) > 0 && Number(p.fontScale) < 1 ? 'sm' : 'std');
   root.dataset.prefLayout = p.layout === 'compact' ? 'compact' : 'reading';
   root.dataset.prefMotion = p.reducedMotion ? '0' : '1';
-  const f = document.querySelector('#m-pref-font'), l = document.querySelector('#m-pref-layout'), m = document.querySelector('#m-pref-motion');
-  if (f) f.value = root.dataset.prefFont;
-  if (l) l.value = root.dataset.prefLayout;
-  if (m) m.checked = !!p.reducedMotion;
+  const [fontIds, layoutIds, motionIds] = PREF_CONTROL_PAIRS;
+  for (const id of fontIds) { const n = document.querySelector(id); if (n) n.value = root.dataset.prefFont; }
+  for (const id of layoutIds) { const n = document.querySelector(id); if (n) n.value = root.dataset.prefLayout; }
+  for (const id of motionIds) { const n = document.querySelector(id); if (n) n.checked = !!p.reducedMotion; }
 }
 
 /**
@@ -1254,8 +1556,11 @@ async function saveProfilePrefs(prefs) {
   }
 }
 
-function onPrefControlChangeM() {
-  const f = document.querySelector('#m-pref-font'), l = document.querySelector('#m-pref-layout'), m = document.querySelector('#m-pref-motion');
+/**
+ * 偏好控件 → 应用 + 落档案（设置弹窗与玩家中心**共用这一份**；谁触发的谁把三个控件传进来）。
+ * ⚠ 不要把本函数直接当 change 监听器：它形参就是"三个控件"，事件对象会被当成 f（踩过这类坑）。
+ */
+function commitPrefsFromControls(f, l, m) {
   const prefs = {
     fontScale: f && f.value === 'lg' ? 1.2 : (f && f.value === 'sm' ? 0.9 : 1),
     layout: l && l.value === 'compact' ? 'compact' : 'reading',
@@ -1263,6 +1568,18 @@ function onPrefControlChangeM() {
   };
   applyProfilePrefs(prefs);
   saveProfilePrefs(prefs);
+}
+
+/** 设置弹窗那组控件（#m-pref-*）的监听器：无参，读数走 id 查询 */
+function onPrefControlChangeM() {
+  const f = document.querySelector('#m-pref-font'), l = document.querySelector('#m-pref-layout'), m = document.querySelector('#m-pref-motion');
+  commitPrefsFromControls(f, l, m);
+}
+
+/** 玩家中心那组控件（#m-pc-pref-*）的监听器 */
+function onPcPrefControlChange() {
+  const f = document.querySelector('#m-pc-pref-font'), l = document.querySelector('#m-pc-pref-layout'), m = document.querySelector('#m-pc-pref-motion');
+  commitPrefsFromControls(f, l, m);
 }
 
 function profileLabel(p) {

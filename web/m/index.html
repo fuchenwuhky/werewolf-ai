@@ -125,6 +125,58 @@
     <div class="cdx-grid" id="cdx-grid"></div>
   </section>
 
+  <!-- 屏2b：玩家中心（计划书 §5）——手机「我的」是**独立页面**，不再只打开管理弹层。
+       四组的**顺序写死在 DOM 里**：①个人资料 ②对局与战绩 ③外观与操作 ④数据管理，
+       组名逐字取自计划书 §5；组内内容由 m.js 的 openPlayerCenter() 填充。
+       顺序与组名由 test/player-center.test.js 按 data-ww-group 的**出现次序**钉住（打乱即红）。
+       原有底部弹层（#m-sheet）仍用于子流程：档案列表 / 编辑资料 / 裁切头像 / 回收站。 -->
+  <section id="m-player" class="m-screen hidden">
+    <header class="m-head">
+      <button class="btn small" id="m-player-back" data-ww-icon="back" data-i18n-title="m.back" title="返回"></button>
+      <h2 data-i18n="m.playerCenter">玩家中心</h2>
+    </header>
+    <div class="m-scroll">
+      <!-- ① 个人资料：头像、昵称、简介、当前档案 -->
+      <section class="pc-group" id="m-pc-group-profile" data-ww-group="profile">
+        <h3 class="m-h3" data-i18n="m.pc.profile">个人资料</h3>
+        <div id="m-pc-profile"></div>
+      </section>
+
+      <!-- ② 对局与战绩：进行中、最近完成和统计概览 -->
+      <section class="pc-group" id="m-pc-group-games" data-ww-group="games">
+        <h3 class="m-h3" data-i18n="m.pc.games">对局与战绩</h3>
+        <div id="m-pc-games"></div>
+      </section>
+
+      <!-- ③ 外观与操作：与「设置」弹层同一套偏好（同一份 applyProfilePrefs / saveProfilePrefs，
+           只是第二组控件 —— 这里写死 id 前缀 m-pc-pref-*，不与弹层里的 m-pref-* 抢同一个 id）。 -->
+      <section class="pc-group" id="m-pc-group-appearance" data-ww-group="appearance">
+        <h3 class="m-h3" data-i18n="m.pc.appearance">外观与操作</h3>
+        <label class="pc-field"><span>界面字号</span>
+          <select id="m-pc-pref-font">
+            <option value="sm">小</option>
+            <option value="std" selected>标准</option>
+            <option value="lg">大</option>
+          </select>
+        </label>
+        <label class="pc-field"><span>阅读布局</span>
+          <select id="m-pc-pref-layout">
+            <option value="reading" selected>阅读</option>
+            <option value="compact">紧凑</option>
+          </select>
+        </label>
+        <label class="pc-field"><span>减少动态效果</span><input id="m-pc-pref-motion" type="checkbox"></label>
+        <p class="hint">档案级偏好：保存到当前档案，切档后各自生效。</p>
+      </section>
+
+      <!-- ④ 数据管理：导出、导入、归档、回收站和待清理恢复记录 -->
+      <section class="pc-group" id="m-pc-group-data" data-ww-group="data">
+        <h3 class="m-h3" data-i18n="m.pc.data">数据管理</h3>
+        <div id="m-pc-data"></div>
+      </section>
+    </div>
+  </section>
+
   <!-- 屏3：规则确认（开始新局 · 第二步） -->
   <section id="m-rules" class="m-screen hidden">    <header class="m-head">
       <button class="btn small" id="m-back" data-ww-icon="back" data-i18n-title="m.back" title="返回"></button>

@@ -849,3 +849,20 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-mode-card:not(.sel) b { color: var(--text-dim); }
 /* 归属独立成行，不挤占阶段和操作按钮；长昵称仍可通过 title 查看。 */
 .m-owner { flex-basis: 100%; color: var(--muted); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------- 屏2b：玩家中心（计划书 §5）----------
+   四组的**顺序**写死在 index.html 的 DOM 里（data-ww-group），这里只管长什么样。
+   行样式（.pc-field/.pc-row/.pc-main/.pc-hist*）在 style.css 里定义一次、两端共用；
+   本文件只覆盖手机端的**密度**（卡片式分组 + 头像尺寸），不重复定义同一批属性。
+   触区不用在这里写：页内控件都是 .btn，已由 #m-app .btn(≥48) / .btn.primary(≥52) 兜住。 */
+.pc-group {
+  border: 1px solid var(--line-dim); border-radius: var(--r-sm);
+  background: linear-gradient(180deg, #131b2e, var(--ink-800));
+  padding: var(--sp-2) var(--sp-3) var(--sp-3);
+  margin: 0 0 var(--sp-3);
+}
+.pc-id { display: flex; align-items: center; gap: var(--sp-3); }
+.pc-av { flex: none; font-size: 34px; line-height: 1; }
+.pc-who { min-width: 0; }
+.pc-who .hint { overflow-wrap: anywhere; }
+.pc-nick { color: var(--gold-bright); font-size: var(--fs-lg); }
