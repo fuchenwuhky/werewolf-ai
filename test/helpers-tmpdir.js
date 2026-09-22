@@ -43,20 +43,40 @@ const silentLogger = {
 };
 
 /**
+ * makeApiIn 接受的 opts 键。**不在表里的键一律抛错**，绝不静默忽略。
+ *
+ * 为什么要有这条（真缺陷，2026-09-21 实测）：旧版把 logger 写死成静默 logger，`opts.logger`
+ * 被**静默丢弃** —— 传了的用例拿不到任何信号（不报错、不生效），只在文档注释里写着"不生效"。
+ * 文档拦不住这种错，调用方会以为自己的 logger 生效了，于是"我明明打了日志怎么什么都没有"
+ * 这种排查会浪费掉一整个回合。同一类坑还有 `saveDir`（它必须恒等于 `<dataDir>/saves`，
+ * 否则独占根的语义就破了，见文件头"背景"里的并行互抢）。
+ */
+const MAKE_API_OPTS = ['config', 'logger'];
+
+/**
  * 在给定独占根里建一个 Api（saveDir = <dataDir>/saves），返回 { api, dataDir }。
  * 多个 Api 需要共享同一份独占根时（模拟"改配置后重启"）复用它即可。
  *
  * `opts.config` 可覆盖默认配置（默认 `{ apiKey: 'k', journal: false }` —— 那个 Key 是假的，
- * 只有 mock 局或不触网的路由才该用默认值）。`opts` 的**其它键一律不生效**：logger 固定为上面的
- * 静默 logger、saveDir 固定为 `<dataDir>/saves`；需要自定义 logger 的用例请直接 `new Api(...)`。
+ * 只有 mock 局或不触网的路由才该用默认值）。
+ * `opts.logger` **真的生效**（不传时才是上面的静默 logger）。
+ * `saveDir` 恒为 `<dataDir>/saves`；想自定义它就请直接 `new Api(...)`（传了会抛错而不是被忽略）。
  */
 function makeApiIn(dataDir, opts = {}) {
+  const unknown = Object.keys(opts).filter((k) => !MAKE_API_OPTS.includes(k));
+  if (unknown.length) {
+    throw new TypeError(
+      `makeApiIn 不支持这些 opts 键：${unknown.join('、')}（支持：${MAKE_API_OPTS.join('、')}）。`
+      + 'saveDir 必须恒等于 <dataDir>/saves（独占根的语义前提），需要更自由的构造请直接 new Api(...)；'
+      + '静默忽略会让调用方以为它生效了',
+    );
+  }
   const { Api } = require('../src/api');
   const savesDir = savesOf(dataDir);
   if (!fs.existsSync(savesDir)) fs.mkdirSync(savesDir, { recursive: true });
   const api = new Api({
     config: opts.config || { get: () => ({ apiKey: 'k', journal: false }), save() {} },
-    logger: silentLogger,
+    logger: opts.logger || silentLogger,
     saveDir: savesDir,
   });
   return { api, dataDir };

@@ -23,6 +23,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 
 const guards = require('../scripts/check-guards.js');
@@ -416,6 +417,72 @@ test('行尾免疫：CRLF 工作区按仓库（LF）字节复核 pin，不假红
     const view = guards.ciViewBytes(root, 'web/index.html');
     assert.ok(!view.bytes.toString('utf8').includes('\r'), 'ciViewBytes 必须返回仓库（LF）字节');
     assert.strictEqual(view.drift, true);
+  } finally {
+    cleanup(root);
+  }
+});
+
+/**
+ * A3c：CSP 页面清单不许写死。
+ *
+ * 缺口（真缺陷，2026-09-21 实测）：清单原先是 `['web/index.html','web/m/index.html']`，
+ * 而 web/offline.html 的内联脚本**也在** src/static.js 的白名单里。于是白名单里那条
+ * **正在被使用**的哈希被报成"陈旧条目，同步白名单时顺手删掉" —— 真照它删，离线页的
+ * "重试 / 网络恢复回首页"就会再次被 CSP 静默拦掉（test/offline-page.test.js 会判红）。
+ *
+ * 本用例在**临时根**上把两个方向都钉住（不碰主工作区）：
+ *   ① 三个页面的哈希都在册 ⇒ 零失败、零"陈旧"警告；
+ *   ② 白名单里塞一条谁都不用的哈希 ⇒ **必须**仍然报成陈旧（修误报不能把真问题一起放走）；
+ *   ③ 改一个页面的内联脚本 ⇒ **必须**判红（这才是有这个守卫的理由）。
+ */
+test('pin 静态复核：CSP 页面清单从 web/ 推导（离线页不再被误报陈旧，真陈旧与真漂移仍判红）', () => {
+  const root = makeRoot('csp-pages');
+  try {
+    for (const rel of ['src/static.js', 'web/index.html', 'web/m/index.html', 'web/offline.html']) {
+      fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, rel), path.join(root, rel));
+    }
+    // 最小品牌 manifest（pin 腿会检查它；只放 source，不放导出资产）
+    const brand = path.join(root, 'design', 'brand', 'v2');
+    fs.mkdirSync(path.join(brand, 'export'), { recursive: true });
+    const emblem = fs.readFileSync(path.join(ROOT, 'design', 'brand', 'v2', 'wolf-emblem.svg'));
+    fs.writeFileSync(path.join(brand, 'wolf-emblem.svg'), emblem);
+    fs.writeFileSync(path.join(brand, 'export', 'manifest.json'), JSON.stringify({
+      source: 'design/brand/v2/wolf-emblem.svg',
+      sourceSha256: crypto.createHash('sha256').update(emblem).digest('hex'),
+      files: [],
+    }));
+
+    // ① 页面清单从 web/ 推导，三个带内联脚本的页面必须都在内
+    const pages = guards.cspPages(root).sort();
+    assert.deepStrictEqual(pages, ['web/index.html', 'web/m/index.html', 'web/offline.html'],
+      'CSP 页面清单必须从 web/ 推导出全部三个带裸 <script> 的页面（写死清单就会漏掉离线页）');
+    // 没有裸内联脚本的页面不许被算进来（口径：不带属性的 <script>）
+    assert.ok(!pages.includes('web/ai-cast.html'), 'web/ai-cast.html 没有裸内联脚本，不该进入清单');
+
+    const base = guards.pinStaticChecks(root);
+    assert.deepStrictEqual(base.failures, [], `三个页面哈希都在册，不该有 pin 失败：${base.failures.join(' / ')}`);
+    assert.deepStrictEqual(base.warnings, [],
+      '三个哈希全都有人用，不许报任何"陈旧条目"（离线页被误报陈旧正是本用例要钉住的缺陷）');
+
+    // ② 反向：白名单里塞一条谁都不用的哈希 ⇒ 仍必须报成陈旧
+    const stPath = path.join(root, 'src', 'static.js');
+    fs.appendFileSync(stPath, '\n// A3c 反向夹具：一条谁都不用的哈希\n// sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n');
+    const stale = guards.pinStaticChecks(root);
+    assert.deepStrictEqual(stale.failures, [], '多一条没用到的白名单条目只该是警告，不是失败');
+    assert.ok(
+      stale.warnings.some((w) => /陈旧条目/.test(w) && w.includes('sha256-AAAA')),
+      `真陈旧条目必须仍然被判出来（修误报不能把真问题一起放走）：${JSON.stringify(stale.warnings)}`,
+    );
+
+    // ③ 反向：改一个页面的内联脚本（哈希随即对不上）⇒ 必须判红
+    const idx = path.join(root, 'web', 'index.html');
+    fs.writeFileSync(idx, fs.readFileSync(idx, 'utf8').replace('<script>', '<script>\n/* A3c 反向夹具 */'));
+    const broken = guards.pinStaticChecks(root);
+    assert.ok(
+      broken.failures.some((f) => /不在 src\/static\.js 的 CSP 白名单里/.test(f)),
+      `改了内联脚本必须判红（这才是这个守卫存在的理由）：${JSON.stringify(broken.failures)}`,
+    );
   } finally {
     cleanup(root);
   }

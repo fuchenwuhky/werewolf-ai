@@ -102,16 +102,27 @@ function looksLikeAsset(pathname) {
 //   · 同步要求：web/offline.html 必须保持 LF 行尾（.gitattributes 已钉 `text eol=lf`）——
 //     命中 CSP 白名单的页面会被 brand:check 按"字节哈希路径"强制要求行尾钉版，
 //     行尾一变哈希就错位（Windows 检出上会静默失效）。
-//   · 已知误报：scripts/check-guards.js 的 CSP_PAGES 只列出了两个 index 页，
-//     所以它会把离线页这条本来就有人用的哈希报成"陈旧条目"（仅 ⚠ 警告，不影响退出码）。
-//     别照它的话删 —— 删掉这里，离线页的"重试/网络恢复回首页"会再次被 CSP 静默拦掉；
-//     test/offline-page.test.js 会当场判红。修那个清单要改 scripts/check-guards.js（本任务范围外）。
+//   · 曾经的误报（已修，A3c）：scripts/check-guards.js 的页面清单原先是**手写**的
+//     `['web/index.html','web/m/index.html']`，于是它把离线页这条**正在被使用**的哈希报成
+//     "陈旧条目，顺手删掉"（删掉就会让离线页的"重试/网络恢复回首页"再次被 CSP 静默拦掉）。
+//     现在那张清单改成从 `web/**/*.html` 推导（只取带裸 `<script>` 内联块的页面，
+//     见 scripts/check-guards.js 的 cspPages()），新增内联脚本页面不会再让这条误报复发。
+//
+// ⚠ img-src 追加 'data:' 的理由（A3c，真机 Chrome 实测）：本文件下发的 CSP 覆盖**所有** .html 响应，
+//   而 web/style.css 与 web/shared/tokens.css 里有 3 处 `data:image/svg+xml` 背景
+//   （.atmo-grain 噪点、checkbox 的勾、--ico-chevron-gold 下拉箭头）。
+//   `img-src 'self'` 不含 data: ⇒ 这三处**一个都不渲染**：Chrome 对每个 URI 各报一条
+//   "Loading the image 'data:image/svg+xml;…' violates … "img-src 'self'". The action has been blocked."
+//   实测（1440×900 headless，冻结动画后同位置 A/B 像素比对）：噪点层撤掉前后 0/2304 像素有差异、
+//   勾选层 0/289、下拉箭头 0/5600 —— 而同源 PNG 的阳性对照是 2304/2304，证明方法灵敏。
+//   放宽到刚好够用：**只**在 img-src 追加 data:，其余指令逐字不动
+//   （script-src 仍无 unsafe-inline、connect-src 仍只有 'self'，由 test/remediation.test.js 钉住）。
 const HTML_SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
     "script-src 'self' 'sha256-I43HymuDTCZT8ZYOm44OS9WzPkl7623/8xAv+p6wsOE=' 'sha256-wkqcyVTYd8Z8BWcuwv3o1BcjRMpIuKgop6GIZOedqJ4=' 'sha256-Gb59Pw8+CGFm9EYYSzaOlbqSQ2uPjA+4cFW4p5fMOuw='",
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self'",
+    "img-src 'self' data:",
     "connect-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

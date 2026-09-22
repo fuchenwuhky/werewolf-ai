@@ -162,3 +162,70 @@ test('eslint 作用域④：git 不可用时退回"绝不排源码"的兜底（�
     '非 ASCII 的忽略目录必须原样出现（少一个 -z 就会拿到 C-quote 字面量）',
   );
 });
+
+/**
+ * A3c：同一条判定不许有两份实现。
+ *
+ * 缺口：`scripts/lint.js` 的 `gitScope()` 与 `scripts/eslint-ignores.js` 原先**各写了一遍**
+ * "被忽略条目里若住着被跟踪文件就不排它"（前者用"被跟踪文件的祖先目录"集合，后者用前缀匹配）。
+ * 两份在方向上一致，但没有任何东西保证它们一致 —— 任一侧单独演进，`npm run lint` 与
+ * `npx --no-install eslint .` 就会悄悄跑在不同的作用域上（一个绿一个红，或一起放走一个生成物）。
+ *
+ * 判据分两层，缺一不可：
+ *   ① **结构钉子**：`scripts/lint.js` 不得再自己跑 git / 自己解析被忽略清单（"两份实现"的复发形态）；
+ *   ② **逐文件等价**：把磁盘上每个 `.js` 拿两条门禁各判一次（eslint 侧 = 是否被 ignores 命中；
+ *      lint 侧 = 是否出现在 `listFiles()` 里），两侧结论**逐条必须相同**。
+ *      这是"可观察结果"的比对，任一侧偏离都会在这里点名 —— 不是"读一遍代码觉得对"。
+ * 枚举用本文件自己的 `covers()` 匹配器与 `skip` 表（独立重算，不拿被测输出当期望值）。
+ */
+test('eslint 作用域⑤：lint 的扫描范围与 eslint 的 ignores 逐文件等价，且共用一份实现（A3c）', () => {
+  const lint = require('../scripts/lint.js');
+  // ① 结构钉子：git 真值只能来自共享模块
+  const lintSrc = fs.readFileSync(path.join(ROOT, 'scripts', 'lint.js'), 'utf8');
+  assert.doesNotMatch(
+    lintSrc,
+    /spawnSync\s*\(\s*['"]git['"]/,
+    'scripts/lint.js 又自己跑 git 了 —— 作用域真值必须只来自 scripts/eslint-ignores.js（否则"两份实现"复发）',
+  );
+  assert.doesNotMatch(
+    lintSrc,
+    /--exclude-standard/,
+    'scripts/lint.js 又自己解析被忽略清单了 —— 那正是"同一逻辑两份实现"的复发形态',
+  );
+  assert.match(
+    lintSrc,
+    /require\(['"]\.\/eslint-ignores['"]\)/,
+    'scripts/lint.js 必须 require 共享的作用域模块',
+  );
+
+  // ② 逐文件等价：磁盘上每个 .js 走两条门禁，结论必须一致
+  assert.strictEqual(git(['rev-parse', '--is-inside-work-tree']).trim(), 'true', '前置：仓库根必须是 git 工作区');
+  // 与 listFiles() 的静态兜底同名的目录名集合（独立重算用，不读被测实现的这张表）
+  const SKIP = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist', 'release']);
+  const allJs = [];
+  const walk = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (SKIP.has(e.name)) continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) allJs.push(path.relative(ROOT, p).split(path.sep).join('/'));
+    }
+  };
+  walk(ROOT);
+  assert.ok(allJs.length > 100, `前置：磁盘上的 .js 应当有一批（实测 ${allJs.length}）——否则本用例会空转`);
+
+  const globs = globsOf(config);
+  const lintScanned = new Set(lint.listFiles().map((f) => f.split(path.sep).join('/')));
+  const offenders = [];
+  for (const f of allJs) {
+    const byEslint = globs.some((g) => covers(g, f)) ? 'pruned' : 'kept';
+    const byLint = lintScanned.has(f) ? 'kept' : 'pruned';
+    if (byEslint !== byLint) offenders.push(`${f}: eslint=${byEslint} lint=${byLint}`);
+  }
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    '同一个文件在两条门禁上结论不同 —— `npm run lint` 与 `eslint .` 跑在了不同的作用域上'
+      + '（A3c：受保护判定的真值必须只有一份）：\n  ' + offenders.join('\n  '),
+  );
+});

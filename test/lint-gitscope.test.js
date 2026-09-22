@@ -4,11 +4,13 @@
  *
  * ══ 这条分支是什么 ══════════════════════════════════════════════════════════
  * `gitScope()` 拿两份真值：`.gitignore` 判定的被忽略项（`git ls-files --others --ignored
- * --exclude-standard --directory`）与所有被跟踪文件所在目录（`git ls-files -z` 的祖先集合）。
- * `listFiles()` 里那条：
+ * --exclude-standard --directory`）与所有被跟踪文件（`git ls-files -z`），从两者算出
+ * "哪些忽略项里住着被跟踪文件"。`listFiles()` 里那条：
  *     被忽略的目录里若住着被跟踪的文件 → **绝不剪枝**
  * 的用意是"宁可多扫，绝不漏扫源码"。执行方当时如实承认：本仓库 17 个被忽略条目里 0 个含
  * 被跟踪文件（本次实测 25 个里同样 0 个），所以这条分支**从没被跑过**，且"写不出不带 .skip 的用例"。
+ * （A3c 之后这份真值由 `scripts/eslint-ignores.js` 的 `gitScopeFacts()` 统一算出 ——
+ *  `scripts/lint.js` 与 eslint 的 ignores 共用同一份判定，本文件考的仍是 `listFiles()` 的可观察结果。）
  *
  * ══ 本次用真实 git 仓库实测出的结论（下面每条用例都对应其中一条）═════════════
  *  ① **目录折叠只发生在 git 自己的索引查找失败时**。真实 `git init` 的临时仓库里：
@@ -18,8 +20,8 @@
  *       Windows 上也能显式配出来；成因是 POSIX 上直接 `mv Ghost ghost` 这类仓库外改名）
  *       → git 折叠成 `ghost/` 一条。
  *  ② 于是第二层保护**恰好只在①的后一种情形下**才会被触发 —— 而那正是它原先失效的情形：
- *     `ignored` 的键是**磁盘名**（`ghost`）、`trackedDirs` 的键是**索引名**（`Ghost/keep.js` → `Ghost`），
- *     按字节比较永远不相等，`trackedDirs.has(rel)` 为假 → 目录被剪枝 → **被跟踪的源码被静默排掉**。
+ *     忽略项的键是**磁盘名**（`ghost`）、被跟踪清单的键是**索引名**（`Ghost/keep.js`），
+ *     按字节比较永远不相等，"绝不剪枝"的判定为假 → 目录被剪枝 → **被跟踪的源码被静默排掉**。
  *     这是本次发现并修掉的**真缺陷**（`gitScope()` 现在两个集合都过 `pathKey()`，忽略大小写）。
  *  ③ 非 ASCII 的被忽略路径：不带 `-z` 时 git 会按 `core.quotePath`（默认 true）做 C-quote，
  *     `生成物/` 拿到的是 `"\347\224\237…/"` 这种字面量，与磁盘路径永不相等 → 被忽略项**永远剪不掉**。
@@ -94,6 +96,10 @@ function makeRepo(t, tag, cfg) {
   // 被测代码的逐字副本：它算出的 ROOT 就是本临时仓库
   fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
   fs.copyFileSync(path.join(ROOT, 'scripts', 'lint.js'), path.join(dir, 'scripts', 'lint.js'));
+  // A3c：lint.js 不再自己跑 git —— 作用域真值委托给共享模块 scripts/eslint-ignores.js
+  // （同一逻辑不许有两份实现）。副本必须把这个依赖一并带上，否则临时仓库里的 require 直接失败。
+  // 这**不是**放宽断言：三条用例的断言与前置条件逐字未动，考的仍是 listFiles() 的可观察结果。
+  fs.copyFileSync(path.join(ROOT, 'scripts', 'eslint-ignores.js'), path.join(dir, 'scripts', 'eslint-ignores.js'));
   const { listFiles } = require(path.join(dir, 'scripts', 'lint.js'));
   return {
     dir,

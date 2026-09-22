@@ -49,6 +49,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
+// web/ 下的 .html 清单只有一份真值（brand-eol-pin-lib），不再各自维护一张手写页面表
+const { listWebHtml } = require('./brand-eol-pin-lib.js');
 
 const ROOT = path.join(__dirname, '..');
 const BASELINE_VERSION = 1;
@@ -107,8 +109,27 @@ const CRLF_SENSITIVE_TESTS = [
   },
 ];
 
-/** CSP pin 覆盖的页面（src/static.js 注释里的"两端的初始化守卫"） */
-const CSP_PAGES = ['web/index.html', 'web/m/index.html'];
+/**
+ * CSP pin 覆盖的页面：**从数据推导，不写死清单**。
+ *
+ * 判据：`web/**\/*.html` 里凡是有**裸 `<script>…</script>` 内联块**的页面
+ * （口径与 brand-eol-pin-lib 的 `cspHash()`、test/offline-page.test.js 一致：不带属性的 `<script>`）。
+ *
+ * 为什么不能写死（真缺陷，2026-09-21 实测）：本清单原先是
+ * `['web/index.html', 'web/m/index.html']`，而 web/offline.html 的内联脚本**也在**
+ * src/static.js 的白名单里（离线页只能靠哈希放行 —— 它不许引外链脚本，见那边的注释）。
+ * 于是白名单里那条**正在被使用**的哈希被报成"陈旧条目，同步白名单时顺手删掉"，
+ * 而它一旦被删，离线页的"重试 / 网络恢复回首页"就会再次被 CSP 静默拦掉
+ * （test/offline-page.test.js 会当场判红）。手写页面清单必然在下一次新增内联脚本页面时过期，
+ * 所以这里直接从 web/ 推导 —— 与"生成物清单以 .gitignore 为真值"是同一条教训。
+ *
+ * ⚠ 为什么**不**改用 brand-eol-pin-lib 的 `collectCspPinnedPages()`：它返回的是
+ * "哈希**已经**在白名单里"的页面。拿它当输入，下面"哈希不在白名单里 ⇒ 失败"这条判定就永远
+ * 不可能触发 —— 而那条判定正是本守卫存在的理由（改了内联脚本忘了同步白名单，CI 上必红的那次事故）。
+ */
+function cspPages(root) {
+  return listWebHtml(root).filter((rel) => /<script>[\s\S]*?<\/script>/.test(fs.readFileSync(path.join(root, rel), 'utf8')));
+}
 /** 品牌 pin 的根目录 */
 const BRAND_DIR = 'design/brand/v2';
 /** 行尾会被 git 规范化、必须按"仓库字节"算哈希的扩展名（二进制不做归一化） */
@@ -535,8 +556,9 @@ function ciViewBytes(root, rel, opts = {}) {
 /**
  * 腿 A1：按"CI 字节"直接复核 CSP 白名单与品牌 manifest pin。
  * 这是腿 A2（跑测试文件）的行尾免疫替身，同时补上了 A2 **没覆盖**的一环：
- * test/remediation.test.js 只校验 web/index.html 的内联哈希，web/m/index.html 的那个没人管 ——
- * 这里两个都校验（并且会报出白名单里的陈旧条目）。
+ * test/remediation.test.js 只校验 web/index.html 的内联哈希，web/m/index.html 与
+ * web/offline.html 的那两个没人管 —— 这里把**每一个**带内联脚本的页面都校验
+ * （页面清单由 cspPages() 从 web/ 推导，不再写死），并且会报出白名单里真正的陈旧条目。
  */
 function pinStaticChecks(root, opts = {}) {
   const failures = [];
@@ -549,14 +571,21 @@ function pinStaticChecks(root, opts = {}) {
     return view;
   };
 
-  // ---- CSP：两个 HTML 的内联守卫脚本哈希必须在 src/static.js 的白名单里 ----
+  // ---- CSP：每一个带内联脚本的页面的哈希都必须在 src/static.js 的白名单里 ----
   const staticView = check('src/static.js');
   const csp = staticView.bytes.toString('utf8');
   const whitelist = new Set([...csp.matchAll(/sha256-[A-Za-z0-9+/=]{20,}/g)].map((m) => m[0]));
   const used = new Set();
-  for (const page of CSP_PAGES) {
+  const pages = cspPages(root);
+  // 一个页面都推不出来 ⇒ 这条腿在"什么都没校验"的情况下绿了，必须判红而不是静默放过
+  if (!pages.length) {
+    failures.push('web/ 下推不出任何"带内联 <script> 的页面"——CSP 白名单判定的前提变了（web/ 不见了？页面都改成外链了？），请复核');
+  }
+  for (const page of pages) {
     const view = check(page);
     const inline = [...view.bytes.toString('utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    // 仍可能命中：cspPages() 看的是**工作区**字节，而 check() 优先取 git HEAD 字节 ——
+    // 页面新加/改过、HEAD 里还没有那段内联脚本时，这里会如实报"前提变了"（不是死代码）
     if (!inline.length) {
       failures.push(`${page} 里找不到内联守卫脚本（<script>…</script>）——CSP 白名单的语义前提变了，请复核`);
       continue;
@@ -801,7 +830,7 @@ module.exports = {
   ALLOW_TAG,
   PIN_TESTS,
   CRLF_SENSITIVE_TESTS,
-  CSP_PAGES,
+  cspPages,
   BRAND_DIR,
   HYGIENE_RULES,
   ASSERT_REQUIRE_SRC,

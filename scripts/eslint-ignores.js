@@ -22,6 +22,16 @@
  * 于是 `output/playwright/**` 会被排掉，而 `output/` 本身**不会**被整目录排掉
  * （`output/review-2026-09-20/reproduce.cjs` 是被跟踪的 —— 这正是"手写 output/** 会误伤"的例子）。
  *
+ * ══ 同一条判定的另一个消费者：scripts/lint.js ══════════════════════════════════
+ * 这条判定原先在仓库里有**两份实现**：`scripts/lint.js` 的 `gitScope()` 自己跑那两条 git 命令、
+ * 自己解析 `-z` 清单、自己维护"被跟踪文件的祖先目录"集合，本模块再写一遍前缀匹配。
+ * 两份在方向上一致，但没有任何东西保证它们一致 —— 任一侧单独演进，`npm run lint` 与
+ * `npx --no-install eslint .` 就会悄悄跑在不同的作用域上（一个绿一个红，或一起放走一个生成物）。
+ * 现在 `gitScope()` 只做一次转发：git 事实、归一化、`pathKey()`、受保护条目判定全部来自本模块的
+ * `gitScopeFacts()`（判定本体见 `protectedEntryKeys()` 的注释）。
+ * 两侧的**退化路径**仍各自保留，与修改前逐字一致：lint 拿不到被忽略清单时退回自己的静态 `skip`，
+ * eslint 拿不到任一份清单时退回 `FALLBACK_GLOBS`。
+ *
  * ══ 两个实测过的细节（都不是洁癖，是真会踩）════════════════════════════════════
  *   · **`-z` 不是可选项**：不带它时 git 按 `core.quotePath`（默认 true）把非 ASCII 路径
  *     C-quote 成 `"\347\224\237…/"` 这种字面量，与磁盘路径永不相等（同一个坑 scripts/lint.js
@@ -74,24 +84,96 @@ function gitIgnoredEntries(root = ROOT) {
 }
 
 /**
+ * 归一化忽略条目：git 的 `-z` 清单 → `{ rel, isDir }`。
+ * `--directory` 用**尾斜杠**表示"这一条是一整个目录"，归一后单独放在 `isDir` 里（eslint 的 glob 形状要靠它）。
+ * 反斜杠一律换成 `/`（git 在 `-z` 下本来就给正斜杠；这一段是防御性的，`scripts/lint.js` 原先也有同款）。
+ */
+function normalizeIgnoredEntries(ignored) {
+  const out = [];
+  for (const raw of ignored || []) {
+    const isDir = /\/$/.test(String(raw));
+    const rel = String(raw).split('\\').join('/').replace(/\/+$/, '');
+    if (!rel || rel === '/') continue;
+    out.push({ rel, isDir });
+  }
+  return out;
+}
+
+/**
+ * ══ 唯一一条判定（本模块的核心理由）═══════════════════════════════════════════
+ * 「一个被忽略条目，只有在它自己及其子树里都不含被跟踪文件时，才可以被排掉。」
+ *
+ * 这条判定以前在仓库里有**两份实现**：`scripts/lint.js` 的 `gitScope()` 用"被跟踪文件的祖先目录集合"
+ * （`trackedDirs`）在目录遍历时剪枝，`scripts/eslint-ignores.js` 用前缀匹配生成 ignores。
+ * 两份实现在方向上一致，但**没有任何东西保证它们一致** —— 任何一侧单独演进，两条门禁就会悄悄跑在
+ * 不同的作用域上（`npm run lint` 绿而 `eslint .` 红，或反过来）。
+ * 现在两侧都从这里取：`protectedEntryKeys()`（哪些忽略项受保护）+ `ignoredEntriesWithoutTracked()`（能排哪些）。
+ *
+ * 为什么用 `pathKey()`（小写化）比较：`core.ignorecase=false` 时索引名与磁盘名的大小写差异会让
+ * "这里住着被跟踪文件"的判定失效 —— 那正是 `scripts/lint.js` 修过的真缺陷（见 test/lint-gitscope.test.js）。
+ * 忽略大小写只会让判定**更保守**（更容易认定"这里有源码"⇒ 更少剪枝 ⇒ 多扫不漏扫）。
+ *
+ * @param {string[]|null} tracked 被跟踪文件（相对 root、正斜杠）
+ * @param {Array<{rel:string,isDir:boolean}>} entries 归一化后的忽略条目
+ * @returns {Set<string>} 受保护条目的 pathKey（自己是被跟踪文件，或是某个被跟踪路径的祖先目录）
+ */
+function protectedEntryKeys(tracked, entries) {
+  const guarded = new Set();
+  const trackedKeys = (tracked || []).map((t) => pathKey(String(t).replace(/\/+$/, '')));
+  if (!trackedKeys.length) return guarded; // 拿不到被跟踪清单 ⇒ 不保护任何条目（调用方自己决定是否退化）
+  for (const e of entries || []) {
+    const key = pathKey(e.rel);
+    if (trackedKeys.some((t) => t === key || t.startsWith(key + '/'))) guarded.add(key);
+  }
+  return guarded;
+}
+
+/**
+ * 纯函数版（可单独测）：忽略条目里**真正可以排掉**的那些 —— 不含被跟踪文件的。
+ * @param {string[]|null} tracked  被跟踪文件（相对 root、正斜杠）
+ * @param {Array<{rel:string,isDir:boolean}>} entries 归一化后的忽略条目
+ * @returns {Array<{rel:string,isDir:boolean}>} 可排掉的条目（保持输入顺序）
+ */
+function ignoredEntriesWithoutTracked(tracked, entries) {
+  const guarded = protectedEntryKeys(tracked, entries);
+  return (entries || []).filter((e) => !guarded.has(pathKey(e.rel)));
+}
+
+/**
  * 纯函数版（可单独测）：把两份 git 清单翻译成 ESLint 的 ignore 条目。
  * @param {string[]} tracked  被跟踪文件路径（相对 root、正斜杠）
  * @param {string[]} ignored  被忽略条目（目录以 `/` 结尾表示"这是一整个目录"）
  * @returns {string[]} 排序后的 ignore 条目：目录 → `d/**`，文件 → 原样
  */
 function ignoredGlobsFromLists(tracked, ignored) {
-  const trackedKeys = (tracked || []).map((t) => pathKey(String(t).replace(/\/+$/, '')));
-  const out = [];
-  for (const raw of ignored || []) {
-    const isDir = /\/$/.test(String(raw));
-    const rel = String(raw).split('\\').join('/').replace(/\/+$/, '');
-    if (!rel) continue;
-    const key = pathKey(rel);
-    // 绝不排掉任何被跟踪的东西：条目本身被跟踪，或是某个被跟踪路径的祖先 → 整条跳过
-    if (trackedKeys.some((t) => t === key || t.startsWith(key + '/'))) continue;
-    out.push(isDir ? `${rel}/**` : rel);
-  }
-  return [...new Set(out)].sort();
+  const entries = ignoredEntriesWithoutTracked(tracked, normalizeIgnoredEntries(ignored));
+  return [...new Set(entries.map((e) => (e.isDir ? `${e.rel}/**` : e.rel)))].sort();
+}
+
+/**
+ * 从 git 取一份**双方共用**的作用域事实（`scripts/lint.js` 与 eslint 的 ignores 都只认它）。
+ *
+ * 三个退化路径都**明确**留给调用方，而不是在这里悄悄兜底：
+ *   · `ignored === null`（git 拿不到被忽略清单）⇒ lint 退回静态 skip、eslint 退回 FALLBACK_GLOBS；
+ *   · `tracked === null`（git 拿不到被跟踪清单）⇒ 此时 `protectedKeys` 为空、`safeEntries` 等于全部条目。
+ *     lint 照旧只按"被忽略"剪枝（与修改前一致：那时 trackedDirs 也是空的）；
+ *     eslint 走 FALLBACK_GLOBS（与修改前一致）。方向都是"多扫不漏扫"。
+ * @returns {{tracked: string[]|null, ignored: string[]|null, entries: Array, ignoredKeys: Set<string>,
+ *            protectedKeys: Set<string>, safeEntries: Array}}
+ */
+function gitScopeFacts(root = ROOT) {
+  const tracked = gitTrackedFiles(root);
+  const ignored = gitIgnoredEntries(root);
+  const entries = normalizeIgnoredEntries(ignored || []);
+  const protectedKeys = protectedEntryKeys(tracked, entries);
+  return {
+    tracked,
+    ignored,
+    entries,
+    ignoredKeys: new Set(entries.map((e) => pathKey(e.rel))),
+    protectedKeys,
+    safeEntries: entries.filter((e) => !protectedKeys.has(pathKey(e.rel))),
+  };
 }
 
 /**
@@ -99,10 +181,13 @@ function ignoredGlobsFromLists(tracked, ignored) {
  * git 不可用 → 静态兜底（见 FALLBACK_GLOBS）。
  */
 function ignoredGlobs(root = ROOT) {
-  const tracked = gitTrackedFiles(root);
-  const ignored = gitIgnoredEntries(root);
+  const { tracked, ignored, safeEntries } = gitScopeFacts(root);
   if (!tracked || !ignored) return FALLBACK_GLOBS.slice();
-  return ignoredGlobsFromLists(tracked, ignored);
+  return [...new Set(safeEntries.map((e) => (e.isDir ? `${e.rel}/**` : e.rel)))].sort();
 }
 
-module.exports = { ROOT, FALLBACK_GLOBS, pathKey, gitList, gitTrackedFiles, gitIgnoredEntries, ignoredGlobsFromLists, ignoredGlobs };
+module.exports = {
+  ROOT, FALLBACK_GLOBS, pathKey, gitList, gitTrackedFiles, gitIgnoredEntries,
+  normalizeIgnoredEntries, protectedEntryKeys, ignoredEntriesWithoutTracked,
+  ignoredGlobsFromLists, gitScopeFacts, ignoredGlobs,
+};

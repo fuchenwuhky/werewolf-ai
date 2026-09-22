@@ -455,6 +455,73 @@ test('CSP：HTML 响应带 Content-Security-Policy（内联守卫脚本哈希白
   } finally { server.close(); }
 });
 
+test('CSP：img-src 必须允许 data:（三处 data: SVG 背景要靠它渲染），且其余指令一律不得放宽', async () => {
+  const { serveStatic } = require('../src/static');
+  const WEB = path.join(__dirname, '..', 'web');
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    serveStatic(req, res, decodeURIComponent(u.pathname), { webDir: WEB });
+  });
+  await new Promise((r) => server.listen(0, r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  /** 把 CSP 拆成 指令名 → 取值（本文件的 CSP 就是 `; ` 拼起来的） */
+  const parseCsp = (csp) => new Map(csp.split('; ').map((d) => {
+    const i = d.indexOf(' ');
+    return i < 0 ? [d, ''] : [d.slice(0, i), d.slice(i + 1)];
+  }));
+  try {
+    // ① 每个 .html 响应都必须允许 data: 图片 —— 离线页也算（CSP 覆盖全部 HTML 文档）
+    for (const p of ['/', '/index.html', '/m/', '/offline.html', '/some-route']) {
+      const csp = (await fetch(`${base}${p}`)).headers.get('content-security-policy');
+      assert.ok(csp, `${p} 必须下发 CSP`);
+      assert.match(
+        csp,
+        /(?:^|; )img-src 'self' data:(?:;|$)/,
+        `${p} 的 img-src 必须允许 data: —— web/style.css 与 web/shared/tokens.css 的三处 `
+          + 'data:image/svg+xml 背景否则一个都不渲染（真机 Chrome 实测：每个 URI 各一条 '
+          + '"Loading the image \'data:image/svg+xml;…\' violates … img-src \'self\'" 并 blocked）',
+      );
+    }
+    const csp = (await fetch(`${base}/`)).headers.get('content-security-policy');
+    const directives = parseCsp(csp);
+
+    // ② 最小放宽：**只有** img-src 拿到 data:，其余指令一条都不许因为这次改动松掉
+    for (const [name, value] of directives) {
+      if (name === 'img-src') continue;
+      assert.doesNotMatch(value, /data:/, `${name} 不得出现 data:（放宽必须只限 img-src）`);
+      assert.doesNotMatch(value, /(?:^|\s)\*/, `${name} 不得出现通配符 *`);
+      assert.doesNotMatch(value, /unsafe-eval/, `${name} 不得出现 unsafe-eval`);
+    }
+    // 逐条钉住"没有被顺手放宽"（这几条一旦变化都必须有人显式复核）
+    assert.strictEqual(directives.get('default-src'), "'self'", 'default-src 不得放宽');
+    assert.strictEqual(directives.get('connect-src'), "'self'", 'connect-src 不得放宽');
+    assert.strictEqual(directives.get('object-src'), "'none'", 'object-src 不得放宽');
+    assert.strictEqual(directives.get('base-uri'), "'self'", 'base-uri 不得放宽');
+    assert.strictEqual(directives.get('frame-ancestors'), "'none'", 'frame-ancestors 不得放宽');
+    assert.doesNotMatch(directives.get('script-src'), /unsafe-inline/, 'script-src 不得出现 unsafe-inline');
+    assert.doesNotMatch(directives.get('style-src'), /data:|unsafe-eval/, 'style-src 不得再放宽');
+    assert.match(
+      directives.get('script-src'),
+      /^'self'(?: 'sha256-[A-Za-z0-9+/=]{20,}')+$/,
+      'script-src 只允许 self + 内联脚本哈希白名单',
+    );
+  } finally { server.close(); }
+});
+
+test('CSP：允许 data: 的动机是真实存在的（三处 data: SVG 背景仍挂在原来的选择器上）', () => {
+  const read = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8').replace(/\r\n?/g, '\n');
+  const hasSvg = (s) => /url\("data:image\/svg\+xml/.test(s);
+  const style = read(path.join('web', 'style.css'));
+  const grain = /\.atmo-grain\s*\{[^}]*\}/.exec(style);
+  assert.ok(grain && hasSvg(grain[0]),
+    '.atmo-grain 的 data: SVG 噪点层不在了？那 img-src 的 data: 也该同步收紧（动机没了就别放宽）');
+  const checked = /input\[type=checkbox\]:checked\s*\{[^}]*\}/.exec(style);
+  assert.ok(checked && hasSvg(checked[0]),
+    '勾选态 checkbox 的 data: SVG 勾不在了？那 img-src 的 data: 也该同步收紧');
+  assert.ok(hasSvg(read(path.join('web', 'shared', 'tokens.css'))),
+    '--ico-chevron-gold 的 data: SVG 不在了？那 img-src 的 data: 也该同步收紧');
+});
+
 test('CSP：index.html 的内联脚本哈希与 static.js 白名单一致（改脚本必须同步改 CSP）', () => {
   const crypto = require('crypto');
   const html = fs.readFileSync(path.join(__dirname, '..', 'web', 'index.html'), 'utf8');
