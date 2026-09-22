@@ -17,17 +17,12 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
-// ⚠ 必须在 require('../src/api') 之前设置：SAVE_DIR 是 api.js 的模块级常量（见 mock-flag.test.js 的说明）
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-seat-'));
-process.env.WW_DATA_DIR = TMP_DATA;
-process.on('exit', () => { try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch (_) { /* ignore */ } });
-
-const { Api } = require('../src/api');
-
-const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
+// NEW-18：独占数据目录与清理都走 test/helpers-tmpdir.js —— 每个用例一份 dataDir，
+// 清理挂在**该用例**的 t.after 上（断言失败也照跑），删目录前先等档案迁移收尾。
+// 原先的 process.on('exit') + `WW_DATA_DIR` 环境变量在 saveDir 显式传之后已不再影响任何路径。
+const { makeDataDir, makeApiIn, terminateAfter } = require('./helpers-tmpdir');
 
 function capture() {
   const box = {};
@@ -42,12 +37,10 @@ const fakeReq = (method, body) => {
   return req;
 };
 
-const makeApi = () => new Api({
+/** 造一个"能创建对局"的 Api；saveDir = 该用例独占根的 saves/ */
+const makeApi = (dataDir) => makeApiIn(dataDir, {
   config: { get: () => ({ apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }), save() {} },
-  logger: silentLogger,
-  // NEW-17：显式传 saveDir（= 本文件独占 TMP_DATA/saves），不再依赖 WW_DATA_DIR 的加载顺序前提
-  saveDir: path.join(TMP_DATA, 'saves'),
-});
+}).api;
 
 const board = (total = 12) => Array.from({ length: total }, (_, k) => ({ name: `P${k + 1}`, isHuman: false, personality: '' }));
 
@@ -60,8 +53,11 @@ async function create(api, extra = {}) {
   return { code: res.code, body: res.body, entry, human };
 }
 
-test('随机座位：恰好 1 名人类，座位/昵称与响应回传一致（前端靠 mySeat 提示"你在几号"）', async () => {
-  const api = makeApi();
+test('随机座位：恰好 1 名人类，座位/昵称与响应回传一致（前端靠 mySeat 提示"你在几号"）', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const r = await create(api, { mySeat: 'random', myName: '随机我' });
   assert.strictEqual(r.code, 200);
   assert.ok(Number.isInteger(r.body.mySeat) && r.body.mySeat >= 1 && r.body.mySeat <= 12, `mySeat 必须是 1..12，实际 ${r.body.mySeat}`);
@@ -72,8 +68,11 @@ test('随机座位：恰好 1 名人类，座位/昵称与响应回传一致（�
   assert.ok(r.body.playerToken, '随机座位也必须发玩家令牌（否则人类无法行动）');
 });
 
-test('随机座位：人类不得被分配 AI 人格', async () => {
-  const api = makeApi();
+test('随机座位：人类不得被分配 AI 人格', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const r = await create(api, { mySeat: 'random', myName: '我' });
   assert.strictEqual(r.human.personality, '', '人类座位不能带人格提示词（否则会被注入一段 AI 人设）');
   assert.strictEqual(r.human.personaName, '', '人类座位不能有 AI 人格名');
@@ -82,8 +81,11 @@ test('随机座位：人类不得被分配 AI 人格', async () => {
   assert.ok(ai.every((p) => p.personaName), 'AI 座位都应分到人格');
 });
 
-test('随机座位：必须真的分散（写错成固定 1 号会在这里暴露）', async () => {
-  const api = makeApi();
+test('随机座位：必须真的分散（写错成固定 1 号会在这里暴露）', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const seen = new Set();
   for (let i = 0; i < 30; i++) {
     const r = await create(api, { mySeat: 'random', myName: '我' });
@@ -95,8 +97,11 @@ test('随机座位：必须真的分散（写错成固定 1 号会在这里暴�
   for (const s of seen) assert.ok(s >= 1 && s <= 12, `座位越界：${s}`);
 });
 
-test('显式座位：行为不变，且响应回传同样的号数', async () => {
-  const api = makeApi();
+test('显式座位：行为不变，且响应回传同样的号数', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const players = board();
   players[4].isHuman = true;        // 5 号
   players[4].name = '显式五号';
@@ -109,8 +114,11 @@ test('显式座位：行为不变，且响应回传同样的号数', async () =>
   assert.strictEqual(human.name, '显式五号');
 });
 
-test('纯观战：0 名人类 → mySeat 为 0，且不发玩家令牌（既有行为不得被改动）', async () => {
-  const api = makeApi();
+test('纯观战：0 名人类 → mySeat 为 0，且不发玩家令牌（既有行为不得被改动）', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const r = await create(api);
   assert.strictEqual(r.code, 200);
   assert.strictEqual(r.body.mySeat, 0, '观战局没有人类座位');
@@ -118,8 +126,11 @@ test('纯观战：0 名人类 → mySeat 为 0，且不发玩家令牌（既有�
   assert.strictEqual(r.entry.game.players.filter((p) => p.isHuman).length, 0);
 });
 
-test('冲突配置必须明确报错：mySeat:"random" 与 players 里的 isHuman 不能同时给', async () => {
-  const api = makeApi();
+test('冲突配置必须明确报错：mySeat:"random" 与 players 里的 isHuman 不能同时给', async (t) => {
+  const dataDir = makeDataDir('seat');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const players = board();
   players[2].isHuman = true;
   const r = await create(api, { mySeat: 'random', players });
@@ -127,10 +138,16 @@ test('冲突配置必须明确报错：mySeat:"random" 与 players 里的 isHuma
   assert.match(r.body.error, /random/, '错误信息要说明冲突点，而不是随便失败');
 });
 
-test('显式 seed：随机座位也可复现（同种子 = 同一局，含座位）', async () => {
-  const a = await create(makeApi(), { mySeat: 'random', myName: '我', seed: 12345 });
-  const b = await create(makeApi(), { mySeat: 'random', myName: '我', seed: 12345 });
-  const c = await create(makeApi(), { mySeat: 'random', myName: '我', seed: 999 });
+test('显式 seed：随机座位也可复现（同种子 = 同一局，含座位）', async (t) => {
+  // 三个 Api 共用同一份独占根（= 同一份存档目录）：这里比的是"同种子是否同座位"，
+  // 与数据目录无关，共用一份即可少建两个目录。
+  const dataDir = makeDataDir('seat');
+  let seedApi = null;
+  terminateAfter(t, () => seedApi, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  seedApi = makeApi(dataDir);
+  const a = await create(makeApi(dataDir), { mySeat: 'random', myName: '我', seed: 12345 });
+  const b = await create(makeApi(dataDir), { mySeat: 'random', myName: '我', seed: 12345 });
+  const c = await create(makeApi(dataDir), { mySeat: 'random', myName: '我', seed: 999 });
   assert.strictEqual(a.body.mySeat, b.body.mySeat, '同种子的随机座位必须一致（座位的随机源与人格分配共用 seedRng）');
   assert.ok(c.body.mySeat >= 1 && c.body.mySeat <= 12);
 });

@@ -1,7 +1,9 @@
-# 行尾固定（只这六份，故意不用 * text=auto —— 那会引发全仓重新规范化并污染并行工作区）
+# 行尾固定（只这七份，故意不用 * text=auto —— 那会引发全仓重新规范化并污染并行工作区）
 #
-# 为什么需要：这六份文件的**字节**被测试用 SHA-256 钉住 ——
+# 为什么需要：这七份文件的**字节**被测试用 SHA-256 钉住 ——
 #   · web/index.html、web/m/index.html 的内联 <script> 哈希，钉在 src/static.js 的 CSP 白名单里；
+#   · web/offline.html 的内联 <script> 哈希，同样钉在 src/static.js 的 CSP 白名单里
+#     （离线页不得外链脚本，只能内联；见 src/static.js 里那条注释与 test/offline-page.test.js）；
 #   · design/brand/v2/wolf-emblem.svg 的哈希，钉在品牌 manifest 的 sourceSha256；
 #   · design/brand/v2/export/app-icon.svg 的哈希，钉在品牌 manifest 的 files[] 里；
 #   · web/assets/icon.svg 必须与 design/brand/v2/export/app-icon.svg **逐字节相同**；
@@ -29,3 +31,8 @@ web/assets/brand/wolf-emblem.svg text eol=lf
 web/assets/icon.svg text eol=lf
 web/index.html text eol=lf
 web/m/index.html text eol=lf
+# 2026-09-21 之后补的一份：web/offline.html 的内联脚本哈希登记进 CSP 白名单时，
+# brand:check 立刻把该页认成"字节哈希路径"并判红（原文："web/offline.html 行尾钉版缺失 …
+# 修复：在 .gitattributes 追加一行"）—— 也就是说这一行不是可选项：
+# 不钉，Windows 检出（core.autocrlf=true）会把内联脚本变成 CRLF ⇒ 哈希错位 ⇒ CSP 又静默拦掉它。
+web/offline.html text eol=lf

@@ -14,6 +14,10 @@
  */
 'use strict';
 
+// 作用域真值：直接读 git 事实（.gitignore 忽略项 − 含被跟踪文件的条目），不再维护手写目录表。
+// 完整推导（两个方向的偏差各是什么、`-z` 与大小写两个坑）见 scripts/eslint-ignores.js 文件头。
+const { ignoredGlobs } = require('./scripts/eslint-ignores');
+
 const shared = {
   'no-undef': 'error',
   'no-redeclare': 'error',
@@ -68,7 +72,22 @@ const browserGlobals = {
 
 module.exports = [
   {
-    ignores: ['node_modules/**', 'app/**', 'android/**', 'saves/**', 'logs/**', 'dist/**'],
+    /**
+     * 生成物/构建目录**一律以 .gitignore 为真值**（`ignoredGlobs()` 直接读 git 事实）。
+     *
+     * 旧版这里是一张手写目录表（node_modules/app/android/saves/logs/dist），两个方向都出过偏差：
+     *   · **漏排**：`output/playwright/` 在 .gitignore 里，却照样被 eslint 读进去 ——
+     *     今天没炸只是因为没有 `files` 块匹配它；那里一旦出现语法错误的 .js，`eslint .` 就会判红。
+     *   · **误排**：`app/**` 把**被 git 跟踪的源码**也排掉了（实测 app/ 下有 56 个被跟踪文件，
+     *     含 gradle 构建脚本与 Java 源码），方向正好反了；`android/**`、`dist/**` 则是过期条目。
+     *
+     * 派生规则只有一条：某个被忽略条目里若住着被跟踪的文件，就**不**排它。
+     * 于是 `output/playwright/**` 被排掉，而 `output/` 本身不会被整目录排掉
+     * （`output/review-2026-09-20/reproduce.cjs` 是被跟踪的）。
+     * 这条不变量由 test/eslint-scope.test.js 双向钉住：没有跟踪文件被排掉，也没有被忽略的
+     * 生成物留在作用域里；且每一条 ignore 都能被 `git check-ignore` 反查到，防止手写表回归。
+     */
+    ignores: ignoredGlobs(__dirname),
   },
   {
     files: ['src/**/*.js', 'server.js', 'scripts/**/*.js', 'test/**/*.js', 'eslint.config.js'],

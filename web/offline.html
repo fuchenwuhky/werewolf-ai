@@ -92,11 +92,34 @@
   <h1>现在没有网络</h1>
   <p>离线时打不开新对局：<span class="hint">AI 在服务器端调用模型</span>，断网就没法继续了。</p>
   <p>已经打开过的页面可以脱离网络显示，但任何推进对局的操作都需要联网——这是单并发、串行调用的必然结果，不是缓存能绕开的。</p>
-  <button onclick="location.reload()">重试</button>
+  <button id="offline-retry" type="button">重试</button>
 </div>
 <script>
-  // 网络恢复就自动回首页（离线页不该困住用户）
-  window.addEventListener('online', () => location.replace('/'));
+  /*
+    本页的两个交互（重试 / 网络恢复自动回首页）必须靠**内联**脚本，这是被钉死的设计前提：
+    test/pwa.test.js 的「离线页：不得依赖任何外部资源」禁止本页引用外部脚本
+    （断网时它必须能自己渲染），所以不能把它挪到 web/offline.js 去外链。
+
+    代价是：服务的 CSP（src/static.js 的 script-src）没有 'unsafe-inline'，
+    脚本必须靠 sha256 白名单放行 —— 这段代码的哈希**已经**登记进那份白名单。
+    在补登记之前，CSP 会把整段脚本**静默**拦掉：控制台只有一条 violation，
+    页面上「重试」点了没反应、网络恢复也不会回首页（本页此前的真实状态）。
+
+    ⚠ 改这段脚本的**任何一个字符**（含注释与缩进）都必须同步更新 src/static.js 的
+      script-src 白名单；web/offline.html 的行尾也必须保持 LF
+      （.gitattributes 已钉 `text eol=lf`：一旦命中 CSP 白名单，brand:check 会
+      按"CSP 白名单页面"强制要求这条行尾钉版，否则哈希在 Windows 检出上必然错位）。
+    ⚠ 内联事件属性（原来的 onclick="location.reload()"）同样会被 CSP 拦掉，
+      且 remediation.test.js 的同类用例已禁止内联事件属性 —— 所以改成在这里接线。
+    判据：test/offline-page.test.js（逐页比对"内联脚本哈希 ↔ 白名单"，并核对
+    脚本里取的 id 与页面上的元素一致 —— 免得改名之后按钮又变成摆设）。
+  */
+  (function () {
+    var retry = document.getElementById('offline-retry');
+    if (retry) retry.addEventListener('click', function () { location.reload(); });
+    // 网络恢复就自动回首页（离线页不该困住用户）
+    window.addEventListener('online', function () { location.replace('/'); });
+  })();
 </script>
 </body>
 </html>

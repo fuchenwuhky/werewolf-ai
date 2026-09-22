@@ -28,6 +28,17 @@ const crypto = require('crypto');
 // CPU（构造次数）与延迟才是，所以这个方向是对的。
 const STREAM_TICK_MS = 500;
 const STREAM_PING_TICKS = 32; // ≈16s 一次心跳：足够让前端发现断线，也不浪费带宽
+
+/**
+ * NEW-16 替身对局的令牌哨兵（见 Api#_ghostGame）。
+ *
+ * `body.token !== entry.tokens.player` 这类比较的另一侧永远是**请求里的字符串**，
+ * Symbol 与任何字符串永不相等 ⇒ 每条子路由的授权门都会照常拒绝，给出与该路由
+ * 「存在但令牌不对」**逐字节相同**的响应。换成固定的可猜字符串（含空串）都不行：
+ * 调用者只要把那个字符串当令牌发过来，就能从替身上拿到 200，「存在 / 不存在」的差异
+ * 又变回探针 —— 这一条正是本缺陷要关掉的东西。
+ */
+const GHOST_TOKEN = Symbol('no-such-game');
 /**
  * 自定义头像的缓存策略（M1 §4.3「私有缓存」）：URL 带内容哈希 ⇒ 内容变了 URL 必变，
  * 因此可长缓存；`private` 是因为它属于本机玩家的私人资料，不得被共享缓存留存。
@@ -349,6 +360,38 @@ class Api {
     const e = this.games.get(id);
     if (e) e.lastAccess = Date.now();
     return e;
+  }
+
+  /**
+   * NEW-16：非管理会话遇到**未知 gameId** 时用的替身对局。
+   *
+   * ## 缺陷
+   * 老实现把"这一局不存在"和"这一局存在、但你的令牌不对"给成了不同的响应
+   * （404「对局不存在」 vs 403「token 无效」/ 401「需要管理会话」）。未配对的调用者
+   * 只要拿到一个 gameId，就能用这个差异判定"它是不是一局真实对局" —— 泄漏存在性。
+   *
+   * ## 为什么不是"统一成一句通用文案"
+   * 各子路由的拒绝原因本来就不同：/logs、/agent、/replay 是「需要上帝 token」，
+   * /explode 是「仅玩家本人可自爆」，/duel 是「仅玩家本人可发起决斗」，/tokens 是 401 配对串……
+   * 统一成一句反而会造出**新的**可区分点（改成通用串之后，那些路由的"存在"响应依旧是专属串）。
+   * 所以做法是：把未知 id 交给**同一条子路由**，配一份令牌永不匹配的替身，
+   * 由该路由自己的授权门给出与"存在但令牌不对"完全一致的那一条响应。
+   * 这条不变量由 test/new-16-existence-leak.test.js **逐路由实测**：同一个请求打在
+   * "真实存在的局"与"不存在的 id"上，状态码与报文必须严格相等（含未知子路由与错误方法）。
+   *
+   * ## 替身的形状
+   * 只填到"授权门可能触到的最浅一层"：`viewerOf` 只在令牌等于玩家令牌时才会去读
+   * `entry.game.players`，而那个等式（Symbol vs 字符串）永远不成立。万一将来有人把授权门
+   * 挪到状态检查之后，这里也只会落到一个空局上，而不是抛异常变成 500 ——
+   * 500 与 403 的差异本身就是探针。
+   */
+  _ghostGame(id) {
+    return {
+      game: { id, players: [], finished: false, started: false, paused: null, pending: null },
+      running: false, error: null, mock: false, paused: null, review: null,
+      tokens: { player: GHOST_TOKEN, god: GHOST_TOKEN },
+      createdAt: 0, lastAccess: 0, ghost: true,
+    };
   }
 
   /**
@@ -987,14 +1030,22 @@ class Api {
         if ((sub === '/session' || sub === '/tokens') && method === 'GET') {
           const live = this.games.get(id);
           const doc = live || this.loadSaveDoc(id);
-          if (!doc || !doc.game) return this.json(res, 404, { error: '对局不存在' });
+          const token = query.get('token');
+          const tokenValid = !!doc && !!doc.game && !!token && !!doc.tokens
+            && (token === doc.tokens.player || token === doc.tokens.god);
+          // NEW-16：**授权先于存在性**。非管理会话先过门，再谈"这一局在不在"：
+          //   · /tokens 只认管理会话 ⇒ 未配对一律 401（与"局存在"时同一条响应）；
+          //   · /session 只认管理会话或本局令牌 ⇒ 其余一律 403「token 无效」。
+          // 于是"不存在的局"与"存在但令牌不对"给同一状态码 + 同一报文
+          //（老实现是 404「对局不存在」 vs 403/401 —— 差异即"这个 id 是不是真对局"）。
           if (sub === '/tokens') {
             if (!mgmt) return this._denyManagement(res);
-            return this.json(res, 200, doc.tokens || {});
+          } else if (!mgmt && !tokenValid) {
+            return this.json(res, 403, { error: 'token 无效' });
           }
-          const token = query.get('token');
-          const tokenValid = !!token && !!doc.tokens && (token === doc.tokens.player || token === doc.tokens.god);
-          if (!mgmt && !tokenValid) return this.json(res, 403, { error: 'token 无效' });
+          // 到这里的只有管理会话（或已持令牌的合法调用者），404 语义保持不变
+          if (!doc || !doc.game) return this.json(res, 404, { error: '对局不存在' });
+          if (sub === '/tokens') return this.json(res, 200, doc.tokens || {});
           const gm = doc.game;
           const human = (gm.players || []).find((p) => p.isHuman);
           return this.json(res, 200, { gameId: id, tokenValid, inMemory: !!live, started: !!gm.started, finished: !!gm.finished,
@@ -1017,10 +1068,21 @@ class Api {
             return this.resumePaused(res, live, body);
           }
           const doc = this.loadSaveDoc(id);
-          if (!doc || !doc.game) return this.json(res, 404, { error: '存档不存在' });
+          if (!doc || !doc.game) {
+            // NEW-16：非管理会话下"没有这份存档"必须与"有存档但令牌不对"一致
+            //（后者是 resumeGame 的 403「token 无效」）。管理会话语义不变：仍是 404。
+            if (!mgmt) return this.json(res, 403, { error: 'token 无效' });
+            return this.json(res, 404, { error: '存档不存在' });
+          }
           return this.resumeGame(res, { id, tokens: doc.tokens || {} }, body);
         }
-        const entry = this.getGame(id);
+        // 未知 id + 非管理会话 ⇒ 用"令牌永不匹配"的替身继续走**同一条子路由**，
+        // 由该路由自己的授权门给出与"存在但令牌不对"完全一致的响应（详见 _ghostGame）。
+        // 管理会话（本机单机应用）的语义不变：不存在仍是 404「对局不存在」。
+        // 注意替身同样覆盖"未知子路由 / 方法不匹配"（会一路落到下面的 404「not found」）——
+        // 老实现里 `/api/games/<存在的 id>/whatever` 是 404「not found」而未知 id 是
+        // 404「对局不存在」，报文不同 ⇒ 也能判出存在性。
+        const entry = this.getGame(id) || (mgmt ? null : this._ghostGame(id));
         if (!entry) return this.json(res, 404, { error: '对局不存在' });
         if (sub === '/start' && method === 'POST') return this.startGame(res, entry, await this.readBody(req));
         if (sub === '/terminate' && method === 'POST') return this.terminateGame(res, entry, await this.readBody(req));

@@ -12,16 +12,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 
-// ⚠ 必须在 require('../src/api') **之前**设置：SAVE_DIR 是 api.js 的模块级常量，
-// 加载时读 process.env.WW_DATA_DIR。之前忘了这一步，测试把存档写进了仓库的 saves/（污染工作区）。
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-mockflag-'));
-process.env.WW_DATA_DIR = TMP_DATA;
-process.on('exit', () => { try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch (_) { /* ignore */ } });
-
-const { Api } = require('../src/api');
+// NEW-18：独占数据目录与清理都走 test/helpers-tmpdir.js —— 每个用例一份 dataDir，
+// 清理挂在**该用例**的 t.after 上（断言失败/抛异常也照跑），删目录前先等档案迁移收尾。
+// 不再用 process.on('exit')：那种写法只在进程正常退出时兜底，进程被强杀就完全失效，
+// 而且它把"某个用例没清理干净"这件事藏到文件末尾、还习惯性吞掉删除错误（残留不可见）。
+const { makeDataDir, savesOf, makeApiIn, terminateAfter } = require('./helpers-tmpdir');
 
 const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
 
@@ -38,19 +35,18 @@ const fakeReq = (method, body) => {
   return req;
 };
 
-/** 造一个"能创建对局"的 Api（不需要真 key：mock 局不走 LLM）；数据目录见文件头 */
-function makeApi() {
-  return new Api({
+/** 造一个"能创建对局"的 Api（不需要真 key：mock 局不走 LLM）；saveDir = 该用例独占根的 saves/ */
+function makeApi(dataDir) {
+  return makeApiIn(dataDir, {
     config: (() => { const cfg = { apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }; return { get: () => cfg, save(b) { Object.assign(cfg, b); } }; })(),
-    logger: silentLogger,
-    // NEW-17：显式传 saveDir（= 本文件独占的 TMP_DATA/saves）——不再依赖"环境变量必须在 require 之前设置"
-    // 这一隐性顺序；少一个隐性前提，就少一条"哪天有人把 require 提到前面 → 写进仓库根"的路。
-    saveDir: path.join(TMP_DATA, 'saves'),
-  });
+  }).api;
 }
 
-test('Mock 试玩：创建时必须把 mock 落到 entry 上（否则存档会写成 false）', async () => {
-  const api = makeApi();
+test('Mock 试玩：创建时必须把 mock 落到 entry 上（否则存档会写成 false）', async (t) => {
+  const dataDir = makeDataDir('mockflag');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const res = capture();
   await api.handle(fakeReq('POST', {
     boardId: 'adv12', mock: true, seed: 7,
@@ -63,8 +59,11 @@ test('Mock 试玩：创建时必须把 mock 落到 entry 上（否则存档会�
   assert.strictEqual(entry.mock, true, 'entry.mock 必须为 true —— 存档与恢复都依赖它');
 });
 
-test('Mock 试玩：mock 标记必须落盘，且能在恢复时读回（这条链断了就会悄悄花钱）', async () => {
-  const api = makeApi();
+test('Mock 试玩：mock 标记必须落盘，且能在恢复时读回（这条链断了就会悄悄花钱）', async (t) => {
+  const dataDir = makeDataDir('mockflag');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const res = capture();
   await api.handle(fakeReq('POST', {
     boardId: 'adv12', mock: true, seed: 8,
@@ -74,7 +73,7 @@ test('Mock 试玩：mock 标记必须落盘，且能在恢复时读回（这条�
   const entry = api.games.get(id);
   await api.saveGame(entry, { force: true });
 
-  const doc = JSON.parse(fs.readFileSync(path.join(TMP_DATA, 'saves', `${id}.json`), 'utf8'));
+  const doc = JSON.parse(fs.readFileSync(path.join(savesOf(dataDir), `${id}.json`), 'utf8'));
   assert.strictEqual(doc.mock, true, '存档里的 mock 必须是 true（恢复时按它决定用 Mock 还是真实 agentFactory）');
 
   // 恢复路径读的就是 doc.mock
@@ -84,8 +83,11 @@ test('Mock 试玩：mock 标记必须落盘，且能在恢复时读回（这条�
   assert.strictEqual(rebuilt.mock, true, '恢复出来的 entry 必须仍是试玩局');
 });
 
-test('Mock 试玩：真实对局不得被误标为 mock', async () => {
-  const api = makeApi();
+test('Mock 试玩：真实对局不得被误标为 mock', async (t) => {
+  const dataDir = makeDataDir('mockflag');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const res = capture();
   await api.handle(fakeReq('POST', {
     boardId: 'adv12', mock: false, seed: 9,
@@ -95,8 +97,11 @@ test('Mock 试玩：真实对局不得被误标为 mock', async () => {
   assert.strictEqual(api.games.get(res.body.gameId).mock, false, '真实对局的 mock 必须为 false');
 });
 
-test('Mock 试玩：存档列表要带 mock 标记（便于排查"恢复后是否还走 Mock"）', async () => {
-  const api = makeApi();
+test('Mock 试玩：存档列表要带 mock 标记（便于排查"恢复后是否还走 Mock"）', async (t) => {
+  const dataDir = makeDataDir('mockflag');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const res = capture();
   await api.handle(fakeReq('POST', {
     boardId: 'adv12', mock: true, seed: 10,

@@ -91,12 +91,25 @@ function looksLikeAsset(pathname) {
  * @param {object} opts { webDir }
  */
 // HTML 文档的安全响应头（整改阶段 2.2）。
-// script-src 用"内联守卫脚本"的 sha256 哈希白名单（两端的初始化守卫），不用 unsafe-inline；
+// script-src 用"内联守卫脚本"的 sha256 哈希白名单（两端的初始化守卫 + 离线页），不用 unsafe-inline；
 // style-src 暂需 unsafe-inline：界面大量使用 style 属性做昼夜/位置渲染 —— 已登记为迁移债务。
+//
+// ⚠ 离线页（web/offline.html）的那条哈希只能靠白名单放行，不能改成外链脚本：
+//   test/pwa.test.js 的「离线页：不得依赖任何外部资源」明确禁止本页引用外部脚本
+//   （离线页必须在"任何外部资源都取不到"时自己渲染；外链还要多依赖一份 SW 预缓存，
+//    少一份都可能让按钮变成摆设）。所以这里给它的内联脚本登记哈希 ——
+//   与两个 index 页的初始化守卫是同一套机制（改脚本必须同步改这里）。
+//   · 同步要求：web/offline.html 必须保持 LF 行尾（.gitattributes 已钉 `text eol=lf`）——
+//     命中 CSP 白名单的页面会被 brand:check 按"字节哈希路径"强制要求行尾钉版，
+//     行尾一变哈希就错位（Windows 检出上会静默失效）。
+//   · 已知误报：scripts/check-guards.js 的 CSP_PAGES 只列出了两个 index 页，
+//     所以它会把离线页这条本来就有人用的哈希报成"陈旧条目"（仅 ⚠ 警告，不影响退出码）。
+//     别照它的话删 —— 删掉这里，离线页的"重试/网络恢复回首页"会再次被 CSP 静默拦掉；
+//     test/offline-page.test.js 会当场判红。修那个清单要改 scripts/check-guards.js（本任务范围外）。
 const HTML_SECURITY_HEADERS = {
   'Content-Security-Policy': [
     "default-src 'self'",
-    "script-src 'self' 'sha256-I43HymuDTCZT8ZYOm44OS9WzPkl7623/8xAv+p6wsOE=' 'sha256-wkqcyVTYd8Z8BWcuwv3o1BcjRMpIuKgop6GIZOedqJ4='",
+    "script-src 'self' 'sha256-I43HymuDTCZT8ZYOm44OS9WzPkl7623/8xAv+p6wsOE=' 'sha256-wkqcyVTYd8Z8BWcuwv3o1BcjRMpIuKgop6GIZOedqJ4=' 'sha256-Gb59Pw8+CGFm9EYYSzaOlbqSQ2uPjA+4cFW4p5fMOuw='",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self'",
     "connect-src 'self'",

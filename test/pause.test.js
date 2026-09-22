@@ -6,15 +6,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
-// ⚠ 必须在 require('../src/api') 之前设置：SAVE_DIR 是 api.js 的模块级常量（加载时读 WW_DATA_DIR）。
-// 不设它，本文件会往仓库的 saves/ 写 api-pause 之类的测试存档 —— 用户打开界面就会看到这些垃圾对局。
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-pause-'));
-process.env.WW_DATA_DIR = TMP_DATA;
-process.on('exit', () => { try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch (_) { /* ignore */ } });
+// NEW-18：本文件只有最后那条 API 用例需要落盘，它自己建独占根并把清理挂在该用例的 t.after 上；
+// 不再用 process.on('exit') + `WW_DATA_DIR`（saveDir 现在显式传，环境变量不再影响任何路径）。
+const { makeDataDir, makeApiIn, terminateAfter } = require('./helpers-tmpdir');
 
 const { LlmFatalError } = require('../src/errors');
 const { Game } = require('../src/engine/game');
@@ -205,9 +199,12 @@ test('引擎：暂停后可从锚点恢复并跑到终局（记忆与天数不�
 });
 
 // ---------- API 层：暂停态下发 + resume 路由 + 暂停中可终止 ----------
-test('API：暂停对局下发 paused、可从内存锚点恢复、暂停中可终止', async () => {
-  const { Api } = require('../src/api');
-  const api = new Api({ config: { get: () => ({ apiKey: 'k' }), save() {} }, logger: silentLogger, saveDir: path.join(TMP_DATA, 'saves') });
+// 形参刻意叫 ctx 而不叫 t：本用例体里已经有一个 `const t = capture()`（响应盒子），别撞名
+test('API：暂停对局下发 paused、可从内存锚点恢复、暂停中可终止', async (ctx) => {
+  const dataDir = makeDataDir('pause');
+  let api = null;
+  terminateAfter(ctx, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApiIn(dataDir, { config: { get: () => ({ apiKey: 'k' }), save() {} } }).api;
   const board = { wolf: 1, seer: 1, witch: 1, villager: 3 };
   // 注意：全 AI 座位——真人座位会让引擎挂起等待输入（那是正确行为），测试无法自行推进
   const players = [];

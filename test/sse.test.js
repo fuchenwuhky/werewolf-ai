@@ -13,17 +13,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
-const path = require('node:path');
-const fs = require('node:fs');
-const os = require('node:os');
 
-// ⚠ 必须在 require('../src/api') 之前设置：SAVE_DIR 是 api.js 的模块级常量（加载时读 WW_DATA_DIR）。
-// 不设它，本文件会把测试对局写成仓库 saves/ 里的存档（用户界面里就能看到）。
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-sse-'));
-process.env.WW_DATA_DIR = TMP_DATA;
-process.on('exit', () => { try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch (_) { /* ignore */ } });
+// NEW-18：每个用例一份独占 dataDir（见 startServer：先建目录、挂清理，再起服务），
+// 清理挂**该用例**的 t.after（断言失败也照跑），删目录前先等档案迁移收尾。
+// 不再用 process.on('exit') + `WW_DATA_DIR`：saveDir 已显式传，环境变量不再影响任何路径；
+// 而 exit 钩子只在进程正常退出时兜底，进程被强杀（CI 取消 / Ctrl-C）时残留照样留下。
+const { makeDataDir, makeApiIn, terminateAfter } = require('./helpers-tmpdir');
 
-const { Api } = require('../src/api');
 const { BOARDS } = require('../src/engine/roles');
 
 const silent = { debug() {}, info() {}, warn() {}, error() {}, error2() {} };
@@ -36,10 +32,13 @@ function tmpConfig() {
   };
 }
 
-/** 起一个真实服务；返回 { url, api, close } */
-async function startServer() {
-  const config = tmpConfig();
-  const api = new Api({ config, logger: silent, saveDir: path.join(TMP_DATA, 'saves') });
+/** 起一个真实服务；返回 { url, api, close }（独占根与清理都在这里按用例落地，见下） */
+async function startServer(t) {
+  const dataDir = makeDataDir('sse');
+  let api = null;
+  // 清理先挂上：Api 构造 / createServer / listen 任何一步抛错都不会漏删刚建的独占根
+  terminateAfter(t, () => api, dataDir);
+  api = makeApiIn(dataDir, { config: tmpConfig() }).api;
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://localhost');
     if (u.pathname.startsWith('/api/')) {
@@ -127,8 +126,8 @@ function openSse(url) {
   return { frames, waitFor, close: () => ctrl.abort(), done };
 }
 
-test('SSE：token 无效必须是 403 JSON，绝不能挂住连接', async () => {
-  const s = await startServer();
+test('SSE：token 无效必须是 403 JSON，绝不能挂住连接', async (t) => {
+  const s = await startServer(t);
   try {
     makeEntry(s.api);
     const res = await fetch(`${s.url}/api/games/sse-test/stream?token=bad&after=0`);
@@ -139,8 +138,8 @@ test('SSE：token 无效必须是 403 JSON，绝不能挂住连接', async () =>
   } finally { await s.close(); }
 });
 
-test('SSE：连上立刻收到首帧（标准 SSE 格式 + 正确响应头）', async () => {
-  const s = await startServer();
+test('SSE：连上立刻收到首帧（标准 SSE 格式 + 正确响应头）', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     entry.game.emit('speech', { actor: 1, data: { context: '', text: '大家好' } });
@@ -158,8 +157,8 @@ test('SSE：连上立刻收到首帧（标准 SSE 格式 + 正确响应头）', 
   } finally { await s.close(); }
 });
 
-test('SSE：只在真的变化时推帧，空转期间静默（这就是替代轮询的收益）', async () => {
-  const s = await startServer();
+test('SSE：只在真的变化时推帧，空转期间静默（这就是替代轮询的收益）', async (t) => {
+  const s = await startServer(t);
   try {
     makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -179,8 +178,8 @@ test('SSE：只在真的变化时推帧，空转期间静默（这就是替代�
   } finally { await s.close(); }
 });
 
-test('SSE：增量游标不重复下发同一事件', async () => {
-  const s = await startServer();
+test('SSE：增量游标不重复下发同一事件', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -201,8 +200,8 @@ test('SSE：增量游标不重复下发同一事件', async () => {
   } finally { await s.close(); }
 });
 
-test('SSE：推送负载与轮询 /view 逐字段一致（前端回退轮询时行为必须相同）', async () => {
-  const s = await startServer();
+test('SSE：推送负载与轮询 /view 逐字段一致（前端回退轮询时行为必须相同）', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     entry.game.emit('speech', { actor: 1, data: { context: '', text: '内容' } });
@@ -225,8 +224,8 @@ test('SSE：推送负载与轮询 /view 逐字段一致（前端回退轮询时�
   } finally { await s.close(); }
 });
 
-test('SSE：心跳按期到达（客户端据此判断连接是否还活着）', async () => {
-  const s = await startServer();
+test('SSE：心跳按期到达（客户端据此判断连接是否还活着）', async (t) => {
+  const s = await startServer(t);
   try {
     makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -240,8 +239,8 @@ test('SSE：心跳按期到达（客户端据此判断连接是否还活着）',
   } finally { await s.close(); }
 });
 
-test('SSE：终局先送终局帧再送 end，且完成后自动关流', async () => {
-  const s = await startServer();
+test('SSE：终局先送终局帧再送 end，且完成后自动关流', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -260,8 +259,8 @@ test('SSE：终局先送终局帧再送 end，且完成后自动关流', async (
   } finally { await s.close(); }
 });
 
-test('SSE：视图构造失败必须发 error 帧并关流，绝不静默卡死', async () => {
-  const s = await startServer();
+test('SSE：视图构造失败必须发 error 帧并关流，绝不静默卡死', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -278,8 +277,8 @@ test('SSE：视图构造失败必须发 error 帧并关流，绝不静默卡死'
   } finally { await s.close(); }
 });
 
-test('SSE：断线重连带 Last-Event-ID 时必须续传，不重发已渲染过的事件', async () => {
-  const s = await startServer();
+test('SSE：断线重连带 Last-Event-ID 时必须续传，不重发已渲染过的事件', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     const first = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -309,8 +308,8 @@ test('SSE：断线重连带 Last-Event-ID 时必须续传，不重发已渲染�
   } finally { await s.close(); }
 });
 
-test('SSE：空转拍不得调用 buildView（廉价指纹的价值就在这里，否则比轮询更费 CPU）', async () => {
-  const s = await startServer();
+test('SSE：空转拍不得调用 buildView（廉价指纹的价值就在这里，否则比轮询更费 CPU）', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -336,8 +335,8 @@ test('SSE：空转拍不得调用 buildView（廉价指纹的价值就在这里�
   } finally { await s.close(); }
 });
 
-test('SSE：客户端断开后服务端必须清理订阅（否则长跑会泄漏）', async () => {
-  const s = await startServer();
+test('SSE：客户端断开后服务端必须清理订阅（否则长跑会泄漏）', async (t) => {
+  const s = await startServer(t);
   try {
     makeEntry(s.api);
     const c = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);
@@ -354,8 +353,8 @@ test('SSE：客户端断开后服务端必须清理订阅（否则长跑会泄�
   } finally { await s.close(); }
 });
 
-test('SSE：多订阅者各自维护游标；对局被逐出时收到 end(evicted)', async () => {
-  const s = await startServer();
+test('SSE：多订阅者各自维护游标；对局被逐出时收到 end(evicted)', async (t) => {
+  const s = await startServer(t);
   try {
     const entry = makeEntry(s.api);
     entry.game.emit('system', { visibleTo: 'all', text: 'X' });
@@ -375,8 +374,8 @@ test('SSE：多订阅者各自维护游标；对局被逐出时收到 end(evicte
   } finally { await s.close(); }
 });
 
-test('SSE：closeStreams 可一次性关闭某局所有连接（终止对局/关服路径）', async () => {
-  const s = await startServer();
+test('SSE：closeStreams 可一次性关闭某局所有连接（终止对局/关服路径）', async (t) => {
+  const s = await startServer(t);
   try {
     makeEntry(s.api);
     const a = openSse(`${s.url}/api/games/sse-test/stream?token=gtok&after=0`);

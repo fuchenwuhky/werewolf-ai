@@ -14,17 +14,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 
-// ⚠ 必须在 require('../src/api') 之前设置：SAVE_DIR 是模块级常量，加载时读 WW_DATA_DIR
-const TMP_DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-terminate-'));
-process.env.WW_DATA_DIR = TMP_DATA;
-process.on('exit', () => { try { fs.rmSync(TMP_DATA, { recursive: true, force: true }); } catch (_) { /* ignore */ } });
-
-const { Api } = require('../src/api');
-
-const silentLogger = { debug() {}, info() {}, warn() {}, error() {}, openGameLog() {}, closeGameLog() {} };
+// NEW-18：独占数据目录与清理都走 test/helpers-tmpdir.js —— 每个用例一份 dataDir，
+// 清理挂在**该用例**的 t.after 上（断言失败也照跑），删目录前先等档案迁移收尾。
+// 原先的 process.on('exit') + `WW_DATA_DIR` 环境变量在 NEW-17 之后就已是双重保险里的冗余：
+// saveDir 现在显式传（见下），环境变量不再影响任何路径。
+const { makeDataDir, savesOf, makeApiIn, terminateAfter } = require('./helpers-tmpdir');
 
 function capture() {
   const box = {};
@@ -37,12 +33,10 @@ const fakeReq = (method, body) => {
   if (body !== undefined) setImmediate(() => { handlers.data(Buffer.from(JSON.stringify(body))); handlers.end(); });
   return req;
 };
-const makeApi = () => new Api({
+/** 造一个"能创建对局"的 Api；saveDir = 该用例独占根的 saves/ */
+const makeApi = (dataDir) => makeApiIn(dataDir, {
   config: { get: () => ({ apiKey: 'sk-fake', baseUrl: 'http://127.0.0.1:9/v1', model: 'm', journal: false }), save() {} },
-  logger: silentLogger,
-  // NEW-17：显式传 saveDir（= 本文件独占 TMP_DATA/saves），不再依赖 WW_DATA_DIR 的加载顺序前提
-  saveDir: path.join(TMP_DATA, 'saves'),
-});
+}).api;
 
 /** 造一局"人类 + AI"的 mock 对局，并等到它真的开跑 */
 async function startRunningGame(api, seed) {
@@ -60,8 +54,11 @@ async function startRunningGame(api, seed) {
   return { entry, id: res.body.gameId };
 }
 
-test('P2-c：终止进行中的对局必须结算并落盘（否则刷新后被当活局恢复）', async () => {
-  const api = makeApi();
+test('P2-c：终止进行中的对局必须结算并落盘（否则刷新后被当活局恢复）', async (t) => {
+  const dataDir = makeDataDir('terminate');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const { entry, id } = await startRunningGame(api, 11);
   assert.strictEqual(entry.game.finished, false, '前置条件：此刻对局仍在进行中');
 
@@ -71,7 +68,7 @@ test('P2-c：终止进行中的对局必须结算并落盘（否则刷新后被�
   assert.strictEqual(res.body.settled, true, '运行中的对局也必须走"已结算"路径（旧行为只返回 {ok:true}）');
   assert.strictEqual(entry.game.finished, true, '内存里必须是终态');
 
-  const doc = JSON.parse(fs.readFileSync(path.join(TMP_DATA, 'saves', `${id}.json`), 'utf8'));
+  const doc = JSON.parse(fs.readFileSync(path.join(savesOf(dataDir), `${id}.json`), 'utf8'));
   // 存档结构：{ tokens, mock, game: <game.toJSON() 去掉 events>, anchor, ... }
   assert.ok(doc.game, '存档应当含 game 快照');
   assert.strictEqual(doc.game.finished, true, '存档里的终态必须落盘 —— 客户端刷新只按存档判断能否继续');
@@ -85,14 +82,17 @@ test('P2-c：终止进行中的对局必须结算并落盘（否则刷新后被�
   assert.strictEqual(row.resumable, false, '不能是可恢复状态，否则客户端又会自动进死局');
 });
 
-test('P2-c：重复终止不会把它重新变回可恢复（幂等）', async () => {
-  const api = makeApi();
+test('P2-c：重复终止不会把它重新变回可恢复（幂等）', async (t) => {
+  const dataDir = makeDataDir('terminate');
+  let api = null;
+  terminateAfter(t, () => api, dataDir); // 先挂清理：构造抛错也不漏删刚建的独占根
+  api = makeApi(dataDir);
   const { entry, id } = await startRunningGame(api, 12);
   const first = capture();
   await api.handle(fakeReq('POST', { token: entry.tokens.player }), first.res, `/api/games/${id}/terminate`, new URLSearchParams());
   const second = capture();
   await api.handle(fakeReq('POST', { token: entry.tokens.player }), second.res, `/api/games/${id}/terminate`, new URLSearchParams());
   assert.strictEqual(second.code, 409, '已结束的对局再终止应当是 409（不能反转状态）');
-  const doc = JSON.parse(fs.readFileSync(path.join(TMP_DATA, 'saves', `${id}.json`), 'utf8'));
+  const doc = JSON.parse(fs.readFileSync(path.join(savesOf(dataDir), `${id}.json`), 'utf8'));
   assert.strictEqual(doc.game.finished, true, '重复终止后存档必须仍是终态');
 });
