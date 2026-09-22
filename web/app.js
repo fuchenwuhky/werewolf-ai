@@ -1478,10 +1478,12 @@ function fillPcProfile(box, usableCount) {
         } catch (e) { alert(`删除失败：${e.message}`); }
       }, 'btn small danger');
     }
-    op('导出', (pp) => { window.open(`/api/profiles/${pp.id}/export`, '_blank', 'noopener'); });
+    op('导出', (pp) => browserExportProfile(`/api/profiles/${pp.id}/export`, exportStatus));
     row.appendChild(ops);
     list.appendChild(row);
   }
+  const exportStatus = makeExportStatusLine();
+  box.appendChild(exportStatus);
   box.appendChild(list);
 
   const btnrow = el('div', 'btnrow');
@@ -1685,7 +1687,10 @@ function fillPcData(box, res) {
   exp.id = 'pc-export';
   exp.disabled = !cur;
   exp.title = cur ? `导出「${cur.nickname}」为档案包（含战绩 / 笔记）` : '先选一个档案';
-  exp.addEventListener('click', () => { if (cur) window.open(`/api/profiles/${cur.id}/export`, '_blank', 'noopener'); });
+  exp.addEventListener('click', () => { if (cur) browserExportProfile(`/api/profiles/${cur.id}/export`, pcExportStatus); });
+  const pcExportStatus = makeExportStatusLine();
+  pcExportStatus.id = 'pc-export-status';
+  row.appendChild(pcExportStatus);
   row.appendChild(exp);
   const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
   imp.addEventListener('click', () => openProfileImport());
@@ -2103,6 +2108,50 @@ function openAvatarCrop(cfg) {
 }
 
 /** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
+/**
+ * 浏览器导出臂（M2-e）：同源下载 + 三态归一化。
+ *
+ * 为什么不能只说"导出成功"：计划书 `docs/next-stage-implementation-plan.md:237` 明写
+ * 「浏览器：同源下载，UI **只提示"已发起下载"**，**未经确认不宣称保存成功**」。
+ * 浏览器拿不到落盘证据（不知道用户是否保存、存到哪、有没有中途取消），所以这里只回
+ * `{ status: 'started' }`，文案由 web/shared/export-status.js 统一给。
+ * 服务端 `/api/profiles/<id>/export` 自带 `Content-Disposition: attachment`（src/api.js:2764），
+ * 因此用同源 <a download> 触发即可，不需要把包体读进 JS 内存。
+ */
+function browserExportProfile(url, statusEl) {
+  const S = window.WWTransferStatus;
+  let outcome;
+  try {
+    const a = document.createElement('a');
+    const u = String(url || '');
+    // 只放行本站的档案导出端点（前缀白名单）——调用方给的是字符串，必须在这里把关
+    if (!/^\/api\/profiles\/[^/]+\/export$/.test(u)) {
+      throw new Error('导出地址不合法（只允许 /api/profiles/<id>/export）');
+    }
+    a.href = u;
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    outcome = S.browserExportOutcome({ downloadStarted: true });
+  } catch (e) {
+    outcome = S.browserExportOutcome({ error: e });
+  }
+  const msg = S.formatOutcome(outcome);
+  if (statusEl) { statusEl.textContent = msg; statusEl.dataset.exportStatus = outcome.status; }
+  if (outcome.status === 'failed') alert(msg);
+  return outcome;
+}
+
+/** 档案管理里那行"已发起下载/失败"提示（role=status，便于 UI 检查读到）。 */
+function makeExportStatusLine() {
+  const p = el('p', 'hint', '');
+  p.id = 'pm-export-status';
+  p.setAttribute('role', 'status');
+  return p;
+}
+
 function openProfileImport() {
   const inp = document.createElement('input');
   inp.type = 'file';
@@ -2114,12 +2163,7 @@ function openProfileImport() {
     try { pkg = JSON.parse(await f.text()); } catch (_) { alert('文件不是合法 JSON'); return; }
     let pv;
     try { pv = await api('POST', '/api/profiles/import/preview', { package: pkg }); } catch (e) { alert(`包校验失败：${e.message}`); return; }
-    const ok = confirm(
-      `导入预览（尚未写入任何数据）：\n\n` +
-      `档案：${pv.preview.nickname}（将创建为「${pv.preview.nickname}（导入）」新档案）\n` +
-      `已结束对局：${pv.preview.games} 局（ID 会重新生成，不覆盖现有对局）\n` +
-      `笔记：${pv.preview.notes} 份\n\n` +
-      `进行中的对局不会包含在包内。确认导入？`);
+  const ok = confirm(window.WWTransferStatus.describePreview(pv.preview, f.size));
     if (!ok) return;
     try {
       const r = await api('POST', '/api/profiles/import', { package: pkg });

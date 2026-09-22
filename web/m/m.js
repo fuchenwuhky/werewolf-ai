@@ -1276,7 +1276,7 @@ function renderPcData() {
   exp.id = 'm-pc-export';
   exp.disabled = !p;
   exp.title = p ? `导出「${p.nickname}」为档案包（含战绩/笔记）` : '先选一个档案';
-  exp.addEventListener('click', () => { if (p) window.open(`/api/profiles/${p.id}/export`, '_blank', 'noopener'); });
+  exp.addEventListener('click', () => { if (p) browserExportProfile(`/api/profiles/${p.id}/export`); });
   ops.appendChild(exp);
   const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
   imp.id = 'm-pc-import';
@@ -1758,7 +1758,7 @@ function openProfileManager() {
         } catch (e) { alert(`删除失败：${e.message}`); }
       }, 'btn small danger');
     }
-    op('导出', (pp) => { window.open(`/api/profiles/${pp.id}/export`, '_blank', 'noopener'); });
+    op('导出', (pp) => browserExportProfile(`/api/profiles/${pp.id}/export`));
     row.appendChild(ops);
     list.appendChild(row);
   }
@@ -2131,6 +2131,36 @@ function openAvatarCrop(cfg) {
 }
 
 /** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
+/**
+ * 浏览器导出臂（M2-e）：同源下载 + 三态归一化，行为与桌面端 web/app.js 的同名函数一致。
+ * 文案只到「已发起下载」—— 浏览器无法确认用户是否保存（计划书 :237）。
+ */
+function browserExportProfile(url) {
+  const S = window.WWTransferStatus;
+  let outcome;
+  try {
+    const a = document.createElement('a');
+    const u = String(url || '');
+    // 只放行本站的档案导出端点（前缀白名单）
+    if (!/^\/api\/profiles\/[^/]+\/export$/.test(u)) {
+      throw new Error('导出地址不合法（只允许 /api/profiles/<id>/export）');
+    }
+    a.href = u;
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    outcome = S.browserExportOutcome({ downloadStarted: true });
+  } catch (e) {
+    outcome = S.browserExportOutcome({ error: e });
+  }
+  const msg = S.formatOutcome(outcome);
+  if (typeof flash === 'function') flash(msg, outcome.status === 'failed' ? 'warn' : '');
+  else if (outcome.status === 'failed') alert(msg);
+  return outcome;
+}
+
 function openProfileImport() {
   const inp = document.createElement('input');
   inp.type = 'file';
@@ -2142,12 +2172,7 @@ function openProfileImport() {
     try { pkg = JSON.parse(await f.text()); } catch (_) { alert('文件不是合法 JSON'); return; }
     let pv;
     try { pv = await api('POST', '/api/profiles/import/preview', { package: pkg }); } catch (e) { alert(`包校验失败：${e.message}`); return; }
-    const ok = confirm(
-      `导入预览（尚未写入任何数据）：\n\n` +
-      `档案：${pv.preview.nickname}（将创建为「${pv.preview.nickname}（导入）」新档案）\n` +
-      `已结束对局：${pv.preview.games} 局（ID 会重新生成，不覆盖现有对局）\n` +
-      `笔记：${pv.preview.notes} 份\n\n` +
-      `进行中的对局不会包含在包内。确认导入？`);
+  const ok = confirm(window.WWTransferStatus.describePreview(pv.preview, f.size));
     if (!ok) return;
     try {
       const r = await api('POST', '/api/profiles/import', { package: pkg });

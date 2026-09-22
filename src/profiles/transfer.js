@@ -111,6 +111,18 @@ function buildExportPackage({ profile, games, notes = {}, hostLabel = '', avatar
  *  后写的静默覆盖先写的（接口还报 200），属于"能判定的丢数据"故与坏记录同等对待。 */
 function validateImportPackage(pkg, { maxBytes = MAX_BYTES } = {}) {
   if (!pkg || typeof pkg !== 'object') throw Object.assign(new Error('导入包不是合法 JSON 对象'), { code: 400 });
+  // §7「保持 20MiB 上限」：路由层在读请求体时就按 transfer.MAX_BYTES 截断（api.js:963 / api.js:991
+  // 都显式传了 MAX_BYTES，注释写明"预览与导入同上限"），所以这里是**第二道**、而不是唯一一道。
+  // 补它的原因：这个参数过去只出现在签名里、函数体从不使用 —— 看签名会以为契约自带大小校验，
+  // 实际没有。两处**同用 MAX_BYTES**，所以不存在"两处判据漂移"的风险；补上后上限还能被单元测试
+  // 直接钉住（不必起 HTTP 服务去测路由层）。
+  let approxBytes;
+  try { approxBytes = Buffer.byteLength(JSON.stringify(pkg)); } catch (_) { approxBytes = NaN; }
+  if (Number.isFinite(approxBytes) && Number(maxBytes) > 0 && approxBytes > Number(maxBytes)) {
+    throw Object.assign(new Error(
+      `导入包超过上限（${Math.round(Number(maxBytes) / 1048576)} MiB，实际约 ${(approxBytes / 1048576).toFixed(2)} MiB）`
+    ), { code: 413 });
+  }
   if (!pkg.manifest || Number(pkg.manifest.exportVersion) !== EXPORT_VERSION) {
     throw Object.assign(new Error('不支持的导出版本'), { code: 400 });
   }
