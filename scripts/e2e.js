@@ -6,12 +6,19 @@
 'use strict';
 const { spawn } = require('child_process');
 const path = require('path');
+const net = require('net');
 const fs = require('fs');
+const os = require('os');
 
 const PORT = 3997;
 const BASE = `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const CONFIG_FILE = path.join(__dirname, '..', 'config.json');
+// 数据目录隔离（必须）：不隔离就会把存档/档案/日志/配置写进仓库的 saves/、profiles/、logs/
+// 和 config.json —— 其中 saves/ 是用户的真实存档（禁动）。server.js 支持 WW_DATA_DIR
+// （见 server.js:14/:20/:28），它会同时搬走 config.json、logs/、saves/、profiles/，
+// 所以这里连"跑前备份 config.json、跑完再还原"都不需要了（那段旧代码已随之删除）。
+// 见 main()：端口预检通过后才真正创建（预检提前 return 时不会漏下空目录）
+let DATA_DIR = null;
 
 async function api(method, url, body) {
   const res = await fetch(BASE + url, {
@@ -25,7 +32,27 @@ async function api(method, url, body) {
   return data;
 }
 
+// 端口是否已被占用（任何监听者，不限于 HTTP）。用 net 而不是 fetch：非 HTTP 监听者也要能发现。
+const portOccupied = () => new Promise((resolve) => {
+  const s = net.connect({ host: '127.0.0.1', port: PORT });
+  const done = (v) => { try { s.destroy(); } catch (_) { /* ignore */ } resolve(v); };
+  s.once('connect', () => done(true));
+  s.once('error', () => done(false));
+  s.setTimeout(1500, () => done(false));
+});
+
 async function main() {
+  // 端口预检（必须）：若 3997 已被占用，下面 spawn 的服务端起不来，而**占用者会替它回答**
+  // GET / 和所有接口 —— 实测"真·残留 server.js"占着该端口时本脚本 21/21 全过（假绿），
+  // 门禁因此彻底失效（旧版留下的孤儿服务端就是这么让本脚本时绿时红的，它用仓库根做数据
+  // 目录，还会把对局写进真实 saves/）。所以端口不空就绝不继续，直接失败退出。
+  if (await portOccupied()) {
+    console.error(`✗ 端口 ${PORT} 已被占用，无法保证被测的是本次启动的服务端（占用者会冒充它回答接口）。`);
+    console.error('  请先结束占用该端口的进程（常见来源：上一次异常退出的 e2e 留下的孤儿 node server.js）后重试。');
+    process.exitCode = 1;
+    return;
+  }
+  DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-e2e-'));
   let failures = 0;
   const check = (name, cond) => {
     console.log(`${cond ? '✔' : '✗'} ${name}`);
@@ -33,13 +60,11 @@ async function main() {
   };
 
   const server = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, PORT: String(PORT), NO_OPEN: '1', LOG_LEVEL: 'debug' },
+    env: { ...process.env, PORT: String(PORT), NO_OPEN: '1', LOG_LEVEL: 'debug', WW_DATA_DIR: DATA_DIR },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', () => {});
   server.stderr.on('data', (d) => process.stderr.write('[server] ' + d));
-  // 备份用户配置，e2e 结束后恢复（避免覆盖真实 apiKey/baseUrl）
-  const configBackup = fs.existsSync(CONFIG_FILE) ? fs.readFileSync(CONFIG_FILE, 'utf8') : null;
 
   try {
     // 等服务就绪
@@ -187,13 +212,24 @@ async function main() {
 
     console.log(failures ? `\n✗ ${failures} 项未通过` : '\n全部端到端检查通过 ✓');
   } finally {
-    if (configBackup !== null) fs.writeFileSync(CONFIG_FILE, configBackup);
-    else if (fs.existsSync(CONFIG_FILE)) fs.unlinkSync(CONFIG_FILE);
-    server.kill();
-    await sleep(300);
+    // 必须**等子进程真的退出**再返回：server.js 收到 SIGTERM 后还要落盘活动对局
+    // （server.js:80-83 的总闸是 4s），只 sleep(300) 就 process.exit 会留下一个仍在
+    // 监听 3997 的孤儿服务端 —— 下一次 e2e 起不来，表现为最前面三条一起红
+    //（服务启动 / 静态页面 / APP 端页面）。这正是本脚本此前"时绿时红"的根因。
+    await new Promise((resolve) => {
+      if (server.exitCode !== null || server.signalCode) return resolve();
+      server.once('exit', resolve);
+      server.kill();
+      const t = setTimeout(resolve, 8000); // 兜底：绝不让脚本挂死（真挂死也要能失败退出）
+      if (t.unref) t.unref(); // 子进程已退出时别让这个定时器把进程多留 8 秒
+    });
+    try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch (_) { /* 清不掉不致命，且 tmp:residue 会看得见 */ }
   }
   console.log(failures ? `✗ ${failures} 项未通过` : '（检查已在上方逐项列出）');
-  process.exit(failures ? 1 : 0);
+  // 刻意不用 process.exit()：Node 24 在 Windows 上若在子进程 stdio 句柄尚未关闭时强退，
+  // libuv 会断言失败（实测崩溃码 0xC0000409，现场 src\win\async.c line 76）。设 exitCode
+  // 让进程在所有句柄释放后自然退出，失败信号一样清晰（退出码仍是 1）。
+  process.exitCode = failures ? 1 : 0;
 }
 
-main().catch((e) => { console.error('e2e 异常：', e); process.exit(1); });
+main().catch((e) => { console.error('e2e 异常：', e); process.exitCode = 1; });
