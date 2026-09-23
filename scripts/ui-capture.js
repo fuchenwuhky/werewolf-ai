@@ -89,6 +89,12 @@ const PREFIX = [
   ['13e-', { route: '/m/', page: 'mobile-annotation-cleared' }],
   ['20a-', { route: '/m/', page: 'mobile-avatar-crop' }],
   ['20b-', { route: '/m/', page: 'mobile-avatar-after-delete' }],
+  // D 批（M4 局中精修）出图点：跨宽度切换（1024 宽屏档 / 960 抽屉档）与长内容（长笔记）。
+  // 全部 route 都是对局屏（就是根路由里的 #screen-game），页面名写清是哪一种宽度与形态。
+  ['M4-1024x900-', { route: '/', page: 'desktop-game-wide-3col' }],
+  ['M4-960x900-midgame-drawer-open', { route: '/', page: 'desktop-game-960-drawer-open' }],
+  ['M4-960x900-', { route: '/', page: 'desktop-game-960-drawer' }],
+  ['M4-long-', { route: '/', page: 'desktop-game-long-note' }],
 ];
 const metaOf = (f) => { const hit = PREFIX.find(([p]) => f.startsWith(p)); return hit ? hit[1] : {}; };
 
