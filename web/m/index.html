@@ -101,13 +101,6 @@
       <p class="hint m-home-note">API / 模型配置在「<span data-ww-icon="settings">设置</span>」里（安装级，此设备共享）。</p>
     </div>
 
-    <!-- 底部主入口（FIN-04 §8.1：至多四个；局中由 #m-tabs 接管导航，两套底栏不同屏叠加） -->
-    <nav class="m-tabbar" id="m-tabbar" aria-label="主页导航">
-      <button class="m-tab-btn active" id="m-tab-start" data-ww-icon="start" type="button">开始</button>
-      <button class="m-tab-btn" id="m-tab-game" data-ww-icon="game" type="button">对局</button>
-      <button class="m-tab-btn" id="m-tab-codex" data-ww-icon="codex" type="button">资料</button>
-      <button class="m-tab-btn" id="m-tab-me" type="button">👤 我的</button>
-    </nav>
   </section>
 
   <!-- 屏2：角色图鉴（渲染在共享模块 ../codex.js 里，与桌面版同一份逻辑）
@@ -174,6 +167,19 @@
         <h3 class="m-h3" data-i18n="m.pc.data">数据管理</h3>
         <div id="m-pc-data"></div>
       </section>
+    </div>
+  </section>
+
+  <!-- 屏2c：我的对局（M3 第一批 C1b）——「对局」从"点一下弹底部弹层"升级为**独立页面**，
+       与其余屏同级、由 showScreen 整屏显隐；列表内容由 m.js 的 openMyGamesPage() 填进 #m-games-list。
+       行构建与旧的弹层（showMyGamesSheet）**共用同一个函数**（buildMyGamesRows），不各写一份。 -->
+  <section id="m-games" class="m-screen hidden">
+    <header class="m-head">
+      <button class="btn small" id="m-games-back" data-ww-icon="back" data-i18n-title="m.back" title="返回"></button>
+      <h2>我的对局</h2>
+    </header>
+    <div class="m-scroll">
+      <div id="m-games-list"></div>
     </div>
   </section>
 
@@ -258,6 +264,19 @@
       </div>
     </footer>
   </section>
+
+  <!-- 底部主入口（FIN-04 §8.1：至多四个）——**在全部屏之外**，#m-app 的直接子元素。
+       M3 第一批（C1b）之前它长在 #m-boards 内部，于是切到别的屏时整条底栏随父一起被 display:none，
+      "资料/我的"页上看不到也用不了主入口。现在由 showScreen → syncTabbar() 同步显隐：
+        · m-boards / m-games / m-codex / m-player 四屏可见（选中态随屏切换）；
+        · m-rules（向导第 2 步，专注模式）与 m-game（局内有自己的顶栏 + 页签）隐藏，两套导航不叠加。
+       它在本屏之后 = flex 列的最后一项，靠 .m-tabbar 的 flex:none 贴底，不覆盖任何滚动内容。 -->
+  <nav class="m-tabbar" id="m-tabbar" aria-label="主页导航">
+    <button class="m-tab-btn active" id="m-tab-start" data-ww-icon="start" type="button">开始</button>
+    <button class="m-tab-btn" id="m-tab-game" data-ww-icon="game" type="button">对局</button>
+    <button class="m-tab-btn" id="m-tab-codex" data-ww-icon="codex" type="button">资料</button>
+    <button class="m-tab-btn" id="m-tab-me" type="button">👤 我的</button>
+  </nav>
 </div>
 
 <div id="m-modal"></div>
@@ -298,6 +317,7 @@
 <script src="../shared/request-guard.js"></script>
 <script src="../shared/switch-guard.js"></script>
 <script src="../shared/draft-store.js"></script>
+<script src="../shared/setup-wizard.js"></script>
 <script src="../shared/stats-bucket.js"></script>
   <script src="../shared/export-status.js"></script>
 <script src="m.js"></script>

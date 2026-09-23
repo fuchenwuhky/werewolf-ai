@@ -99,9 +99,11 @@ test('手机端「我的」是**独立页面**：与 #m-boards/#m-codex/#m-rules
     assert.ok(screens.includes(id), `#${id} 不再是 section.m-screen 之一（实际：${screens.join('、')}）`);
   }
   // 顺序：玩家中心紧跟在图鉴之后（规则确认之前），并且与图鉴同为"从首页推开的一屏"
+  // 契约变更（M3 第一批 C1b）：**M3 把「对局」升级为独立页** #m-games，插在玩家中心之后、
+  // 规则确认之前 —— 屏清单多了这一屏是**有意的结构变更**，不是放宽判据（新屏同样按 id 逐字钉住）。
   assert.deepStrictEqual(
-    screens, ['m-boards', 'm-codex', 'm-player', 'm-rules', 'm-game'],
-    `五屏的顺序变了（会把"返回"和 showScreen 的语义一起带偏）：${screens.join(' → ')}`
+    screens, ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
+    `屏的顺序变了（会把"返回"和 showScreen 的语义一起带偏）：${screens.join(' → ')}`
   );
   const el = elementById(html, 'm-player');
   assert.ok(el && el.tag === 'section', '#m-player 不是一个 <section>（独立页面不能退回 <div> 或弹层）');
@@ -112,8 +114,9 @@ test('手机端「我的」是**独立页面**：与 #m-boards/#m-codex/#m-rules
   const list = /\[([^\]]*'m-boards'[^\]]*)\]\.forEach\(\(s\) => \$\('#' \+ s\)\.classList\.toggle\('hidden', s !== id\)\)/.exec(mjs);
   assert.ok(list, 'm.js 的 showScreen 显隐清单写法变了，这条守卫需要同步');
   const ids = [...list[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
-  assert.deepStrictEqual(ids, ['m-boards', 'm-codex', 'm-player', 'm-rules', 'm-game'],
-    `showScreen 的屏清单与页面里的五屏不一致：${ids.join(' → ')}`);
+  // 契约变更（M3 第一批 C1b）：**M3 把「对局」升级为独立页**，屏清单加 'm-games'（见 test/m3-mobile-nav.test.js）
+  assert.deepStrictEqual(ids, ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
+    `showScreen 的屏清单与页面里的屏不一致：${ids.join(' → ')}`);
 });
 
 test('「我的」页签：点它是进独立页面（退回"只开弹层"即判红）', () => {

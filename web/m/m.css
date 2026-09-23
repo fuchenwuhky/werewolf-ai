@@ -672,8 +672,10 @@ html, body { height: 100%; overscroll-behavior: none; }
          → 第一步选板子 → 次级入口 → 底部主入口（≤4 个）。
    局中：顶栏（小狼冠 + 阶段）→ 局内页签（发言 | 玩家 | 笔记）
          → 全宽主体 → 底部行动区（任务 → 已选目标 → 确认）。
-   两套导航条分属不同屏（#m-tabbar 只在首页、#m-tabs 只在对局屏），
-   不会叠加挤占行动区。
+   两套导航条分属不同屏（#m-tabbar 只在四个主入口页、#m-tabs 只在对局屏），
+   不会叠加挤占行动区。M3 第一批（C1b）：#m-tabbar 从"长在 #m-boards 内部"改成
+   **全部屏的兄弟节点**（#m-app 的直接子元素），于是切到"资料/我的/对局"时它不再随父隐藏，
+   由 m.js 的 showScreen → syncTabbar() 按屏显隐与切换选中态。
    ============================================================ */
 
 /* ---------- 首页品牌区（FIN-08：狼冠 60-90px 主标识 + 清晰应用名，去 🦇） ---------- */
@@ -748,7 +750,11 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-more-row .btn { min-height: var(--hctl-m); }
 .m-home-note { margin: 0; }
 
-/* 首页底部主入口（≤4：开始 / 对局 / 资料 / 我的） */
+/* 底部主入口（≤4：开始 / 对局 / 资料 / 我的）——**四屏共用、贴底固定**。
+   M3 第一批（C1b）：它是 #m-app 这个 flex 列的最后一项（排在全部 section.m-screen 之后），
+   靠 flex:none 固定贴底；**不是 overlay**，所以下面的每个滚动容器（.m-home-scroll / .m-scroll）
+   都不需要为它留出底部 padding —— 内容永远不会被它压住。
+   显隐由 m.js 的 showScreen → syncTabbar() 同步（进 m-rules / m-game 时加 .hidden）。 */
 .m-tabbar {
   flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px;
   padding: var(--sp-2) var(--sp-3) calc(env(safe-area-inset-bottom, 0px) + var(--sp-2));

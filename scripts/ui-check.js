@@ -880,13 +880,24 @@ class Browser {
         return el ? { text: el.textContent, checked: el.getAttribute('aria-checked'), realChecked: real?.getAttribute('aria-checked'), realText: real?.textContent, height: el.getBoundingClientRect().height } : null;
       })()`);
       check('手机端板子页有可见的试玩开关', !!mock, mock ? mock.text : 'NOT_FOUND');
-      check('模式卡默认选中真实对局且说明按量计费，试玩标签保持独立', !!(mock && mock.realChecked === 'true' && mock.checked === 'false' && /按用量计费/.test(mock.realText) && /试玩/.test(mock.text) && mock.height >= 48), JSON.stringify(mock));
+      // 契约变更（M3 第一批 C1b / 计划书 §8.2）：**新草稿默认试玩**（不调用 API、不花钱）。
+      // 本行原断言是「模式卡默认选中真实对局」——那是"默认真实"的旧口径，与 §8.2 直接冲突；
+      // 旧断言的**意图保留并加强**：仍要求两张卡互斥、说明文案各自正确、触区 ≥48px，
+      // 只是把"默认落在哪一侧"改成有意的**契约升级**（不是为了让测试变绿而放宽）。
+      check('模式卡默认选中试玩（§8.2：新草稿默认试玩）且说明按量计费，试玩标签保持独立',
+        !!(mock && mock.checked === 'true' && mock.realChecked === 'false' && /按用量计费/.test(mock.realText) && /试玩/.test(mock.text) && mock.height >= 48), JSON.stringify(mock));
+      // 再点一次「真实对局」：只剩真实卡选中（互斥仍成立），随后点回试玩卡复原默认
+      await b.realClick('#m-real-btn');
+      await waitExpr('手机端：点击真实卡后仅真实卡被选中（aria-checked 已翻转）',
+        `document.getElementById('m-real-btn').getAttribute('aria-checked') === 'true' && document.getElementById('m-mock-btn').getAttribute('aria-checked') === 'false'`, { timeout: 2500 });
+      const afterReal = await b.eval(`({mock:document.getElementById('m-mock-btn').getAttribute('aria-checked'),real:document.getElementById('m-real-btn').getAttribute('aria-checked')})`);
+      check('点击真实卡后仅真实卡被选中', afterReal.mock === 'false' && afterReal.real === 'true', JSON.stringify(afterReal));
       await b.realClick('#m-mock-btn');
       // FIX-18：原来是固定 sleep(400)，改成等到选中态真的翻转
       await waitExpr('手机端：点击后仅试玩卡被选中（aria-checked 已翻转）',
         `document.getElementById('m-mock-btn').getAttribute('aria-checked') === 'true' && document.getElementById('m-real-btn').getAttribute('aria-checked') === 'false'`, { timeout: 2500 });
       const after = await b.eval(`({mock:document.getElementById('m-mock-btn').getAttribute('aria-checked'),real:document.getElementById('m-real-btn').getAttribute('aria-checked')})`);
-      check('点击后仅试玩卡被选中', after.mock === 'true' && after.real === 'false', JSON.stringify(after));
+      check('点击试玩卡后仅试玩卡被选中（回到默认）', after.mock === 'true' && after.real === 'false', JSON.stringify(after));
       await b.goto(base + '/', 1500); // 回到桌面端，后续图鉴/对局断言都在桌面端进行
       await waitExpr('回到桌面端：图鉴入口已就绪', `!!document.getElementById('btn-codex')`, { timeout: 6000 });
     }

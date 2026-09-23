@@ -109,11 +109,17 @@ const REQUIRED_LITERALS = [
   //   引用、request-guard/prefs-queue 工厂、归档阻止、笔记草稿钩子），字面量逐字未动、整文件仍命中 1 次。
   //   施工中途我曾写过"m.js 的 1709 未漂、无需动"——那句是**错的**（当时还没改 m.js，改完就漂了）；
   //   现按事实改为 1788。锚点一条一条在目标文件的 ±25 窗口内逐字核过，不是只看数字。
+  // ⚠ M3 第一批（C1b）再锚一次（**只动锚点行号，字面量与 window 一字未改**）：
+  //   ① web/m/index.html：底栏 #m-tabbar 从 #m-boards **内部**移到全部屏之外（#m-app 的直接子元素，
+  //      排在最后一个 section.m-screen 之后），「👤 我的」页签随底栏从 109 搬到 278 ——
+  //      这是**产品导航的位置变更**，不是"字形被搬走/被删"；字面量在整文件仍恰好命中 1 次。
+  //   ② web/m/m.js：本批新增了「我的对局」独立页的共用取数/行构建/切屏函数与底栏同步（+约 60 行），
+  //      档案弹层标题跟着下移 1788→1848；字面量仍在，整文件恰好命中 1 次。
   { file: 'web/app.js', line: 1361, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
   { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
   { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
-  { file: 'web/m/index.html', line: 109, window: 25, literal: '👤 我的', note: '手机端"我的"页签' },
-  { file: 'web/m/m.js', line: 1788, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题' },
+  { file: 'web/m/index.html', line: 278, window: 25, literal: '👤 我的', note: '手机端"我的"页签（M3 C1b：随底栏移到全部屏之后，109→278）' },
+  { file: 'web/m/m.js', line: 1848, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题（M3 C1b：新增对局页代码后下移，1788→1848）' },
 ];
 
 test('非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {

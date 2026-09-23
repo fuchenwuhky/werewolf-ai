@@ -21,6 +21,10 @@ const state = {
   boardId: 'adv12', boardCounts: null,
   rules: null, mode: 'play',
   game: null, playerAfter: 0, pollTimer: null,
+  // 计划书 §8.2：**新草稿默认试玩**（不调用 API、不花钱）。这里必须给显式初值 ——
+  // 原来 state 字面量里没有 mock，初值是 undefined ⇒ syncMockBtn() 把「真实对局」卡置为选中，
+  // 与静态 HTML 上「免费试玩」卡的 sel/aria-checked="true" 正好相反，等于运行期默认落在了会扣费的一侧。
+  mock: true,
   // SSE 推送（P2-2）：连接 + 看门狗时间戳（断流即回退轮询）
   stream: null, streamWatchdog: null, lastStreamAt: 0,
   roleShown: false, seatNames: {}, tags: {}, lastNightStep: null,
@@ -94,7 +98,7 @@ function hasUnsavedDraft() {
 // push 一条 history state（{mww: 深度}），返回时按深度逐层关，**一次返回只关一层**，
 // 不出现"既关编辑又退局"。game 是栈底哨兵：返回到它时先回到发言页签、再弹离局确认，
 // 确认前把 state 推回去（不真正离局）。
-const backStack = []; // [{kind:'game'|'modal'|'sheet'|'inspect'|'flip'|'screen-codex'|'screen-rules', closeDom, veto}]
+const backStack = []; // [{kind:'game'|'modal'|'sheet'|'inspect'|'flip'|'screen-codex'|'screen-games'|'screen-player'|'screen-rules', closeDom, veto}]
 let overlayReplaceNext = false; // 置位后下一次 track() 顶层换内容不加深（弹窗换弹窗/弹窗换弹层）
 
 function overlayAlive(kind) {
@@ -103,6 +107,7 @@ function overlayAlive(kind) {
   if (kind === 'inspect') return !!document.querySelector('.inspect-stage');
   if (kind === 'flip') return !$('#m-flip').classList.contains('hidden');
   if (kind === 'screen-codex') return !$('#m-codex').classList.contains('hidden');
+  if (kind === 'screen-games') return !$('#m-games').classList.contains('hidden');
   if (kind === 'screen-rules') return !$('#m-rules').classList.contains('hidden');
   return true;
 }
@@ -195,49 +200,81 @@ async function resumeFromRow(r, btn) {
   }
 }
 
-/** AC-11：我的对局列表（当前档案）——可恢复局置顶可继续，已结束局只读展示 */
-async function showMyGamesSheet() {
-  if (!state.profileId) { flash('尚未选择档案', ''); return; }
-  let rows = [];
+/** AC-11：当前档案的对局行取数 —— 「我的对局」弹层与独立页（#m-games）**共用这一份**。
+ *  返回 null = 没取到（已经 flash 过原因），调用方直接收工。 */
+async function loadMyGamesRows() {
+  if (!state.profileId) { flash('尚未选择档案', ''); return null; }
   try {
     const r = await api('GET', `/api/profiles/${state.profileId}/games`);
-    rows = r.rows || [];
-  } catch (e) { flash(`对局列表加载失败：${e.message}`); return; }
+    return r.rows || [];
+  } catch (e) { flash(`对局列表加载失败：${e.message}`); return null; }
+}
+
+/** AC-11：把对局行画进给定容器（可恢复局置顶可继续，已结束局只读展示）。
+ *  弹层（showMyGamesSheet）与独立页（openMyGamesPage）**共用这一份** ——
+ *  两处各写一遍必然漂移（其中一处迟早会漏掉句柄落盘或 mock 标记）。 */
+function buildMyGamesRows(rows, body) {
+  if (!rows.length) { body.appendChild(el('p', 'hint', '当前档案还没有对局。回「开始」页开一局吧。')); return; }
+  const unfinished = rows.filter((r) => window.SessionModel.canResume(r));
+  const finished = rows.filter((r) => r.finished).slice(0, 20);
+  for (const r of unfinished) {
+    const row = el('div', 'pm-row current');
+    const main = el('div', 'pm-main');
+    main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${r.id}`));
+    main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.phase || ''} · 进行中`));
+    row.appendChild(main);
+    const ops = el('div', 'pm-ops');
+    const go = el('button', 'btn small', '继续');
+    go.addEventListener('click', () => resumeFromRow(r, go));
+    ops.appendChild(go);
+    row.appendChild(ops);
+    body.appendChild(row);
+  }
+  for (const r of finished) {
+    const row = el('div', 'pm-row');
+    const main = el('div', 'pm-main');
+    main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${winnerText(r.winner)}`));
+    main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.savedAt ? new Date(r.savedAt).toLocaleString() : ''}`));
+    row.appendChild(main);
+    body.appendChild(row);
+  }
+}
+
+/** AC-11：我的对局（当前档案）——底部弹层版；行构建复用 buildMyGamesRows（与独立页同一份） */
+async function showMyGamesSheet() {
+  const rows = await loadMyGamesRows();
+  if (!rows) return;
   const wrap = el('div');
   wrap.appendChild(el('h3', 'mtitle', icoLabel('game', '我的对局')));
   const body = el('div', 'mbody');
-  if (!rows.length) { body.appendChild(el('p', 'hint', '当前档案还没有对局。回「开始」页开一局吧。')); }
-  else {
-    const unfinished = rows.filter((r) => window.SessionModel.canResume(r));
-    const finished = rows.filter((r) => r.finished).slice(0, 20);
-    for (const r of unfinished) {
-      const row = el('div', 'pm-row current');
-      const main = el('div', 'pm-main');
-      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${r.id}`));
-      main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.phase || ''} · 进行中`));
-      row.appendChild(main);
-      const ops = el('div', 'pm-ops');
-      const go = el('button', 'btn small', '继续');
-      go.addEventListener('click', () => resumeFromRow(r, go));
-      ops.appendChild(go);
-      row.appendChild(ops);
-      body.appendChild(row);
-    }
-    for (const r of finished) {
-      const row = el('div', 'pm-row');
-      const main = el('div', 'pm-main');
-      main.appendChild(elText('div', 'pm-name', `${r.mock ? '🧪' : '💳'} ${winnerText(r.winner)}`));
-      main.appendChild(el('div', 'hint', `第 ${r.day || 0} 天 · ${r.savedAt ? new Date(r.savedAt).toLocaleString() : ''}`));
-      row.appendChild(main);
-      body.appendChild(row);
-    }
-  }
+  buildMyGamesRows(rows, body);
   const close = el('button', 'btn ghost', '关闭');
   close.addEventListener('click', closeModalTop);
   body.appendChild(close);
   wrap.appendChild(body);
   openModal(wrap);
 }
+
+/** M3 第一批（C1b）：「对局」= **独立页面** #m-games（与 #m-boards/#m-codex/#m-player 同级），
+ *  不再是"点一下弹底部弹层"。返回语义与 closePlayerCenterDom 同一套：从哪一屏进来就回哪一屏。 */
+async function openMyGamesPage() {
+  state.gamesFrom = ['m-boards', 'm-player', 'm-codex', 'm-rules', 'm-game']
+    .find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  showScreen('m-games');
+  trackOverlay('screen-games', closeMyGamesDom);
+  const box = $('#m-games-list');
+  if (!box) return;
+  box.innerHTML = '';
+  box.appendChild(el('p', 'hint', '加载中…'));
+  const rows = await loadMyGamesRows();
+  // 迟到的响应不得覆盖"已经离开的页面"（与玩家中心各组同一套取舍）
+  if ($('#m-games').classList.contains('hidden')) return;
+  box.innerHTML = '';
+  if (!rows) { box.appendChild(el('p', 'hint', '对局列表加载失败，请稍后重试。')); return; }
+  buildMyGamesRows(rows, box);
+}
+
+function closeMyGamesDom() { showScreen(state.gamesFrom || 'm-boards'); }
 
 /** 关掉当前最上层的"非 game"层。返回是否真的关掉了一层。
  *  veto 未通过（有未保存草稿）时"不关"，但返回 true —— 因为 veto 自己会弹出确认框，
@@ -465,13 +502,10 @@ async function init() {
   });
   $('#m-profile-chip').addEventListener('click', openProfileManager);
   $('#m-resume-go').addEventListener('click', resumeGame);
-  $('#m-tab-start').addEventListener('click', () => {
-    $('.m-home-scroll') && $('.m-home-scroll').scrollTo({ top: 0, behavior: 'smooth' });
-  });
-  $('#m-tab-game').addEventListener('click', async () => {
-    await showMyGamesSheet(); // AC-11：按档案列出可恢复/已结束对局，而非一句提示
-  });
+  $('#m-tab-start').addEventListener('click', () => showScreen('m-boards'));
+  $('#m-tab-game').addEventListener('click', openMyGamesPage); // M3 C1b：「对局」= 独立页（原来只弹底部弹层）
   $('#m-tab-codex').addEventListener('click', () => openCodex());
+  $('#m-games-back').addEventListener('click', () => { if (!dismissTop()) closeMyGamesDom(); });
   // 「我的」= 独立页面（计划书 §5），不再只打开档案管理弹层；弹层仍是子流程（列表/编辑/回收站）
   $('#m-tab-me').addEventListener('click', openPlayerCenter);
   // ---- FIN-06 局内页签 ----
@@ -1033,7 +1067,7 @@ function wireSettings() {
 // ---------------- 屏2：角色图鉴 ----------------
 /** 挂载共享图鉴（web/codex.js）。手机端用 sheet 模式：点牌不挤右侧栏，而是弹层看细节。 */
 function openCodex(replace) {
-  state.codexFrom = ['m-boards', 'm-rules', 'm-game'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  state.codexFrom = ['m-boards', 'm-rules', 'm-game', 'm-games', 'm-player'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
   showScreen('m-codex');
   // 进入返回栈：从齿轮/设置弹窗里进来时替换那一层（replace），返回键不空关一层
   if (replace) overlayReplaceNext = true;
@@ -1063,7 +1097,7 @@ function closeCodexDom() { showScreen(state.codexFrom || 'm-boards'); }
  */
 function openPlayerCenter() {
   // 从哪一屏进来，返回就回哪一屏（与 #m-codex 的 codexFrom 同一套做法）
-  state.playerFrom = ['m-boards', 'm-rules', 'm-game', 'm-codex'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  state.playerFrom = ['m-boards', 'm-rules', 'm-game', 'm-codex', 'm-games'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
   showScreen('m-player');
   trackOverlay('screen-player', closePlayerCenterDom);
   renderPlayerCenter();
@@ -1383,9 +1417,33 @@ function showCodexDetail(rid) {
 }
 
 // ---------------- 屏3：规则确认 ----------------
+/**
+ * 底部主入口（#m-tabbar）的「屏 → 页签」对应表：**只有这四个主入口页显示底栏**。
+ * m-rules（向导第 2 步，专注模式）与 m-game（局内有自己的顶栏 + 局内页签）不在表里 ⇒ 底栏隐藏，
+ * 两套导航条不同屏叠加（FIN-04 §8.1 / FIN-06）。
+ * ⚠ 底栏现在是**所有屏的兄弟节点**（#m-app 的直接子元素，见 index.html），不在任何一个屏内部 ——
+ * 它的显隐必须由 syncTabbar() 显式开关，不能靠父节点连坐。
+ */
+const TAB_OF_SCREEN = { 'm-boards': 'm-tab-start', 'm-games': 'm-tab-game', 'm-codex': 'm-tab-codex', 'm-player': 'm-tab-me' };
+const TAB_BTN_IDS = ['m-tab-start', 'm-tab-game', 'm-tab-codex', 'm-tab-me'];
+
+/** 切屏时同步底栏：显隐 + 选中态（唯一入口，见 showScreen） */
+function syncTabbar(id) {
+  const bar = $('#m-tabbar');
+  if (!bar) return;
+  const active = TAB_OF_SCREEN[id] || null;
+  bar.classList.toggle('hidden', !active);
+  for (const bid of TAB_BTN_IDS) {
+    const b = $('#' + bid);
+    if (b) b.classList.toggle('active', bid === active);
+  }
+}
+
 function showScreen(id) {
-  // 'm-player'（屏2b 玩家中心）与其余四屏同级：切换即整屏显隐，与 #m-codex 同一套做法
-  ['m-boards', 'm-codex', 'm-player', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  // 'm-player'（屏2b 玩家中心）与 'm-games'（屏2c 我的对局）也在这个清单里：切换即整屏显隐，
+  // 与 #m-codex 同一套做法（这是**唯一**的屏清单，任何新屏都要加进来）
+  ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  syncTabbar(id);
 }
 
 function gotoRules() {
