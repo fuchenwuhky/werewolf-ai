@@ -95,6 +95,8 @@
 ### 2.2 导入半程：**成立**（设备上真 SAF 选择器 + 真归档）
 
 - 设备上出现**系统文档选择器**（Android DocumentsUI），并浏览到「下载」目录看到导出的包：截图 `logs/android-native/12-picker-downloads.png`（我直接看过：标题「下载」，条目 `ww-profile-rou…` `36.28 kB` `下午9:21`）。
+  **出处区分**：选择器本身有我的截图物证；但 `com.android.documentsui/picker.PickActivity` 这个包名/Activity 名是 **Android 路报告的转述**——磁盘上**没有**落盘的 dump 记录了该包名（`ui-x.xml` 里只有 `package="com.werewolfai.app"`）。
+- 另一条旁证（`ui-x.xml`）：导入之后应用内「当前档案」仍是**原始** `默认玩家`「创建于 2026-09-19」、「试玩 5 · 存档合计 5」⇒ 与 `state-after-import.json` 一致，导入没有改动原档案。
 - 预览框原文（`uiautomator dump`）：`logs/android-native/ui-dialog.xml`、`ui-p3.xml`：
   「导入预览（尚未写入任何数据）：档案：默认玩家 已结束对局：1 局（ID 会重新生成，不覆盖现有对局）笔记：0 份 包大小：35.4 KB 进行中的对局不会包含在包内。确认导入？」
 - 点 OK 后的完成提示（截图 `logs/android-native/15-after-import-ok.png`，我直接看过）：
