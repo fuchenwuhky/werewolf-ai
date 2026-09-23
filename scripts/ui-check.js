@@ -2530,7 +2530,11 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       // 而 R04/R05 两段是桌面段（1440×900）—— 段序一变，这里就会点不到 #m-profile-chip
       //（实测：正是这一处超时，并伴随一次页面未捕获异常把整轮打断）。自洽，不依赖段序。
       await b.setViewport(390, 844, true);
-      await b.goto(base + '/', 2200);
+      // 视口是手机端，页面也必须是手机端：原来这里是 goto(base + '/')，加载的是**桌面页**，
+      // 而紧接着就按手机专属 id（#m-profile-chip / #m-pm-trash-entry / #m-profile-nick）判定 ——
+      // 桌面页三者皆无 ⇒ 该段必然超时，并抛未捕获异常把整轮打断（其后 13 段连带未执行）。
+      // 只设视口不换页面是不会自动跳 /m/ 的（app.js 里唯一跳 /m/ 的是齿轮菜单那一项）。
+      await b.goto(base + '/m/', 2200);
       const FP = `(() => {
         const c = document.getElementById('av-crop-stage');
         if (!c) return { ok: false, why: 'no-stage' };
