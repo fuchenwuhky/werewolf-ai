@@ -572,6 +572,10 @@ function renderSetupDigest() {
     mock ? `<li>${T('digest.mock')}</li>` : `<li>${T('digest.model', { m: escapeHtml(model.replace(/^.*\//, '')) })}</li>`,
   ];
   if (paceTxt) facts.push(`<li>${T('digest.pace', { p: escapeHtml(paceTxt) })}</li>`);
+  // 本局归属档案（M3 §8.2 :247「当前档案」是第一屏四件事之一）：上方档案卡说的是"现在选中的是谁"，
+  // 这里说的是"这一局会归到谁名下" —— 两句话不同，不是把同一份内容渲染两遍。
+  const profile = (state.profiles || []).find((p) => p.id === state.profileId);
+  if (profile) facts.push(`<li>本局归属 👤 ${escapeHtml(profile.nickname)}</li>`);
   const box = $('#hero-facts');
   if (box) box.innerHTML = facts.join('');
   // 真实模式缺 Key 的显式警示（不阻止浏览，但按下开始时会被拦截并引导 —— 见 startGame）
