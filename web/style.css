@@ -1437,9 +1437,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   #screen-game.notes-collapsed .game-layout,
   #screen-game.has-coach .game-layout { grid-template-columns: minmax(0, 1fr); }
   /* ≤960 时玩家区已是脱离文档流的抽屉 ⇒ 不能再留 240px 的空列（否则左侧空一条带）。
-     收成单列，让发言区回到第 1 列；复盘面板同样归第 1 列。 */
+     收成单列，让发言区回到第 1 列。复盘面板在本断点块下方已有 grid-column: 1，不再重复写
+     （同一上下文重复定义同一属性会被 test/css.test.js 判红 —— 我第一版就因此红过一次）。 */
   .stream-wrap { grid-column: 1; }
-  #screen-game.has-coach .coach-panel { grid-column: 1; }
   /* guidance §3.3 :156：低于 960px 时"玩家和笔记"都改抽屉（不是只在 900px 把三栏堆成超长页）。
      玩家区脱离文档流，默认停在屏幕左侧之外，由顶栏开合控件加 .seats-open 才滑入；
      ≥961px 时不命中本断点，.left-col 仍是常驻左栏，行为不变。 */
