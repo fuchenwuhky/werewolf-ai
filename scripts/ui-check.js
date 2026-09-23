@@ -775,6 +775,10 @@ class Browser {
     // 换选择器治不了（诊断已确认当时 screen=screen-game、隐藏祖先是 #screen-setup 本身）。
     // 元素出处：首屏 #home-hero 内的 #home-profile / #home-avatar / #home-nick（web/index.html:107/111/112/114）。
     {
+      // 这里原本缺一句视口设置：注释、下面四条判据名、以及截图文件名都自称"1440×900"，
+      // 但代码从未把视口设成 1440×900，拍的是默认窗口（实测 1418x802 = 1440-22 / 900-98，即减掉滚动条与边距），
+      // 于是落盘核对脚本按"声明必须等于实测"把它判为不合规。补上显式视口，让名字、判据、实测三者真正一致。
+      await b.setViewport(1440, 900, false);
       await waitExpr('第 83 行 1440×900：桌面端首屏当前档案卡已渲染（截图前置条件）', `(() => { const s = document.getElementById('screen-setup'); const p = document.getElementById('home-profile'); const a = document.getElementById('home-avatar'); const rp = p ? p.getBoundingClientRect() : null; const ra = a ? a.getBoundingClientRect() : null; return { ok: !!s && !s.classList.contains('hidden') && !!rp && rp.width > 100 && rp.height > 20 && !!ra && ra.width > 0, profileW: rp ? Math.round(rp.width) : -1, profileH: rp ? Math.round(rp.height) : -1, avatarW: ra ? Math.round(ra.width) : -1 }; })()`, { timeout: 8000, interval: 100 });
       const dProf = await b.probe('#home-profile');
       checkGeometry('第 83 行 1440×900：桌面端玩家中心（当前档案卡 #home-profile）可见、非零尺寸', dProf, { minW: 100, minH: 20, requireCenter: false, requireHitSelf: false });
