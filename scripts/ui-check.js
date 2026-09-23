@@ -1499,7 +1499,7 @@ class Browser {
 
       // ---- 11) 服务端证据：取回来的 PNG 必须恰好 512×512、8-bit、RGB/RGBA ----
       const ihdr = await b.eval(`(async () => {
-        const src = document.querySelector('#home-avatar img.ww-avatar-img').getAttribute('src');
+        const src = document.querySelector('#home-avatar img.ww-avatar-img')?.getAttribute('src') ?? null;
         const r = await fetch(src);
         const buf = new Uint8Array(await r.arrayBuffer());
         const be = (o) => (buf[o] << 24) | (buf[o + 1] << 16) | (buf[o + 2] << 8) | buf[o + 3];
