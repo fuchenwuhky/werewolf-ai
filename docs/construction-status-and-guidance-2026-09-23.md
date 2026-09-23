@@ -44,6 +44,16 @@
 
 ## 2. 立即返修清单
 
+> **状态更正（2026-09-23 复核）**：本节 R01–R07 **七条均已实现并提交**（批次 A `2c85c90`、批次 B `698e249`、B2 `49b6049`），下面每条引用的行号已不再指向所述代码。逐条对照见台账 §16.36；以下原文保留，以便追溯当时的判断依据。
+>
+> - **R01**：两端已接线 —— `web/app.js:4643 freezePending` / `:4657 submitHumanAction`、`web/m/m.js:3932` / `:3942`；`PENDING_ID_REQUIRED` 实际在 `src/api.js:1833`（本节写的 1804 起已过时）。真人双端联调那一项仍单列为未做。
+> - **R02**：`src/api.js:2297` 已改为**原样保留昵称**（不再无条件拼「（导入）」）；`test/r02-r06-nickname-contract.test.js` 在。
+> - **R03 / R07**：已修（`698e249`）。
+> - **R04**：已加分页与「加载更多」（`web/app.js:5482+`、`web/m/m.js:4316+`），不再是固定 `limit=100`。
+> - **R05**：服务端已最终判定（`src/api.js:1991–2010`，400）；`test/m2-ab-acceptance.test.js:477` 现在**断言 400**（本节写它"断言归档必须成功"已不成立）。
+> - **R06**：`src/profiles/store.js:46/53` 已按**码点**计数；两端 `maxlength=40`（`web/index.html:231`、`web/m/index.html:199`）。
+> - **另**：§1.1 的 `npm test 1076/1076` 现为 **1147/1147**（该表基线 `9b66eb2`，其后已有 40+ 提交）；仓库根目录 APK 仍是旧版 `werewolf-ai-1.4.1-debug.apk`，1.5.2 制品在 `release/` 与 `app/android/app/build/outputs/apk/debug/`。
+
 ### R01 · P1：双端真人操作缺少 pendingId
 
 **证据：** `src/api.js:1804` 起拒绝真实 pending 中缺少 ID 的提交。桌面 `web/app.js:4377`、`:4532`、`:4548`、`:4623` 和手机 `web/m/m.js:3864` 的提交仅含 `{ token, payload }`；两个 API 包装器也未补 ID。
