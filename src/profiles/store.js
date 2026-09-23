@@ -42,17 +42,27 @@ class NotFoundError extends Error {
 function newId() { return crypto.randomUUID(); }
 function isValidId(id) { return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id); }
 
-/** 昵称：去首尾空白后 1–20 个可见字符（控制字符直接拒绝） */
+/**
+ * R06：长度一律按**码点**计（`[...s].length`），不是 UTF-16 码元数（`s.length`）。
+ *
+ * 为什么必须这样：客户端唯一真值是 `web/shared/profile-state.js` 的 NICKNAME_MAX/BIO_MAX，
+ * 那里的注释写得很清楚 —— 「长度按**码点**数：否则 `🐺` 这类代理对被算成 2，20 字上限会变 10 字」。
+ * 服务端原先用 `s.length` ⇒ 同一个昵称客户端合法、服务端 400（11 个 🐺 = 22 码元 > 20），
+ * 用户看到的是「界面允许输入、保存却报太长」。现在两端同一把尺子。
+ */
+const cpLen = (s) => [...s].length;
+
+/** 昵称：去首尾空白后 1–20 个**码点**（控制字符直接拒绝） */
 function cleanNickname(raw) {
   const s = String(raw == null ? '' : raw).trim();
   if (!s.length) throw new ValidationError('昵称不能为空');
-  if (s.length > MAX_NICKNAME) throw new ValidationError(`昵称最长 ${MAX_NICKNAME} 个字符`);
+  if (cpLen(s) > MAX_NICKNAME) throw new ValidationError(`昵称最长 ${MAX_NICKNAME} 个字符`);
   if (/[\u0000-\u001f\u007f]/.test(s)) throw new ValidationError('昵称含非法控制字符');
   return s;
 }
 function cleanBio(raw) {
   const s = String(raw == null ? '' : raw).trim();
-  if (s.length > MAX_BIO) throw new ValidationError(`简介最长 ${MAX_BIO} 个字符`);
+  if (cpLen(s) > MAX_BIO) throw new ValidationError(`简介最长 ${MAX_BIO} 个字符`); // R06：同昵称，按码点
   return s;
 }
 function cleanAvatar(raw) {
@@ -653,6 +663,6 @@ class ProfileStore {
 }
 
 module.exports = {
-  ProfileStore, ValidationError, ConflictError, NotFoundError, AVATARS, MAX_NICKNAME, MAX_BIO, SCHEMA_VERSION,
+  ProfileStore, ValidationError, ConflictError, NotFoundError, AVATARS, MAX_NICKNAME, MAX_BIO, cpLen, SCHEMA_VERSION,
   newId, isValidId, avatarUrlOf,
 };

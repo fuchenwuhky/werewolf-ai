@@ -148,10 +148,12 @@ test('导入包内 gameId 重复：必须 400 整体拒绝，不许静默覆盖�
     assert.strictEqual(fs.readdirSync(savesDir).filter((f) => f.startsWith('.import-recovery-')).length, 0, '这不是写盘故障，不该留恢复记录');
 
     const list = await callApi(api, 'GET', '/api/profiles');
+    // R02：昵称不再带「（导入）」后缀 ⇒ 按**包的原始昵称**来找"有没有先建出档案再失败"。
+    // 断言语义不变：校验发生在写盘之前，失败后不得留下任何该档案。
     assert.deepStrictEqual(
-      (list.body.profiles || []).filter((p) => p.nickname === '完整性（导入）'),
+      (list.body.profiles || []).filter((p) => p.nickname === '完整性'),
       [],
-      '校验在写盘之前 → 不得先建出「（导入）」档案再失败',
+      '校验在写盘之前 → 不得先建出该档案再失败',
     );
   } finally {
     await terminateApi(api, dataDir);

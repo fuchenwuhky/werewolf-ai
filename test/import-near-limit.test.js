@@ -120,8 +120,11 @@ test('体积恰好等于上限（MAX_BYTES）的导入包必须成功落地 —�
     assert.strictEqual(doc.game.id, res.body.gameMap['g-near'], '落盘的对局 id 必须是与预览一致的重映射结果');
     assert.strictEqual(doc.ownerProfileId, res.body.profileId, '存档必须归属新建的导入档案');
     const list = await callApi(api, 'GET', '/api/profiles');
-    const created = list.body.profiles.filter((p) => p.nickname === '近上限（导入）');
-    assert.strictEqual(created.length, 1, '导入应新建一个「近上限（导入）」档案');
+    // R02：昵称**原样保留**（不再拼「（导入）」后缀）。旧断言把旧行为写死了，这里按新契约改 ——
+    // 严格度不变：仍然要求"恰好 1 个、且 id 就是本次导入的 profileId"。
+    const created = list.body.profiles.filter((p) => p.nickname === '近上限');
+    assert.strictEqual(created.length, 1, '导入应新建一个「近上限」档案（昵称原样，不加后缀）');
+    assert.ok(!/（导入）/.test(created[0].nickname), 'R02：昵称里不得再出现「（导入）」');
     assert.strictEqual(created[0].id, res.body.profileId);
   } finally {
     await terminateApi(api, dataDir);

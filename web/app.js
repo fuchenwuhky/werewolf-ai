@@ -457,7 +457,12 @@ async function initSetup() {
     for (const ev of ['change', 'input', 'click']) setupScreen.addEventListener(ev, () => { persistSetupDraft(); });
   }
   // 用户手改过昵称后就不再用档案昵称覆盖
-  $('#my-name').addEventListener('input', () => { $('#my-name').dataset.touched = '1'; });
+  $('#my-name').addEventListener('input', () => {
+    $('#my-name').dataset.touched = '1';
+    // R06：与档案昵称同一把尺子（20 码点）。index.html 的 maxlength 只是宽松的码元上限。
+    const c = window.WWProfileState.clampProfileText($('#my-name').value, window.WWProfileState.NICKNAME_MAX);
+    if (c !== $('#my-name').value) $('#my-name').value = c;
+  });
   await loadProfiles(); // 里面会按"档案归属"恢复该档案自己的开局草稿（§8.2 :263 切档不继承）
   $('#btn-resume').addEventListener('click', resumeGame);
   await checkResume();
@@ -1783,13 +1788,24 @@ function openProfileEdit(existing, draft) {
   let removeCustom = !!d.removeCustom;
 
   const nameL = el('label', null, '<span>昵称（1–20 字）</span>');
-  const nameI = el('input'); nameI.maxLength = 20; nameI.id = 'profile-form-nick';
+  const nameI = el('input');
+    // R06：原生 maxlength 按 **UTF-16 码元**计数，直接写 20 会让 10 个 🐺 就被截断（与「20 码点」矛盾）。
+    // 原生上限放到 2×（每个码点最多 2 个码元，永不误伤合法值），真正的上限由共享模型按码点钳制。
+    const nameMax = window.WWProfileState.NICKNAME_MAX;
+    nameI.maxLength = nameMax * 2;
+    nameI.addEventListener('input', () => { const c = window.WWProfileState.clampProfileText(nameI.value, nameMax); if (c !== nameI.value) nameI.value = c; });
+    nameI.id = 'profile-form-nick';
   nameI.value = d.nickname !== undefined ? d.nickname : (existing ? existing.nickname : '');
   nameL.appendChild(nameI);
   body.appendChild(nameL);
 
   const bioL = el('label', null, '<span>简介（选填，最多 100 字）</span>');
-  const bioI = el('textarea'); bioI.maxLength = 100; bioI.rows = 2; bioI.id = 'profile-form-bio';
+  const bioI = el('textarea');
+    // R06：简介同理（100 码点，原生上限 2×）
+    const bioMax = window.WWProfileState.BIO_MAX;
+    bioI.maxLength = bioMax * 2;
+    bioI.addEventListener('input', () => { const c = window.WWProfileState.clampProfileText(bioI.value, bioMax); if (c !== bioI.value) bioI.value = c; });
+    bioI.rows = 2; bioI.id = 'profile-form-bio';
   bioI.value = d.bio !== undefined ? d.bio : (existing ? (existing.bio || '') : '');
   bioL.appendChild(bioI);
   body.appendChild(bioL);
@@ -2172,7 +2188,9 @@ function openProfileImport() {
       closeModal();
       renderProfileStrip();
       openProfileManager();
-      alert(`导入完成：${r.imported} 局已归入新档案${r.pendingRecoveries && r.pendingRecoveries.length ? '\n另有历史导入残留未清理，请到「设备与数据」检查恢复记录。' : ''}`);
+      // R02：昵称不再带「（导入）」后缀 ⇒「这是副本」由**界面状态说明**表达（重名由 UUID 区分）
+      const np = (state.profiles || []).find((x) => x.id === r.profileId);
+      alert(`导入完成：${r.imported} 局已归入新档案${np ? `「${np.nickname}」` : ''}（副本，原档案未改动）${r.pendingRecoveries && r.pendingRecoveries.length ? '\n另有历史导入残留未清理，请到「设备与数据」检查恢复记录。' : ''}`);
     } catch (e) { alert(`导入失败：${e.message}`); }
   });
   inp.click();
@@ -4361,7 +4379,66 @@ function setHint(text, kind) {
   hint.textContent = text;
 }
 
-function confirmBtn(text, buildPayload) {
+/**
+ * R01：**面板期冻结**的人类动作凭据。
+ *
+ * 只从**真实的 view.pending** 取值，并在构建操作面板的那一刻取一次 —— 于是"旧面板上的答案"
+ * 永远配"旧面板看到的 pendingId"，不会在提交前被换成"最新任务"的 ID（指导文档 R01 第 2 条）。
+ * 面板每次由 poll()/SSE 的新视图重建，所以冻结值与屏幕上的面板严格同龄。
+ */
+function freezePending(v, p) {
+  return Object.freeze({
+    gameId: (state.game && state.game.gameId) || null,
+    token: (state.game && state.game.playerToken) || null,
+    // 非等待态（未开局/未轮到你/已结束）本来就没有 pending ⇒ null，服务端对这类调用的行为逐字不变
+    pendingId: (p && p.pendingId != null) ? p.pendingId : null,
+    task: (p && p.task) || null,
+  });
+}
+
+/**
+ * **人类动作的唯一提交路径**（R01 第 1 条）：确认按钮、简化提交、女巫专用按钮全部走这里。
+ * 凭据用调用方传入的**冻结快照**，函数内不读 state.game —— 不读就不可能读到"最新任务"的 ID。
+ */
+async function submitHumanAction(pend, payload) {
+  const body = { token: (pend && pend.token) || state.game.playerToken, payload };
+  if (pend && pend.pendingId != null) body.pendingId = pend.pendingId; // 顶层为主（服务端顶层优先）
+  const gid = (pend && pend.gameId) || (state.game && state.game.gameId);
+  return api('POST', `/api/games/${gid}/action`, body);
+}
+
+/** 失败瞬间抓草稿（已选目标 + 输入文本）；只在任务未变时才会被放回 */
+function captureDraft() {
+  const ta = document.querySelector('#action-controls textarea');
+  return { target: actionState.target, text: ta ? ta.value : '' };
+}
+function restoreDraft(d) {
+  if (!d) return;
+  const ta = document.querySelector('#action-controls textarea');
+  if (ta && d.text) ta.value = d.text;         // 输入放回（不清空用户原文）
+  if (d.target !== undefined) actionState.target = d.target; // 已选座位放回
+}
+
+/**
+ * 动作提交失败后的统一处理（R01 第 3、4 条）。**不吞错、不改后端校验**：
+ * 错误照样显示给用户，只是额外补上"已按真实状态刷新任务"。
+ */
+async function afterActionFailure(e, pend) {
+  const status = e && e.status;
+  const conflict = status === 409;      // 过期/已被处理/缺 ID
+  const unknown = !status;              // 网络结果不明
+  if (!conflict && !unknown) { setHint(`✗ ${e.message}`, 'err'); return; }
+  const draft = captureDraft();
+  await poll().catch(() => {});         // 先同步真实状态，再谈重试（不盲目重发）
+  // 只有当服务端仍停在**同一个任务**上时才放回草稿；任务变了就丢弃，绝不跨任务复用答案
+  const nowTask = (state.view && state.view.pending && state.view.pending.task) || null;
+  if (nowTask && pend && nowTask === pend.task) restoreDraft(draft);
+  setHint(conflict
+    ? `✗ ${e.message}（已刷新当前任务${nowTask && pend && nowTask === pend.task ? '，你的输入已保留' : ''}；请确认后重新提交）`
+    : `✗ ${(e && e.message) || '网络异常'}（网络结果不明，已同步最新状态，请确认后再提交）`, 'err');
+}
+
+function confirmBtn(text, buildPayload, pend) {
   const b = el('button', 'btn primary', text || '确认');
   b.addEventListener('click', async () => {
     if (b.disabled) return; // 双击只产生一次业务提交
@@ -4374,13 +4451,13 @@ function confirmBtn(text, buildPayload) {
     }
     b.disabled = true; // 处理中：按钮禁用但宽度不变（.btn 保持 min-width/min-height）
     try {
-      await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
+      await submitHumanAction(pend, payload);
       $('#action-controls').innerHTML = '';
       $('#action-controls').dataset.task = '';
       setHint('已提交 ✓', 'ok');
     } catch (e) {
-      b.disabled = false; // 失败：恢复可点，输入不清空
-      setHint(`✗ ${e.message}`, 'err');
+      b.disabled = false; // 失败：恢复可点（草稿由 afterActionFailure 保留/放回）
+      await afterActionFailure(e, pend);
     }
   });
   return b;
@@ -4394,6 +4471,10 @@ function speechArea(placeholder) {
 
 function buildActionUI(v, p, box) {
   const me = v.me || {};
+  // R01：**面板期冻结**凭据；下面的 confirm/simple 与女巫按钮全部用它，闭包里不再读 state
+  const pend = freezePending(v, p);
+  const confirm = (text, buildPayload) => confirmBtn(text, buildPayload, pend);
+  const simple = (payload, btn) => submitSimple(payload, btn, pend);
   switch (p.task) {
     case 'speech':
     case 'pk_speech':
@@ -4422,7 +4503,7 @@ function buildActionUI(v, p, box) {
         box.appendChild(wd);
       }
       const btnRow = el('div', 'btnrow');
-      const send = confirmBtn(p.task === 'lastwords' ? '留下遗言' : '发送发言', () => {
+      const send = confirm(p.task === 'lastwords' ? '留下遗言' : '发送发言', () => {
         const payload = { text: ta.value.trim() };
         if (p.canExplode && actionState.explode) {
           payload.explode = true;
@@ -4441,7 +4522,7 @@ function buildActionUI(v, p, box) {
       const ta = speechArea('简短表态，如：刀 5 号，他发言太差…');
       box.appendChild(ta);
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('发送', () => ({ text: ta.value.trim() })));
+      btnRow.appendChild(confirm('发送', () => ({ text: ta.value.trim() })));
       box.appendChild(btnRow);
       break;
     }
@@ -4451,9 +4532,9 @@ function buildActionUI(v, p, box) {
       const ta = speechArea('轮到你了：表态/带节奏/统一刀口…（留空或点跳过=不发话）');
       box.appendChild(ta);
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('发言', () => ({ text: ta.value.trim() })));
+      btnRow.appendChild(confirm('发言', () => ({ text: ta.value.trim() })));
       const skip = el('button', 'btn', '跳过本轮');
-      skip.addEventListener('click', () => submitSimple({ text: '' }, skip));
+      skip.addEventListener('click', () => simple({ text: '' }, skip));
       btnRow.appendChild(skip);
       box.appendChild(btnRow);
       break;
@@ -4464,7 +4545,7 @@ function buildActionUI(v, p, box) {
       const btnRow = el('div', 'btnrow');
       // FIX-15：这里原来直接提交 actionState.target —— 没选目标时静默变成"空守"（玩家以为守了谁）。
       // 现在未选目标给可读提示；显式点「空守」照旧提交 0。
-      btnRow.appendChild(confirmBtn('确认守护', () => ({ target: pickedTarget('守护对象', '空守') })));
+      btnRow.appendChild(confirm('确认守护', () => ({ target: pickedTarget('守护对象', '空守') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4472,7 +4553,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 摄梦人：选择今晚的摄梦对象（梦游者当夜免疫刀/毒；连摄两晚同一人则其死亡）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认摄梦', () => ({ target: pickedTarget('摄梦对象') })));
+      btnRow.appendChild(confirm('确认摄梦', () => ({ target: pickedTarget('摄梦对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4480,7 +4561,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 狼美人：选择今晚的魅惑对象（你出局时他殉情，骑士决斗除外）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认魅惑', () => ({ target: pickedTarget('魅惑对象') })));
+      btnRow.appendChild(confirm('确认魅惑', () => ({ target: pickedTarget('魅惑对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4488,7 +4569,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 乌鸦：选择今晚的诅咒对象（明日放逐投票他+0.5票）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认诅咒', () => ({ target: pickedTarget('诅咒对象') })));
+      btnRow.appendChild(confirm('确认诅咒', () => ({ target: pickedTarget('诅咒对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4496,7 +4577,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 暗恋者：暗选你的暗恋对象（胜负阵营与他终身绑定，对方不知情）';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('确认心动', () => ({ target: pickedTarget('暗恋对象') })));
+      btnRow.appendChild(confirm('确认心动', () => ({ target: pickedTarget('暗恋对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4510,7 +4591,7 @@ function buildActionUI(v, p, box) {
       // 现在：未选目标 → 抛出可读提示（由 confirmBtn 的 catch 显示到 #pending-hint）；
       //       显式空刀（0）与正常目标照旧提交，空刀按钮的行为完全不变。
       // FIX-15：这条判断收进 pickedTarget()，与空守（night_guard）/不开枪（shoot）走同一份逻辑。
-      btnRow.appendChild(confirmBtn('投刀', () => ({ target: pickedTarget('刀口', p.allowNone ? '空刀' : null) })));
+      btnRow.appendChild(confirm('投刀', () => ({ target: pickedTarget('刀口', p.allowNone ? '空刀' : null) })));
       box.appendChild(btnRow);
       break;
     }
@@ -4518,7 +4599,7 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 预言家：选择今晚查验对象';
       box.appendChild(targetPicker(p.candidates));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('查验', () => ({ target: pickedTarget('查验对象') })));
+      btnRow.appendChild(confirm('查验', () => ({ target: pickedTarget('查验对象') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4529,9 +4610,9 @@ function buildActionUI(v, p, box) {
         const saveBtn = el('button', 'btn', icoLabel('antidote', `用解药救 ${ex.killTarget} 号`));
         saveBtn.addEventListener('click', async () => {
           try {
-            await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: { antidote: true, poison: 0 } });
+            await submitHumanAction(pend, { antidote: true, poison: 0 });
             $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
-          } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
+          } catch (e) { await afterActionFailure(e, pend); }
         });
         box.appendChild(saveBtn);
       }
@@ -4539,15 +4620,15 @@ function buildActionUI(v, p, box) {
         box.appendChild(el('span', 'hint', '或选择毒杀：'));
         box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
         const btnRow = el('div', 'btnrow');
-        btnRow.appendChild(confirmBtn(icoLabel('poison', '使用毒药'), () => ({ antidote: false, poison: Number(actionState.target) || 0 }))); // FIX-15：null→0，与改动前一致
+        btnRow.appendChild(confirm(icoLabel('poison', '使用毒药'), () => ({ antidote: false, poison: Number(actionState.target) || 0 }))); // FIX-15：null→0，与改动前一致
         box.appendChild(btnRow);
       }
       const skip = el('button', 'btn ghost', '空过（都不用）');
       skip.addEventListener('click', async () => {
         try {
-          await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload: { antidote: false, poison: 0 } });
+          await submitHumanAction(pend, { antidote: false, poison: 0 });
           $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
-        } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
+        } catch (e) { await afterActionFailure(e, pend); }
       });
       box.appendChild(skip);
       break;
@@ -4556,8 +4637,8 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长竞选：是否上警？';
       const run = el('button', 'btn primary', icoLabel('sheriff', '上警'));
       const norun = el('button', 'btn', '不上警');
-      run.addEventListener('click', () => submitSimple({ run: true }, run));
-      norun.addEventListener('click', () => submitSimple({ run: false }, norun));
+      run.addEventListener('click', () => simple({ run: true }, run));
+      norun.addEventListener('click', () => simple({ run: false }, norun));
       box.append(run, norun);
       break;
     }
@@ -4565,8 +4646,8 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长：决定今天发言方向';
       const cw = el('button', 'btn primary', '顺时针');
       const ccw = el('button', 'btn', '逆时针');
-      cw.addEventListener('click', () => submitSimple({ direction: 'cw' }, cw));
-      ccw.addEventListener('click', () => submitSimple({ direction: 'ccw' }, ccw));
+      cw.addEventListener('click', () => simple({ direction: 'cw' }, cw));
+      ccw.addEventListener('click', () => simple({ direction: 'ccw' }, ccw));
       box.append(cw, ccw);
       break;
     }
@@ -4574,9 +4655,9 @@ function buildActionUI(v, p, box) {
       $('#pending-hint').textContent = '⏳ 警长离场：移交警徽或撕毁';
       box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat)));
       const btnRow = el('div', 'btnrow');
-      btnRow.appendChild(confirmBtn('移交给该玩家', () => ({ target: pickedTarget('接任警长') })));
+      btnRow.appendChild(confirm('移交给该玩家', () => ({ target: pickedTarget('接任警长') })));
       const tear = el('button', 'btn danger', '撕毁警徽');
-      tear.addEventListener('click', () => submitSimple({ target: 0 }, tear));
+      tear.addEventListener('click', () => simple({ target: 0 }, tear));
       btnRow.appendChild(tear);
       box.appendChild(btnRow);
       break;
@@ -4588,7 +4669,7 @@ function buildActionUI(v, p, box) {
       const btnRow = el('div', 'btnrow');
       // FIX-15：投票同样不许静默弃票 —— 没选目标就给可读提示，想弃票请点「弃票」
       // （引擎对 vote/pk_vote/sheriff_vote 一律 allowNone:true，所以以前这条分支必然是"静默按 0 提交"）。
-      btnRow.appendChild(confirmBtn('投票', () => ({ target: pickedTarget('投票对象', p.allowNone ? '弃票' : null) })));
+      btnRow.appendChild(confirm('投票', () => ({ target: pickedTarget('投票对象', p.allowNone ? '弃票' : null) })));
       box.appendChild(btnRow);
       break;
     }
@@ -4597,7 +4678,7 @@ function buildActionUI(v, p, box) {
       box.appendChild(targetPicker(v.players.filter((x) => x.alive).map((x) => x.seat), { noneLabel: '不开枪' }));
       const btnRow = el('div', 'btnrow');
       // FIX-15：同 night_guard —— 没选目标不再静默变成"不开枪"；显式点「不开枪」照旧提交 0。
-      btnRow.appendChild(confirmBtn('开枪', () => ({ target: pickedTarget('开枪目标', '不开枪') })));
+      btnRow.appendChild(confirm('开枪', () => ({ target: pickedTarget('开枪目标', '不开枪') })));
       box.appendChild(btnRow);
       break;
     }
@@ -4616,16 +4697,16 @@ async function wolfTalkAction(kind, text, ta) {
   } catch (e) { setHint(`✗ ${e.message}`, 'err'); }
 }
 
-async function submitSimple(payload, btn) {
+async function submitSimple(payload, btn, pend) {
   if (btn && btn.disabled) return; // 双击只产生一次业务提交
   if (btn) btn.disabled = true;
   try {
-    await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
+    await submitHumanAction(pend, payload);
     $('#action-controls').innerHTML = ''; $('#action-controls').dataset.task = '';
     setHint('已提交 ✓', 'ok');
   } catch (e) {
     if (btn) btn.disabled = false;
-    setHint(`✗ ${e.message}`, 'err');
+    await afterActionFailure(e, pend);
   }
 }
 

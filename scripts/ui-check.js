@@ -176,6 +176,7 @@ const PLANNED_SECTIONS = [
   'P4-4 终止后刷新',
   'P4-6 推送降级状态条（单例）',
   'P4-3 空刀拦截（真实点击）',
+  'R01 真人操作 pendingId（真实点击 + 真实请求）',
   'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
   '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
@@ -222,6 +223,8 @@ class Browser {
     // 原生对话框：null = 不接管（默认）；'accept' / 'dismiss' 时自动应答并把原文记进 dialogs
     this.dialogMode = null;
     this.dialogs = [];
+    // R01：页面发出的 /api/games/:id/action 请求体与响应码（只增不删，超长截尾）
+    this.netReqs = [];
   }
 
   static async launch(port, chrome) {
@@ -289,8 +292,43 @@ class Browser {
       this.exceptions.push(fmtException(p));
     } else if (msg.method === 'Runtime.consoleAPICalled' && ['error', 'warning'].includes(p.type)) {
       this.consoleErrors.push(fmtConsole(p));
+    } else if (msg.method === 'Network.requestWillBeSent') {
+      this._noteRequest(p);
+    } else if (msg.method === 'Network.responseReceived') {
+      const hit = this.netReqs.find((x) => x.requestId === p.requestId);
+      if (hit) hit.status = ((p.response || {}).status) || null;
     } else if (msg.method === 'Network.loadingFailed' && !/favicon/.test(p.requestId || '')) {
       this.failedRequests.push(`${p.type} ${p.errorText}`);
+    }
+  }
+
+  /**
+   * R01：只登记"真人动作提交"这一种请求 —— /api/games/:id/action。
+   * 捕获的是**页面自己发出的原始请求体**（postData），不是测试替它拼的，所以能证明前端真的带了 ID。
+   */
+  _noteRequest(p) {
+    const req = p.request || {};
+    const url = String(req.url || '');
+    if (!/\/api\/games\/[^/]+\/action(\?|$)/.test(url)) return;
+    this.netReqs.push({
+      requestId: p.requestId, url, method: req.method,
+      postData: req.postData == null ? null : String(req.postData),
+      at: Date.now(), status: null,
+    });
+    if (this.netReqs.length > 100) this.netReqs.splice(0, this.netReqs.length - 100);
+  }
+
+  /** 等一条匹配的页面动作请求（超时带最后已捕获清单，便于诊断） */
+  async waitPageRequest(pred, { timeout = 8000, interval = 100, label = '页面动作请求' } = {}) {
+    const t0 = Date.now();
+    for (;;) {
+      const hit = this.netReqs.find(pred);
+      if (hit) return hit;
+      if (Date.now() - t0 >= timeout) {
+        throw new Error('等待超时（' + label + '，' + timeout + 'ms）：已捕获=' +
+          JSON.stringify(this.netReqs.slice(-3).map((x) => ({ url: x.url, status: x.status, postData: x.postData }))));
+      }
+      await sleep(interval);
     }
   }
 
@@ -2829,6 +2867,171 @@ class Browser {
         await api('POST', `/api/games/${g3.gameId}/terminate`, { token: g3.playerToken });
       }
 
+      // (E2) R01：真人动作必须带**当时面板**的 pendingId。
+      // 为什么单列一段：scripts/e2e.js 与上面各段**自己就会补 pendingId**，所以它们全绿也证明不了前端；
+      // 这一段只做一件事 —— 让**页面自己**去提交，然后检查浏览器真实发出的请求体。
+      log('\n=== R01 真人操作 pendingId（真实点击 + 真实请求）===');
+      {
+        const TARGET_TASKS = ['wolf_kill', 'night_guard', 'seer_check', 'dream_weave', 'wolf_charm', 'crow_curse', 'lover_pick'];
+        const viewOf = async (g, tk) => ((await api('GET', `/api/games/${g.gameId}/view?token=${tk}&after=0`)).body || {});
+        let g4 = null;
+        for (let seed = 1; seed <= 12 && !g4; seed++) {
+          const cand = await mkGame('adv12', 12, seed);
+          await api('POST', `/api/games/${cand.gameId}/start`, { token: cand.playerToken });
+          for (let i = 0; i < 60; i++) {
+            const v = await viewOf(cand, cand.playerToken);
+            if (v.finished) break;
+            const pend = v.pending;
+            if (pend && pend.task && TARGET_TASKS.includes(pend.task)) { g4 = { ...cand, seed, task: pend.task }; break; }
+            if (!pend || !pend.task) { await sleep(800); continue; }
+            const alive = (pend.candidates || []).slice();
+            let payload = {};
+            if (['speech', 'lastwords', 'pk_speech', 'wolf_chat', 'wolf_say'].includes(pend.task)) payload = { text: '过' };
+            else if (pend.task === 'sheriff_run') payload = { run: false };
+            else if (pend.task === 'explode_check') payload = { explode: false };
+            else if (alive.length) payload = { target: alive[0] };
+            const sub = await api('POST', `/api/games/${cand.gameId}/action`, { token: cand.playerToken, pendingId: pend.pendingId, payload });
+            if (sub.code === 409) {
+              const vf = await viewOf(cand, cand.playerToken);
+              if (vf.pending && vf.pending.pendingId) await api('POST', `/api/games/${cand.gameId}/action`, { token: cand.playerToken, pendingId: vf.pending.pendingId, payload });
+            }
+            await sleep(600);
+          }
+          if (!g4) await api('POST', `/api/games/${cand.gameId}/terminate`, { token: cand.godToken });
+        }
+        check('R01 前置：找到"轮到真人做单目标动作"的局（12 个种子内）', !!g4, g4 ? `task=${g4.task} seed=${g4.seed}` : '没找到');
+        if (g4) {
+          await enterAndWaitGame(g4, 'R01：页面已进入对局屏');
+          await waitExpr('R01：待操作面板已按真实 pending 渲染',
+            `(document.getElementById('action-controls')?.dataset.task || '').startsWith(${JSON.stringify(g4.task)})`, { timeout: 12000 });
+          const svA = await viewOf(g4, g4.playerToken);
+          const panelId = svA.pending ? svA.pending.pendingId : null;
+          check('R01 前置：服务端此刻确有 pending 且带 pendingId', !!panelId, `pendingId=${panelId} task=${svA.pending && svA.pending.task}`);
+
+          // ---- A. 页面内反例：证明"服务端校验是活的"，也就是证明后面那条绿不是空的 ----
+          const neg = await b.eval(`(async () => {
+            const url = '/api/games/' + state.game.gameId + '/action';
+            const mk = (body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+              .then(async (r) => ({ status: r.status, json: await r.json().catch(() => ({})) }));
+            const payload = {};
+            const noId = await mk({ token: state.game.playerToken, payload });
+            const badId = await mk({ token: state.game.playerToken, pendingId: 'r01-not-the-current-id', payload });
+            return { noId, badId };
+          })()`);
+          check('R01 反例①：页面内不带 pendingId 的提交必须被拒（409 PENDING_ID_REQUIRED）',
+            neg.noId.status === 409 && neg.noId.json.code === 'PENDING_ID_REQUIRED',
+            `status=${neg.noId.status} code=${neg.noId.json.code} msg=${neg.noId.json.error}`);
+          check('R01 反例②：页面内带错 pendingId 的提交必须被拒（409 PENDING_ID_STALE）',
+            neg.badId.status === 409 && neg.badId.json.code === 'PENDING_ID_STALE',
+            `status=${neg.badId.status} code=${neg.badId.json.code} msg=${neg.badId.json.error}`);
+          check('R01 反例后任务仍未被消耗（非法提交没有任何副作用）',
+            (await viewOf(g4, g4.playerToken)).pending?.pendingId === panelId, '任务应原封不动');
+
+          // ---- B. 真实鼠标点击：候选胶囊 → 提交按钮 ----
+          const cand = await b.eval(`(() => {
+            const c = [...document.querySelectorAll('#action-controls .chip')];
+            if (!c.length) return { ok: false, n: 0 };
+            c[0].id = 'tmp-r01-seat';
+            return { ok: true, n: c.length, text: c[0].textContent.trim() };
+          })()`);
+          check('R01：候选目标胶囊真实存在（可点）', cand.ok === true, JSON.stringify(cand));
+          const submitLabel = cand.ok ? await b.eval(`(() => {
+            const all = [...document.querySelectorAll('#action-controls button')].filter((x) => !x.classList.contains('chip') && !x.disabled);
+            const s = all.find((x) => /投|确认|确定|提交|查验|守护|摄梦|魅惑|诅咒|心动/.test(x.textContent)) || all[all.length - 1];
+            if (!s) return null;
+            s.id = 'tmp-r01-submit';
+            window.__r01btn = s;
+            return s.textContent.trim();
+          })()`) : null;
+          check('R01：提交按钮真实存在且未禁用', !!submitLabel, String(submitLabel));
+          const markIdx = b.netReqs.length;
+          const actsBefore = ((await viewOf(g4, g4.godToken)).events || []).length;
+          if (cand.ok && submitLabel) {
+            // ⚠ 用**同一次 eval 内**的合成 click，而不是 CDP 真实鼠标：动作面板会被推送重绘，
+            // 节点一换真实鼠标就打空（第二轮实测：点击后服务端事件数 51→51，什么都没提交）。
+            // 本文件 P4-3 段 2764 行早已记过同一条并因此改用同一做法。
+            // 关键成立条件不变：点的是页面**真实控件**、走**同一个 click 处理器**、请求由页面自己
+            // 发出 —— 我们只捕获浏览器真实请求体，测试绝不替页面补 ID。
+            // C 步要用"面板期凭证"去撞真的 409：这里用**产品自己的** freezePending 冻一份存进页面
+          await b.eval(`(() => { window.__r01pend = freezePending(state.view, state.view.pending); return !!window.__r01pend; })()`);
+          const clicked = await b.eval(`(() => {
+              const seat = document.getElementById('tmp-r01-seat');
+              const sub = document.getElementById('tmp-r01-submit');
+              const t0 = (typeof actionState === 'undefined') ? null : actionState.target;
+              if (seat) seat.click();
+              const t1 = (typeof actionState === 'undefined') ? null : actionState.target;
+              if (sub) sub.click();
+              return { before: t0, afterSeat: t1, hitSeat: !!seat, hitSub: !!sub };
+            })()`);
+            log('  · 点击：' + JSON.stringify(clicked));
+            check('R01：点候选胶囊后页面状态真的记下了选中的座位（证明走的是页面自己的 click 处理器）',
+              !!(clicked && clicked.hitSeat && clicked.hitSub && clicked.afterSeat), JSON.stringify(clicked));
+          }
+          let req = null;
+          // ⚠ 只认 markIdx 之后捕获的请求：本段 A 步的反例 fetch 也是 /action，
+          // 用 find 会匹到它们，从而得出「前端没带 pendingId」的**假红**（实测踩过）。
+          try { req = await b.waitPageRequest((x, i) => i >= markIdx && x.url.includes('/action'), { timeout: 9000, label: 'R01 页面动作请求' }); }
+          catch (e) { log('  · ' + e.message); }
+          check('R01：捕获到页面自己发出的 /action 请求（不是测试替它发的）', !!req, req ? `url=${req.url}` : '未捕获到');
+          let sent = null;
+          try { sent = req && req.postData ? JSON.parse(req.postData) : null; } catch (_) { sent = null; }
+          check('R01：请求体里**带**了 pendingId', !!(sent && sent.pendingId), sent ? JSON.stringify(sent).slice(0, 160) : '(无请求体)');
+          check('R01：pendingId 等于**当时面板**看到的那一个（面板期冻结，不是临时取最新）',
+            !!(sent && sent.pendingId && sent.pendingId === panelId), `sent=${sent && sent.pendingId} panel=${panelId}`);
+          // req.status 由 Network.responseReceived 异步填 —— 请求刚被捕获时它还是 null，
+          // 直接断言会得到假红（实测：同一段"任务已被消费"2ms 内就成立，响应确实是 200）。
+          for (let i = 0; i < 30 && req && req.status == null; i++) await sleep(100);
+          check('R01：该次提交被服务端接受（200）', !!(req && req.status === 200), `status=${req && req.status}`);
+          // 用 waitCheck（不抛）：本段任何一条不成立都不该把后面的段落全部变成「未执行」
+          await waitCheck('R01：服务端已消费该任务（真实生效，不是空转）', async () => {
+            const v1 = await viewOf(g4, g4.playerToken);
+            const nowId = v1.pending ? v1.pending.pendingId : null;
+            return { ok: v1.finished || nowId !== panelId, nowId, finished: !!v1.finished };
+          }, { timeout: 8000, interval: 150 });
+          const actsAfter = ((await viewOf(g4, g4.godToken)).events || []).length;
+          check('R01：服务端动作事件确实增加（这一下真的提交出去了）', actsAfter > actsBefore, `events ${actsBefore} → ${actsAfter}`);
+          await b.shot(path.join(SHOTS, '13-r01-pending-id.png'));
+
+          // ---- C. 旧面板重按 ⇒ 必须走 409 分支：保留草稿 + 刷新任务 + **不自动重放** ----
+          const svB = await viewOf(g4, g4.playerToken);
+          const idBeforeReclick = svB.pending ? svB.pending.pendingId : null;
+          const actsBeforeRe = ((await viewOf(g4, g4.godToken)).events || []).length;
+          // 409 分支：用**页面自己的**提交函数 + **面板期冻结的真实凭证**（此刻已被上面那次提交消费掉
+          // ⇒ 服务端必回 409），再交给页面自己的 afterActionFailure 处理。
+          // 为什么不在旧按钮上再点一次：提交成功后按钮被**禁用**，而对 disabled 元素 click() 不派发事件
+          //（实测：点了等于没点，于是被误判成"产品没给提示"）。改用产品自己的代码路径，
+          // 并且提示在**同一次 eval 内**读完 —— 彻底避开"推送重绘把提示盖掉"的竞态。
+          const stale409 = await b.eval(`(async () => {
+            const pend = window.__r01pend;
+            if (!pend) return { skipped: '没拿到面板期凭证' };
+            const ta = document.querySelector('#action-controls textarea');
+            const draftBefore = ta ? ta.value : null;
+            let err = null;
+            try { await submitHumanAction(pend, { target: 2 }); } catch (e) { err = e; }
+            if (!err) return { skipped: '过期凭证竟然被接受了' };
+            await afterActionFailure(err, pend);
+            const ta2 = document.querySelector('#action-controls textarea');
+            return {
+              status: err.status || null,
+              message: String(err.message || '').slice(0, 80),
+              hint: document.getElementById('pending-hint')?.textContent || '',
+              task: document.getElementById('action-controls')?.dataset.task || '',
+              draftBefore, draftAfter: ta2 ? ta2.value : null,
+            };
+          })()`);
+          log('  · 过期凭证 409：' + JSON.stringify(stale409));
+          check('R01：用**过期凭证**提交真的拿到 409（服务端校验是活的，不是测试自己判的）',
+            !!(stale409 && stale409.status === 409), JSON.stringify(stale409));
+          const hintText = (stale409 && stale409.hint) || '';
+          check('R01：409 后给出可读提示（含"已刷新当前任务"）', /已刷新当前任务/.test(hintText), `提示="${hintText}"`);
+          const vC = await viewOf(g4, g4.playerToken);
+          const idAfterReclick = vC.pending ? vC.pending.pendingId : null;
+          const actsAfterRe = ((await viewOf(g4, g4.godToken)).events || []).length;
+          check('R01：旧面板重按**没有**被自动重放到新任务（服务端动作数不增）', actsAfterRe === actsBeforeRe, `events ${actsBeforeRe} → ${actsAfterRe}`);
+          check('R01：重按后当前任务未被消耗（新任务仍是待处理的）', idAfterReclick === idBeforeReclick, `before=${idBeforeReclick} after=${idAfterReclick}`);
+          await api('POST', `/api/games/${g4.gameId}/terminate`, { token: g4.playerToken });
+        }
+      }
       // (F) FIX-07：「清除标注」必须走真 DELETE。
       // 旧实现是 PUT 一份空标注：内容清空了，但座位键仍留在 doc.seats 里 —— 存储只增不减，
       // 导出计数（src/profiles/transfer.js:59 的 counts.notes）跟着虚高。

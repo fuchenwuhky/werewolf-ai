@@ -711,11 +711,13 @@ test('M2-AB ⑦导出/导入契约：范围=资料+头像+已结束局+笔记；
   assert.notStrictEqual(newId, 'ab7-fin', 'gameId 必须被重映射（否则会覆盖原存档）');
   assert.match(newId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, '新 gameId 必须是新 UUID');
 
-  // 新档案出现在档案表里，昵称带「（导入）」后缀，与 A/B 各自独立
+  // 新档案出现在档案表里，昵称**原样保留** —— R02：不再拼「（导入）」后缀
+  // （拼接会让 17–20 字昵称回导时报「昵称最长 20 个字符」，多轮还会越拼越长；重名由 UUID 区分）
   const rows = await h.profileList();
   const imported = rows.find((p) => p.id === newProfileId);
   assert.ok(imported, `导入出的档案必须在列表里：${JSON.stringify(rows.map((p) => p.nickname))}`);
-  assert.strictEqual(imported.nickname, `${A.nickname}（导入）`);
+  assert.strictEqual(imported.nickname, A.nickname, 'R02：导入的昵称必须原样保留');
+  assert.ok(!/（导入）/.test(imported.nickname), 'R02：昵称里不得再出现「（导入）」');
   assert.notStrictEqual(newProfileId, A.id);
   assert.notStrictEqual(newProfileId, B.id);
   assert.strictEqual(rows.length, 4, '默认玩家 + A + B + 导入的新档案');

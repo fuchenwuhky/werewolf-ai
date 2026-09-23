@@ -2229,7 +2229,11 @@ class Api {
       // 先建出一份档案再回滚（"校验失败不写盘"是整次导入的承诺）。
       const avatarPayload = transfer.decodeAvatarPayload(checked.profile.customAvatar);
       const prof = await this.profiles.create({
-        nickname: checked.profile.nickname + '（导入）',
+        // R02：**原样保留昵称**。这里曾经无条件拼一个「（导入）」后缀，于是 17–20 字的合法昵称
+        // 一导入就变成 21+ 字，被 store 的长度校验拒成 400；多轮回导还会越拼越长。
+        // 现在：重名是允许的（身份由 create 生成的新 UUID 区分），「这是副本」只由界面说明，
+        // 不写进用户原文、也不截断。
+        nickname: checked.profile.nickname,
         avatarId: checked.profile.avatarId || 'scholar',
         bio: checked.profile.bio || '',
         preferences: checked.profile.preferences, // 偏好随包继承（PROF-04）

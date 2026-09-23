@@ -451,7 +451,12 @@ async function init() {
   // 玩家档案（PROF-01）：选择 + 管理 + "我的昵称"手改标记。加载失败不阻塞开局（服务端会归默认档案）
   $('#m-profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#m-profile-manage').addEventListener('click', openProfileManager);
-  $('#m-my-name').addEventListener('input', () => { $('#m-my-name').dataset.touched = '1'; });
+  $('#m-my-name').addEventListener('input', () => {
+    $('#m-my-name').dataset.touched = '1';
+    // R06：与档案昵称同一把尺子（20 码点）
+    const c = window.WWProfileState.clampProfileText($('#m-my-name').value, window.WWProfileState.NICKNAME_MAX);
+    if (c !== $('#m-my-name').value) $('#m-my-name').value = c;
+  });
   // ---- FIN-04 首页 ----
   $('#m-play-new').addEventListener('click', () => {
     const grid = $('#m-board-grid');
@@ -1816,14 +1821,24 @@ function openProfileEdit(existing, draft) {
 
   const nameL = el('label');
   nameL.appendChild(el('span', null, '昵称（1–20 字）'));
-  const nameI = el('input'); nameI.maxLength = 20; nameI.id = 'profile-form-nick';
+  const nameI = el('input');
+    // R06：同桌面端 —— 原生 maxlength 按码元，放到 2×，真正的 20 码点由共享模型钳制
+    const nameMax = window.WWProfileState.NICKNAME_MAX;
+    nameI.maxLength = nameMax * 2;
+    nameI.addEventListener('input', () => { const c = window.WWProfileState.clampProfileText(nameI.value, nameMax); if (c !== nameI.value) nameI.value = c; });
+    nameI.id = 'profile-form-nick';
   nameI.value = d.nickname !== undefined ? d.nickname : (existing ? existing.nickname : '');
   nameL.appendChild(nameI);
   body.appendChild(nameL);
 
   const bioL = el('label');
   bioL.appendChild(el('span', null, '简介（选填，最多 100 字）'));
-  const bioI = el('textarea'); bioI.maxLength = 100; bioI.rows = 2; bioI.id = 'profile-form-bio';
+  const bioI = el('textarea');
+    // R06：简介同理
+    const bioMax = window.WWProfileState.BIO_MAX;
+    bioI.maxLength = bioMax * 2;
+    bioI.addEventListener('input', () => { const c = window.WWProfileState.clampProfileText(bioI.value, bioMax); if (c !== bioI.value) bioI.value = c; });
+    bioI.rows = 2; bioI.id = 'profile-form-bio';
   bioI.value = d.bio !== undefined ? d.bio : (existing ? (existing.bio || '') : '');
   bioL.appendChild(bioI);
   body.appendChild(bioL);
@@ -2180,7 +2195,9 @@ function openProfileImport() {
       onSelectProfile(r.profileId);
       renderProfileStrip();
       openProfileManager();
-      alert(`导入完成：${r.imported} 局已归入新档案${r.pendingRecoveries && r.pendingRecoveries.length ? '\n另有历史导入残留未清理，请在设置中检查恢复记录。' : ''}`);
+      // R02：同桌面端 —— 昵称原样，副本说明只出现在界面文案里
+      const np = (state.profiles || []).find((x) => x.id === r.profileId);
+      alert(`导入完成：${r.imported} 局已归入新档案${np ? `「${np.nickname}」` : ''}（副本，原档案未改动）${r.pendingRecoveries && r.pendingRecoveries.length ? '\n另有历史导入残留未清理，请在设置中检查恢复记录。' : ''}`);
     } catch (e) { alert(`导入失败：${e.message}`); }
   });
   inp.click();
@@ -3853,7 +3870,56 @@ function setKeyEnabled(btn, on) {
   btn.disabled = !on;
 }
 
-async function submitSimple(payload) {
+/**
+ * R01：**面板期冻结**的人类动作凭据（手机端）。
+ * 只从真实的 view.pending 取值，并在构建底部坞的那一刻取一次；闭包里不再读 state.game。
+ */
+function freezePending(v, p) {
+  return Object.freeze({
+    gameId: (state.game && state.game.gameId) || null,
+    token: (state.game && state.game.playerToken) || null,
+    pendingId: (p && p.pendingId != null) ? p.pendingId : null, // 非等待态为 null，服务端行为不变
+    task: (p && p.task) || null,
+  });
+}
+
+/** **人类动作的唯一提交路径**（R01 第 1 条）：确认键、技能快捷键、跳过按钮全部走这里 */
+async function submitHumanAction(pend, payload) {
+  const body = { token: (pend && pend.token) || state.game.playerToken, payload };
+  if (pend && pend.pendingId != null) body.pendingId = pend.pendingId; // 顶层为主
+  const gid = (pend && pend.gameId) || (state.game && state.game.gameId);
+  return api('POST', `/api/games/${gid}/action`, body);
+}
+
+/** 失败瞬间抓草稿（已选目标 + 对话框输入），只在任务未变时放回 */
+function captureDraft() {
+  const ta = document.querySelector('#m-dialog textarea');
+  return { target: actionState.target, text: ta ? ta.value : '' };
+}
+function restoreDraft(d) {
+  if (!d) return;
+  const ta = document.querySelector('#m-dialog textarea');
+  if (ta && d.text) ta.value = d.text;
+  if (d.target !== undefined) actionState.target = d.target;
+}
+
+/** 失败统一处理（R01 第 3、4 条）：保留草稿 + 刷新任务 + 明确提示；不自动重放、不动后端校验 */
+async function afterActionFailure(e, pend) {
+  const status = e && e.status;
+  const conflict = status === 409;
+  const unknown = !status;
+  if (!conflict && !unknown) { hint(`✗ ${e.message}`); return; }
+  const draft = captureDraft();
+  await poll().catch(() => {}); // 先同步真实状态
+  const nowTask = (state.view && state.view.pending && state.view.pending.task) || null;
+  const same = !!(nowTask && pend && nowTask === pend.task);
+  if (same) restoreDraft(draft);
+  hint(conflict
+    ? `✗ ${e.message}（已刷新当前任务${same ? '，你的输入已保留' : ''}；请确认后重新提交）`
+    : `✗ ${(e && e.message) || '网络异常'}（网络结果不明，已同步最新状态，请确认后再提交）`);
+}
+
+async function submitSimple(payload, pend) {
   if (state.submitting) return; // FIN-03：双击只产生一次业务提交
   if (navigator.onLine === false) { hint('⚠ 当前离线：等网络恢复后再提交'); return; } // 断网不基于过期任务提交
   state.submitting = true;
@@ -3861,12 +3927,13 @@ async function submitSimple(payload) {
   const busy = keys ? keys.querySelector('[data-confirm]') : null;
   if (busy) { busy.disabled = true; busy.classList.add('m-busy'); } // 处理中保持宽度、吞点击
   try {
-    await api('POST', `/api/games/${state.game.gameId}/action`, { token: state.game.playerToken, payload });
+    await submitHumanAction(pend, payload);
     $('#m-keys').innerHTML = ''; $('#m-keys').dataset.task = '';
     $('#m-dialog').innerHTML = ''; $('#m-dialog').dataset.task = '';
   } catch (e) {
-    hint(`✗ ${e.message}`); // 失败不清输入：动作区签名未变不重建，草稿保留
+    // 失败不清输入：既能"签名未变不重建"，也能在刷新任务后由 afterActionFailure 放回草稿
     if (busy) { busy.disabled = false; busy.classList.remove('m-busy'); }
+    await afterActionFailure(e, pend);
   } finally { state.submitting = false; }
 }
 async function wolfTalkAction(kind, text, ta) {
@@ -3897,6 +3964,10 @@ function syncMockBtn() {
  * 目标类任务不再在底部堆一排座位号 —— 直接点左右两列的座位选人（见 onSeatTap）。
  */
 function buildActionUI(v, p, keys, dlg) {
+  // R01：**面板期冻结**凭据；下面的 simple(...) 与所有技能键闭包全部用它，闭包里不再读 state
+  const pend = freezePending(v, p);
+  const simple = (payload) => submitSimple(payload, pend);
+
   const me = v.me || {};
   hint(`⏳ ${TASK_LABEL[p.task] || p.task}（无时间限制）`);
 
@@ -3919,7 +3990,7 @@ function buildActionUI(v, p, keys, dlg) {
           if (me.role === 'whitewolfking') payload.target = Number(actionState.target) || 0;
         }
         if (p.task === 'sheriff_speech') payload.withdraw = actionState.withdraw;
-        await submitSimple(payload);
+        await simple(payload);
       }
     );
     send.dataset.confirm = '1';
@@ -3951,7 +4022,7 @@ function buildActionUI(v, p, keys, dlg) {
       }));
     }
     if (p.task === 'wolf_say') {
-      keys.appendChild(keyEl('跳过本轮', 'alt', () => submitSimple({ text: '' })));
+      keys.appendChild(keyEl('跳过本轮', 'alt', () => simple({ text: '' })));
     }
     return;
   }
@@ -3969,10 +4040,10 @@ function buildActionUI(v, p, keys, dlg) {
         hint(`✗ 请先在「玩家」页点一个座位选出${noun || '目标'}${none ? `（想放弃这次操作就点「${none}」）` : ''}`);
         return;
       }
-      submitSimple({ target: actionState.target });
+      simple({ target: actionState.target });
     }, { confirm: true });
     keys.appendChild(conf);
-    if (p.allowNone && none) keys.appendChild(keyEl(none, 'alt', () => submitSimple({ target: 0 })));
+    if (p.allowNone && none) keys.appendChild(keyEl(none, 'alt', () => simple({ target: 0 })));
     // 单个候选时直接预选，省一次点击
     if (p.candidates && p.candidates.length === 1) setTarget(p.candidates[0]);
     return;
@@ -3982,11 +4053,11 @@ function buildActionUI(v, p, keys, dlg) {
   if (p.task === 'witch') {
     const ex = p.extra || {};
     if (ex.canAntidote) {
-      keys.appendChild(keyEl(icoLabel('antidote', `解药救 ${ex.killTarget} 号`), 'on', () => submitSimple({ antidote: true, poison: 0 })));
+      keys.appendChild(keyEl(icoLabel('antidote', `解药救 ${ex.killTarget} 号`), 'on', () => simple({ antidote: true, poison: 0 })));
     } else {
       keys.appendChild(keyEl(icoLabel('antidote', '解药不可用'), 'off', null, { sub: ex.antidoteUsed ? '已用过' : '今夜无人被刀' }));
     }
-    const poisonKey = keyEl(icoLabel('poison', '用毒'), 'off', () => submitSimple({ antidote: false, poison: Number(actionState.target) || 0 }), { confirm: true }); // FIX-15：null→0，与改动前一致
+    const poisonKey = keyEl(icoLabel('poison', '用毒'), 'off', () => simple({ antidote: false, poison: Number(actionState.target) || 0 }), { confirm: true }); // FIX-15：null→0，与改动前一致
     if (ex.canPoison) {
       actionState.needTarget = true;
       markNeedTarget(v, v.players.filter((x) => x.alive).map((x) => x.seat), '到「玩家」页点选要毒的人（可毒自己）');
@@ -3994,22 +4065,22 @@ function buildActionUI(v, p, keys, dlg) {
     } else {
       keys.appendChild(keyEl(icoLabel('poison', '毒药不可用'), 'off', null, { sub: ex.poisonUsed ? '已用过' : ' ' }));
     }
-    keys.appendChild(keyEl('空过', 'alt', () => submitSimple({ antidote: false, poison: 0 })));
+    keys.appendChild(keyEl('空过', 'alt', () => simple({ antidote: false, poison: 0 })));
     return;
   }
 
   // ---------- 二选一：上警 / 方向 ----------
   if (p.task === 'sheriff_run') {
     keys.append(
-      keyEl(icoLabel('sheriff', '上警'), 'on', () => submitSimple({ run: true })),
-      keyEl('不上警', 'alt', () => submitSimple({ run: false }))
+      keyEl(icoLabel('sheriff', '上警'), 'on', () => simple({ run: true })),
+      keyEl('不上警', 'alt', () => simple({ run: false }))
     );
     return;
   }
   if (p.task === 'direction') {
     keys.append(
-      keyEl('顺时针 →', 'on', () => submitSimple({ direction: 'cw' })),
-      keyEl('逆时针 ←', 'alt', () => submitSimple({ direction: 'ccw' }))
+      keyEl('顺时针 →', 'on', () => simple({ direction: 'cw' })),
+      keyEl('逆时针 ←', 'alt', () => simple({ direction: 'ccw' }))
     );
     return;
   }
