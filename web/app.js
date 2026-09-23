@@ -49,7 +49,7 @@ const state = {
   seatListNodes: new Map(), // 列表视图座位行节点（与圆桌共用同一份选择状态）
   seatStructKey: '',     // 座位结构签名（人数/我的座位/视角）：变化才全量重建，否则逐座位补丁
   seatView: 'ring',      // 座位视图：'ring' 圆桌 | 'list' 列表（记住选择，切换不清草稿）
-  notesCollapsed: false, // 右侧笔记栏在宽屏（≥1280）下是否被用户收起
+  notesCollapsed: false, // 右侧笔记栏在宽屏（≥960，与 style.css 的收栏断点同一口径）下是否被用户收起
   newMsgCount: 0,        // 用户上翻历史期间累计的新发言条数（新消息胶囊）
   modalReturnFocus: null,// 最上层模态的焦点来源（关闭后焦点回来源）
   gameMeta: null,        // 懒加载的当前局元数据（mock 等，视图负载里没有；结算标识用）
@@ -2600,10 +2600,49 @@ function bindGameChrome() {
     state.notesModeBound = true;
     if (window.matchMedia) {
       try {
-        matchMedia('(min-width: 1280px)').addEventListener('change', applyNotesMode);
+        matchMedia('(min-width: 961px)').addEventListener('change', applyNotesMode);
+        // 玩家区抽屉与笔记同一断点口径（guidance §3.3 :156：低于 960px 时"玩家和笔记"都改抽屉）
+        matchMedia('(min-width: 961px)').addEventListener('change', applySeatsMode);
       } catch (_) { /* 老 WebView 无 addEventListener 版本：跳过动态切换，刷新后生效 */ }
     }
   }
+  applySeatsMode();
+}
+
+/**
+ * 玩家区模式（guidance §3.3 :156）：≥961px 常驻左栏（什么都不做，行为与改造前一致）；
+ * ≤960px 收成左侧抽屉，由顶栏开合按钮加 #screen-game.seats-open 开合。
+ * 只切显示层：不重建对局、不动座位数据、不清笔记草稿。
+ */
+function applySeatsMode() {
+  const game = $('#screen-game');
+  if (!game) return;
+  const wide = !!(window.matchMedia && matchMedia('(min-width: 961px)').matches);
+  // 控件**无条件先创建**（幂等），再决定可见性。
+  // 上一版在宽屏分支提前 return，导致宽屏下这个按钮根本不存在（真页面实测读到 btnHidden=null），
+  // 断言与行为都无从对齐；现在宽屏读到 true、抽屉档读到 false，两种档位都可核对。
+  let btn = $('#btn-seats-toggle');
+  if (!btn) {
+    btn = el('button', 'btn ghost small', '玩家');
+    btn.id = 'btn-seats-toggle';
+    btn.setAttribute('aria-controls', 'left-col');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.addEventListener('click', () => {
+      const open = game.classList.toggle('seats-open');
+      btn.setAttribute('aria-expanded', String(open));
+    });
+    const host = $('.game-top .top-actions') || $('#screen-game .game-top') || game;
+    host.appendChild(btn);
+  }
+  if (wide) {
+    // 宽屏：左栏常驻，抽屉态必须清掉，否则窄屏留下的 .seats-open 会污染宽屏几何
+    game.classList.remove('seats-open');
+    btn.hidden = true;
+    btn.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  btn.hidden = false;
+  btn.setAttribute('aria-expanded', String(game.classList.contains('seats-open')));
 }
 
 /** 座位视图切换（FIN-05）：纯显示层切换 —— 不清笔记草稿、不改已选目标、不重新建局 */
@@ -2628,7 +2667,7 @@ function setSeatView(view) {
 }
 
 /** 笔记右栏模式（FIN-05）：≥1280px 常驻右栏（.docked），更窄时回到既有抽屉机制 */
-function notesDocked() { return !!(window.matchMedia && matchMedia('(min-width: 1280px)').matches); }
+function notesDocked() { return !!(window.matchMedia && matchMedia('(min-width: 961px)').matches); }
 
 function applyNotesMode() {
   const d = $('#notes-drawer');
@@ -2833,7 +2872,11 @@ function seatTagSummary(seat) {
   const A_ = A();
   const parts = [];
   if (a.leaning && a.leaning !== 'neutral') parts.push(A_.LEANING_CN[a.leaning] || a.leaning);
-  const rid = (a.candidateRoleIds && a.candidateRoleIds[0]) || a.claimedRoleId;
+  // 三层不许互相冒充（guidance §3.3 :157）：这里的 rid 只用于"有没有内容"的判断，
+  // **渲染时必须分开**（见 seatTagSummary 与笔记列表里的 anno-layer-* 三个类名）。
+  const guessRoleId = (a.candidateRoleIds && a.candidateRoleIds[0]) || null; // 我的推测
+  const claimRoleId = a.claimedRoleId || null;                                 // 玩家自称
+  const rid = guessRoleId || claimRoleId;
   const r = rid && state.meta.roles && state.meta.roles[rid];
   if (r) parts.push(`${r.emoji}${r.name}`);
   return parts.join(' · ') || null;
@@ -3209,7 +3252,11 @@ function renderNotesList() {
     main.appendChild(nm);
     const sum = seatTagSummary(Number(seat));
     if (sum) main.appendChild(elText('div', 'hint', sum));
-    if (a.claimedRoleId && state.meta.roles[a.claimedRoleId]) main.appendChild(elText('div', 'hint', `自称：${state.meta.roles[a.claimedRoleId].name}`));
+    // 我的推测（anno-layer-guess）与玩家自称（anno-layer-claim）各占一行、各有类名，
+    // 不合并成一个字符串 —— 否则"推测"会被读成"系统真相"（guidance §3.3 :157 明文禁止）。
+    const guessId = (a.candidateRoleIds && a.candidateRoleIds[0]) || null;
+    if (guessId && state.meta.roles[guessId]) main.appendChild(elText('div', 'hint anno-layer-guess', `我的推测：${state.meta.roles[guessId].name}`));
+    if (a.claimedRoleId && state.meta.roles[a.claimedRoleId]) main.appendChild(elText('div', 'hint anno-layer-claim', `自称：${state.meta.roles[a.claimedRoleId].name}`));
     if (a.note) main.appendChild(elText('div', 'hint', a.note));
     if (a.day) main.appendChild(elText('div', 'hint', `记录于第${a.day}天${a.phase ? ` · ${PHASE_LABEL[a.phase] || a.phase}` : ''}`));
     row.appendChild(main);

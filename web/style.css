@@ -768,7 +768,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
    行高 minmax(0,1fr)：三栏各自内部滚动，历史再长也不把整页撑高。 */
 .game-layout {
   flex: 1 1 auto; min-height: 0; display: grid;
-  grid-template-columns: 240px minmax(0, 1fr) 300px;
+  grid-template-columns: 240px minmax(0, 1fr) 320px;
   grid-template-rows: minmax(0, 1fr);
   gap: var(--sp-4);
   padding: var(--sp-3) var(--sp-4) 0;
@@ -1432,10 +1432,30 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
    1024–1279：右栏自动变抽屉（JS 按 matchMedia 摘掉 .docked），发言优先；
    <900：紧凑单栏重排，座位在上、事件流在下。
    ============================================================ */
-@media (max-width: 1279px) {
+@media (max-width: 960px) {
   .game-layout,
   #screen-game.notes-collapsed .game-layout,
-  #screen-game.has-coach .game-layout { grid-template-columns: 240px minmax(0, 1fr); }
+  #screen-game.has-coach .game-layout { grid-template-columns: minmax(0, 1fr); }
+  /* ≤960 时玩家区已是脱离文档流的抽屉 ⇒ 不能再留 240px 的空列（否则左侧空一条带）。
+     收成单列，让发言区回到第 1 列；复盘面板同样归第 1 列。 */
+  .stream-wrap { grid-column: 1; }
+  #screen-game.has-coach .coach-panel { grid-column: 1; }
+  /* guidance §3.3 :156：低于 960px 时"玩家和笔记"都改抽屉（不是只在 900px 把三栏堆成超长页）。
+     玩家区脱离文档流，默认停在屏幕左侧之外，由顶栏开合控件加 .seats-open 才滑入；
+     ≥961px 时不命中本断点，.left-col 仍是常驻左栏，行为不变。 */
+  .left-col {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 60;
+    width: min(300px, 86vw);
+    padding: var(--sp-3);
+    background: var(--card);
+    border-right: 1px solid var(--line-dim);
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45);
+    transform: translateX(-102%);
+    transition: transform var(--dur, .18s) var(--ease-out, ease-out);
+    overflow-y: auto;
+  }
+  #screen-game.seats-open .left-col { transform: none; }
+  #btn-seats-toggle { display: inline-flex; }
   #screen-game.has-coach .game-layout { grid-template-rows: minmax(0, 1fr) auto; }
   #screen-game.has-coach .coach-panel { grid-column: 2 / -1; grid-row: 2; }
 }
@@ -1471,7 +1491,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   .stream { padding-right: 0; }
 }
 /* 矮窗口（笔记本小窗）：首页品牌行压缩，保证「开始」与设置区可达 */
-@media (min-width: 901px) and (max-height: 800px) {
+@media (min-width: 961px) and (max-height: 800px) {
   .hero { padding-top: var(--sp-4); padding-bottom: calc(var(--sp-3) + 82px); }
   .hero-emblem { width: 88px; height: 88px; }
   .home-hero { padding-top: var(--sp-4); }
