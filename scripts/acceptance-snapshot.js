@@ -67,7 +67,11 @@ function step(name, cmd, args, opts) {
 // ── 0. 提交与工作区 ──────────────────────────────────────────────────────────
 const status = git(['status', '--porcelain']);
 // 白名单：被本仓明确排除在设计目录之外的素材（未纳入版本库，属已知事项，不算"工作区脏"到要判红）
-const allow = [/^\?\? design\/card-frames\/?$/];
+// 白名单分两类，都不是"源码脏改"：
+//  ① design/card-frames/：设计素材未纳入版本库，属已知事项（见台账 §16.36.6）
+//  ② artifacts/acceptance/：**本脚本自己的输出目录**。不豁免它，脚本第二次运行就会把上一次的产物
+//     当成"工作区脏"判红——那是自指噪声，不是提交与制品不一致。快照是否入库由人决定，与"源码是否干净"无关。
+const allow = [/^\?\? design\/card-frames\/?$/, /^\?\? artifacts\/acceptance\//];
 const dirty = status.split('\n').map((s) => s.trim()).filter(Boolean).filter((s) => !allow.some((re) => re.test(s)));
 record('提交与工作区：工作区干净（除 design/card-frames 未跟踪，见台账 §16.36.6）',
   dirty.length === 0, dirty.length ? ('未提交改动 ' + dirty.length + ' 项：' + dirty.slice(0, 3).join(' ; ')) : ('HEAD ' + SHORT));

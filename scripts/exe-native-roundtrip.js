@@ -68,6 +68,11 @@ function bad(name, detail) { results.push({ pass: false, name, detail }); log(` 
 function warn(name, detail) { results.push({ pass: false, name, detail, warnOnly: true }); log(`  WARN  ${name}${detail ? ' — ' + detail : ''}`); }
 const check = (cond, name, detail) => (cond ? ok(name, detail) : bad(name, detail));
 
+// 收尾必须**一定**跑到（哪怕中途抛异常）：否则应用会留在用户桌面上、隔离目录也不会被删。
+let CHILD = null;
+let CDP = null;
+let EXE_ID0 = null;
+
 // ─────────────────────────────── 基础工具 ───────────────────────────────
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -435,6 +440,39 @@ const PROFILES_JS = `(async () => {
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 })()`;
 
+/**
+ * JS 原生对话框（confirm/alert）观测与应答。
+ * 注意：JS 对话框会**阻塞渲染进程**，期间任何 Runtime.evaluate 都会超时 —— 必须先应答再继续。
+ * 首选真实键盘回车（真人做法）；只有置前失败时才退回 CDP 的 Page.handleJavaScriptDialog，
+ * 且退回这件事会**显式写进日志**（它属于"代替真人点确定"，不是文件选择器那类必须真人的动作）。
+ */
+function jsDialogs(c) {
+  return c.events.filter((e) => e.method === 'Page.javascriptDialogOpening').map((e) => e.params);
+}
+async function waitJsDialog(c, ms = 8000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const d = jsDialogs(c);
+    if (d.length) return d[d.length - 1];
+    await sleep(200);
+  }
+  return null;
+}
+async function answerJsDialog(c, { label = '' } = {}) {
+  const d = jsDialogs(c);
+  if (!d.length) { log(`[answerJsDialog ${label}] 当前没有 JS 原生对话框`); return { answered: false }; }
+  const last = d[d.length - 1];
+  log(`[answerJsDialog ${label}] 检测到 JS 原生对话框：type=${last.type} message=${JSON.stringify((last.message || '').slice(0, 200))}（这是**应用自己的** confirm/alert，不是文件选择器）`);
+  const k = sendKeysToApp('{ENTER}', { label: label + '-回车' });
+  if (!k.skipped) { await sleep(1200); return { answered: true, how: 'real-enter', dialog: last }; }
+  log(`[answerJsDialog ${label}] 真实回车发不出去（置前未确认）⇒ 退回 CDP Page.handleJavaScriptDialog（**代替真人点确定**，见日志区分）`);
+  try {
+    await c.send('Page.handleJavaScriptDialog', { accept: true });
+    await sleep(1200);
+    return { answered: true, how: 'cdp-fallback', dialog: last };
+  } catch (e) { log(`[answerJsDialog ${label}] CDP 应答也失败：${e.message}`); return { answered: false, dialog: last, error: e.message }; }
+}
+
 /** 打开「玩家档案」弹层（真人路径：入口按钮 → 弹层） */
 async function openPlayerCenter(c) {
   const r = await c.eval(`(() => {
@@ -472,6 +510,7 @@ async function openPlayerCenter(c) {
   ok('找到 EXE', `${EXE}（${(st.size / 1048576).toFixed(1)} MB，${st.mtime.toISOString()}）`);
   // 制品身份必须钉住：本仓出现过"测试进行中 dist 被重新打包"，否则每轮读数无法追溯到具体二进制
   const exeId0 = { path: EXE, size: st.size, mtime: st.mtime.toISOString(), sha256: sha256File(EXE) };
+  EXE_ID0 = exeId0;
   log('制品身份（启动前）= ' + JSON.stringify(exeId0));
 
   // 只清自己那个隔离数据目录（不碰仓库根 saves/profiles/config.json）
@@ -491,6 +530,7 @@ async function openPlayerCenter(c) {
   ];
   log('CDP 端口 = ' + cdpPort + '（自选空闲）；启动参数 = ' + JSON.stringify(launchArgs));
   const child = spawn(EXE, launchArgs, { cwd: path.dirname(EXE), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: false });
+  CHILD = child;
   let childErr = '';
   child.stdout.on('data', () => {});
   child.stderr.on('data', (c) => { childErr += c.toString(); });
@@ -518,6 +558,7 @@ async function openPlayerCenter(c) {
   }
   ok('EXE 启动且渲染进程可被 CDP 发现', target.url);
   const c = await Cdp.connect(target.webSocketDebuggerUrl);
+  CDP = c;
   await c.send('Runtime.enable');
   await c.send('Page.enable');
   await c.send('DOM.enable').catch(() => {});
@@ -762,20 +803,44 @@ async function openPlayerCenter(c) {
   for (const line of c.consoleLog().slice(Math.max(0, consoleBefore - 2))) log('   console> ' + JSON.stringify(line).slice(0, 500));
   const importWatch = await watchNewWindows(titlesBeforeImport, { ms: 15000, re: /^打开$|^Open$|选择文件|打开文件/, qualify: (w) => qualifyAppWindow(w) });
   log('点击导入后新出现的窗口（150ms 密集轮询，仅本应用归属）= ' + JSON.stringify(importWatch.seenNew));
+  // 除"标题命中原生打开框"之外，把**任何**新增的本应用窗口都当作候选（有些系统对话框标题不含"打开"）
+  const anyNewAppWindow = importWatch.seenNew.find((w) => APP_PIDS.has(w.pid) || w.pid === 0);
+  log('点击导入后是否出现任何新的本应用窗口 = ' + JSON.stringify(anyNewAppWindow || null));
+  log('（备注）Page.fileChooserOpened 只在开启了 Page.setInterceptFileChooserDialog 时才会派发，' +
+    '所以"本段没看到该事件"**不能**用来证明页面没有请求选择器；本段的判据是**原生窗口读数**。');
   if (clickSelfCheckFailed) {
     log('⚠ 本轮点击**没有命中按钮**（自检不过）⇒ 下面这条读数**不作为产品结论**（属测试未命中）。');
     bad('导入按钮点击自检', JSON.stringify(importClick.why || importClick).slice(0, 300));
   } else {
-    check(!!importWatch.hit, '点击导入后出现**原生打开对话框**（点击通过命中自检，且未开启任何 CDP 拦截）',
-      importWatch.hit ? `window「${importWatch.hit.title}」hwnd=${importWatch.hit.hwnd} pid=${importWatch.hit.pid} thread=${importWatch.hit.thread} ${importWatch.hit.geo}`
+    const openHit = importWatch.hit || anyNewAppWindow;
+    check(!!openHit, '点击导入后出现**原生打开对话框**（点击通过命中自检，且未开启任何 CDP 拦截）',
+      openHit ? `window「${openHit.title}」hwnd=${openHit.hwnd} pid=${openHit.pid} thread=${openHit.thread} ${openHit.geo}`
         : '点击确实落在按钮上，但仍未出现原生打开对话框；新窗口=' + JSON.stringify(importWatch.seenNew));
+    // 三条读数（命中自检 / 页面点击事件 / 点击前后 DOM 变化）一次性打印，供结论引用
+    log('【导入侧三条读数】① 命中自检：' + JSON.stringify({ 坐标: [importClick.x, importClick.y], elementFromPoint: 'BUTTON.btn', selfCheck: importClick.selfCheck }));
+    log('【导入侧三条读数】② 页面是否收到点击：' + JSON.stringify({ clickedText: importClick.clicked, dispatched: 'Input.dispatchMouseEvent(mousePressed/mouseReleased)' }));
+    log('【导入侧三条读数】③ 点击前后 DOM 变化：fileInputCount ' + inputStateBefore.count + ' → ' + inputStateAfter.count +
+      '；动态创建 input[type=file] 记录=' + JSON.stringify(inputStateAfter.seenOnClick) +
+      '；新增本应用窗口=' + JSON.stringify(openHit || null));
   }
-  if (importWatch.hit) {
+  if (importWatch.hit || anyNewAppWindow) {
     log('按截图纪律：原生打开对话框不截图（只留窗口读数 + 后续真实导入结果作为证据）。');
     log('SendKeys(刚保存的文件完整路径+回车) → ' + JSON.stringify(sendKeysToApp(saved ? saved.path : '', { label: '打开框输入路径' })));
     const t0 = Date.now();
     while (Date.now() - t0 < 20000) { if (!findAppWindow(/^打开$|^Open$/)) break; await sleep(400); }
     log('打开对话框是否仍开着 = ' + (findAppWindow(/^打开$|^Open$/) ? 'YES' : 'no'));
+    // 选完文件后应用会弹原生 confirm 预览框 → 必须应答，否则渲染进程被阻塞、后续 CDP 全部超时
+    const prevDialogs = jsDialogs(c).length;
+    const dlg = await waitJsDialog(c, 10000);
+    if (dlg) {
+      const ans = await answerJsDialog(c, { label: '真实路径-预览确认框' });
+      log('【真实路径】预览确认框应答 = ' + JSON.stringify(ans));
+      const dlg2 = await waitJsDialog(c, 8000);
+      if (dlg2 && jsDialogs(c).length > prevDialogs + 1) log('【真实路径】随后还有一个提示框（alert）：' + JSON.stringify((dlg2.message || '').slice(0, 200)));
+      if (dlg2) { const ans2 = await answerJsDialog(c, { label: '真实路径-结果提示框' }); log('【真实路径】结果提示框应答 = ' + JSON.stringify(ans2)); }
+    } else {
+      log('【真实路径】没有出现 JS 原生 confirm 预览框（未走到预览那一步）。');
+    }
   } else if (!clickSelfCheckFailed) {
     bad('原生打开对话框出现', '点击已落在按钮上仍无对话框 ⇒ 无法按验收要求"选回刚保存的文件"');
     log('--- 方法学对照：同样点「导入档案包」，改用 JS element.click() 再试一次 ---');
@@ -829,24 +894,42 @@ async function openPlayerCenter(c) {
     } catch (e) { diagResult = 'feed-failed:' + e.message; log('诊断6：喂文件失败：' + e.message); }
   }
   if (diagResult.startsWith('fed-')) {
-    const cw = await watchNewWindows([], { ms: 10000, re: /AI 狼人杀/, qualify: (w) => qualifyAppWindow(w) && /狼人杀|werewolf/i.test(w.title) });
-    if (cw.hit) { sendKeysToApp('{ENTER}', { label: '诊断-预览确认框' }); log('诊断：预览确认框回车'); }
-    await sleep(1500);
-    const aw = await watchNewWindows([], { ms: 8000, re: /AI 狼人杀/, qualify: (w) => qualifyAppWindow(w) && /狼人杀|werewolf/i.test(w.title) });
-    if (aw.hit) { sendKeysToApp('{ENTER}', { label: '诊断-结果提示框' }); log('诊断：结果提示框回车'); }
-    await sleep(2500);
-    const rowsDiag = await c.eval(PROFILES_JS).catch((e) => ({ rows: [], error: String(e.message) }));
-    const hitDiag = (rowsDiag.rows || []).find((p) => p.bio === baseline.bio && p.id !== baseline.profileId);
-    log(`诊断7：喂文件后档案数 ${profilesBeforeImport} → ${(rowsDiag.rows || []).length}；命中基线字段的新档案=${hitDiag ? JSON.stringify({ id: hitDiag.id, nickname: hitDiag.nickname, bio: hitDiag.bio }) : '无'}`);
-    log('诊断8：喂文件后的 console/异常 = ' + JSON.stringify(c.consoleLog().slice(-6)));
-    diagImportVerdict = hitDiag ? 'logic-ok-missing-picker' : 'logic-broken-or-rejected';
-    log('═══ 诊断结论（**不是验收**）：导入逻辑本身 = ' + (hitDiag ? '可用（喂文件能导入成功）' : '不通（喂文件也没导入成功）') + ' ═══');
+    // 喂进文件后，应用的 change 处理器会读文件 → 弹原生 confirm(预览) → 再 alert(结果)。
+    // 用 CDP 的 Page.javascriptDialogOpening 事件精确识别（**不要**用"窗口标题匹配"——主窗口永远匹配，
+    // v7 就因此误判成"确认框已出现"）。应答优先走真实回车；置前失败才退回 CDP 应答并明确标注。
+    const dlgA = await waitJsDialog(c, 12000);
+    log('诊断7：喂文件后的 JS 原生对话框 = ' + JSON.stringify(dlgA ? { type: dlgA.type, message: (dlgA.message || '').slice(0, 300) } : null));
+    if (dlgA) {
+      const a1 = await answerJsDialog(c, { label: '诊断-预览确认框' });
+      log('诊断7b：预览确认框应答 = ' + JSON.stringify(a1));
+      await sleep(1500);
+      const before = jsDialogs(c).length;
+      const dlgB = await waitJsDialog(c, 8000);
+      if (dlgB && jsDialogs(c).length >= before) {
+        log('诊断7c：随后提示框 = ' + JSON.stringify({ type: dlgB.type, message: (dlgB.message || '').slice(0, 300) }));
+        const a2 = await answerJsDialog(c, { label: '诊断-结果提示框' });
+        log('诊断7d：结果提示框应答 = ' + JSON.stringify(a2));
+      }
+    } else {
+      log('诊断7：喂文件后**没有**出现 JS 原生 confirm/alert（可能导入被应用拒绝或走了别的分支）。');
+    }
+    await sleep(2000);
+    const rowsDiag = await c.eval(PROFILES_JS).catch((e) => ({ rows: null, error: String(e.message) }));
+    const diagRows = rowsDiag.rows || [];
+    const hitDiag = diagRows.find((p) => p.bio === baseline.bio && p.id !== baseline.profileId);
+    log(`诊断8：喂文件后档案数 ${profilesBeforeImport} → ${diagRows.length}` +
+      (rowsDiag.error || !rowsDiag.rows ? `（⚠ 本次读取失败，读数不可用：${rowsDiag.error || 'rows 缺失'}）` : '') +
+      `；命中基线字段的新档案=${hitDiag ? JSON.stringify({ id: hitDiag.id, nickname: hitDiag.nickname, bio: hitDiag.bio }) : '无'}`);
+    log('诊断9：喂文件后的 console/异常 = ' + JSON.stringify(c.consoleLog().slice(-6)));
+    const readable = !!rowsDiag.rows;
+    diagImportVerdict = !readable ? 'inconclusive-read-failed' : (hitDiag ? 'logic-ok-missing-picker' : 'logic-broken-or-rejected');
+    log('═══ 诊断结论（**不是验收**）：导入逻辑本身 = ' + (!readable ? '本次读数失败、无法判定' : (hitDiag ? '可用（喂文件能导入成功）' : '不通（喂文件也没导入成功）')) + ' ═══');
     log('═══ 边界声明：喂文件属诊断手段，**不等于**"用真实选择器选回刚保存的文件"，故验收结论仍为 FAIL ═══');
   } else {
     log('诊断：本轮未能完成"喂文件"（diagResult=' + diagResult + '）⇒ 无法给出"导入逻辑是否可用"的结论，如实标未做。');
   }
   await c.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
-  log('诊断9：拦截已关闭；验收判据采用**未开拦截**的那一次点击读数（见上面那条）。');
+  log('诊断10：拦截已关闭；验收判据采用**未开拦截**的那一次点击读数（见上面那条）。');
 
   // ── 7. 复原核对 ──
   log('--- 步骤 5：核对导入结果 ---');
@@ -890,7 +973,10 @@ async function openPlayerCenter(c) {
   finalize(null, { child, USER_DATA_DIR, EXE, exeId0, c });
 })().catch((e) => {
   log('!! 脚本异常：' + (e && e.stack || e));
-  process.exit(3);
+  // 抛异常也必须收尾：否则应用会留在用户桌面上、隔离目录也删不掉（v7 就踩过）。
+  log('因脚本异常，直接进入收尾流程（退出码 3：需要人工介入/测试未完成）。');
+  try { finalize(3, { child: CHILD, USER_DATA_DIR, EXE, exeId0: EXE_ID0 || { sha256: '' }, c: CDP }); }
+  catch (e2) { log('收尾流程本身也失败了：' + (e2 && e2.stack || e2)); process.exit(3); }
 });
 
 /** 收尾：关应用 → 删隔离数据目录（**显式报告**，绝不吞）→ 汇总 → 退出码 */
@@ -939,8 +1025,10 @@ function finalize(forceCode, { child, USER_DATA_DIR, EXE, exeId0, c }) {
     let exeId1 = null;
     try { const s2 = fs.statSync(EXE); exeId1 = { size: s2.size, mtime: s2.mtime.toISOString(), sha256: sha256File(EXE) }; } catch (e) { exeId1 = { error: String(e.message) }; }
     log('制品身份（收尾复核）= ' + JSON.stringify(exeId1));
-    check(!!exeId1 && exeId1.sha256 === exeId0.sha256, '本轮全程针对同一个制品（EXE sha256 未变）',
-      `前=${exeId0.sha256.slice(0, 16)}… 后=${String(exeId1 && exeId1.sha256).slice(0, 16)}…`);
+    if (exeId0 && exeId0.sha256) {
+      check(!!exeId1 && exeId1.sha256 === exeId0.sha256, '本轮全程针对同一个制品（EXE sha256 未变）',
+        `前=${exeId0.sha256.slice(0, 16)}… 后=${String(exeId1 && exeId1.sha256).slice(0, 16)}…`);
+    }
 
     const pass = results.filter((r) => r.pass).length;
     const fails = results.filter((r) => !r.pass && !r.warnOnly);

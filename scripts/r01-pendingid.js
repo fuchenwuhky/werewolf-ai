@@ -426,7 +426,6 @@ async function prepareScenario(spec) {
     if (res.code !== 200) return { err: `造局失败 ${res.code} ${JSON.stringify(res.body).slice(0, 160)}` };
     const g = { ...res.body, seed };
     await api('POST', `/api/games/${g.gameId}/start`, { token: g.playerToken });
-    let okSeed = false;
     for (let step = 0; step < 60; step++) {
       const v = await viewOf(g);
       if (v.finished) break;
@@ -455,7 +454,6 @@ async function prepareScenario(spec) {
             continue;
           }
         }
-        okSeed = true;
         return { g, seed, pending: p, role: v.me.role, view: v };
       }
       await answerAsSetup(g, p, `推进到 ${spec.task}（seed ${seed}）`);
@@ -699,7 +697,7 @@ async function dismissOverlays() {
     }
     return out;
   })()`);
-  for (const a of acts) { await browser.realClick('#tmp-r01-flipdone'); await sleep(250); }
+  for (let i = 0; i < acts.length; i++) { await browser.realClick('#tmp-r01-flipdone'); await sleep(250); }
   return acts;
 }
 
@@ -746,6 +744,8 @@ async function runScenario(spec) {
     const serverIdAtPanel = serverPending ? serverPending.pendingId : null;
     check(`${spec.label}：页面面板武装的 pendingId 与服务端当时的 pending 一致（面板期冻结，非临时取最新）`,
       !!armedId && armedId === serverIdAtPanel, `面板武装=${armedId} 服务端当时=${serverIdAtPanel} 服务端任务=${serverPending && serverPending.task}`);
+    // 点击**之前**先留一张"待操作面板"截图：这是本次真实点击所依据的那个面板
+    await browser.shot(path.join(OUT, `${spec.id}-panel.png`));
 
     // ---- 真实点击：选目标（目标类任务）/ 输入文本（发言类任务） ----
     let inputNote = '';
@@ -795,7 +795,7 @@ async function runScenario(spec) {
     if (cap.err) { check(`${spec.label}：真实点击提交并捕获到浏览器请求`, false, cap.err); return; }
     log(`  · 点击控件=「${(cap.tag && cap.tag.label) || '?'}」 realClick=${cap.clickRes}（第 ${cap.attempt} 次即捕获）`);
 
-    const { body, summary } = judgeRequest(cap.req, armedId, spec.id);
+    const { summary } = judgeRequest(cap.req, armedId, spec.id);
     summary.clickedControl = (cap.tag && cap.tag.label) || null;
     summary.input = inputNote; summary.target = targetNote;
     summary.witch = witchNote || null;
@@ -807,7 +807,7 @@ async function runScenario(spec) {
     check(`${spec.label}：请求体里的 pendingId == 当时面板武装的 ID`, summary.match, `sent=${summary.sentPendingId} 面板武装=${armedId}`);
 
     // 等响应码落地
-    const resp = await waitUntil(() => ({ ok: cap.req.status != null, status: cap.req.status }), { timeout: 4000, interval: 80 });
+    await waitUntil(() => ({ ok: cap.req.status != null, status: cap.req.status }), { timeout: 4000, interval: 80 });
     check(`${spec.label}：该次提交被服务端接受（200）`, cap.req.status === 200, `status=${cap.req.status} body=${(await browser.getResponseBody(cap.req)) || ''}`);
 
     const after = await waitUntil(async () => {
