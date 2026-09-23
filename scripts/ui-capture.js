@@ -64,6 +64,31 @@ const PREFIX = [
   ['12b-', { route: '/', page: 'desktop-annotation-deleted' }],
   ['08-', { route: '/', page: 'desktop-coach-text' }],
   ['10-', { route: '/', page: 'desktop-resume-card' }],
+  // 余下前缀按 ui-check 的实际命名补齐：不补就会落到 unregistered__root__…
+  // （那样只有实测视口与源文件名可核，路由与页面名这条证据是弱的）。
+  ['01-', { route: '/', page: 'desktop-loading-guard' }],
+  ['02-', { route: '/', page: 'desktop-setup-top' }],
+  ['02b-', { route: '/', page: 'desktop-setup-lower' }],
+  ['02c-', { route: '/', page: 'desktop-codex' }],
+  ['02d-', { route: '/', page: 'desktop-codex-dynamic' }],
+  ['03-', { route: '/', page: 'desktop-english' }],
+  ['04-', { route: '/', page: 'desktop-offline' }],
+  ['05-', { route: '/m/', page: 'mobile-boards' }],
+  ['06-', { route: '/m/', page: 'mobile-rules' }],
+  ['06b-', { route: '/m/', page: 'mobile-codex' }],
+  ['06c-', { route: '/m/', page: 'mobile-codex-detail' }],
+  ['06d-', { route: '/m/', page: 'mobile-codex-page2' }],
+  ['06e-', { route: '/m/', page: 'mobile-profile-trash' }],
+  ['09-', { route: '/', page: 'desktop-trash-empty' }],
+  ['09b-', { route: '/', page: 'desktop-trash-list' }],
+  ['09c-', { route: '/', page: 'desktop-trash-restored' }],
+  ['09d-', { route: '/', page: 'desktop-trash-after-fail' }],
+  ['13b-', { route: '/m/', page: 'mobile-gear-settings' }],
+  ['13c-', { route: '/m/', page: 'mobile-summary' }],
+  ['13d-', { route: '/m/', page: 'mobile-esc-close' }],
+  ['13e-', { route: '/m/', page: 'mobile-annotation-cleared' }],
+  ['20a-', { route: '/m/', page: 'mobile-avatar-crop' }],
+  ['20b-', { route: '/m/', page: 'mobile-avatar-after-delete' }],
 ];
 const metaOf = (f) => { const hit = PREFIX.find(([p]) => f.startsWith(p)); return hit ? hit[1] : {}; };
 
