@@ -3109,16 +3109,36 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       // FIX-17：状态条要在**玩家真的看得见**的状态下量几何。身份翻牌浮层（#role-overlay）是开局必经的
       // 全屏层，它开着的时候状态条本来就被压在下面（第一次跑就是这样红的：hit=#role-overlay）。
       // 先按真实鼠标"我记住了，开始游戏"把它收掉 —— 收掉浮层本身也是一次真实可点击的证据。
-      const ovBefore = await b.eval(`(() => { const o = document.getElementById('role-overlay'); return { shown: !!o && !o.classList.contains('hidden') }; })()`);
+      // ⚠ 它也是**异步**弹的：本文件在 §3 桌面触点门禁那段实测过"读一次还是 hidden，下一拍就弹出来了"。
+      //   所以"读一次就下结论"在这里不成立 —— 本次 --full 实测就是这么红的：前置 check 读到
+      //   {"shown":false} 判过，紧接着 probe 量到的遮挡物就是浮层里的 img.cb-img（card_back.png，
+      //   index.html:450 —— 全项目唯一的 .cb-img，只出现在 #role-overlay 的翻牌背面上）。
+      //   改成"见到就按真实鼠标收掉 + 连续 3 拍（约 450ms）确认都是收起态"，判据一点没放宽：
+      //   状态条仍必须可见、非零尺寸、且中心点命中它自己（checkGeometry 原样）。
+      const ovShown = () => b.eval(`(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`);
+      let extraFlips = 0;
+      const settleOverlay = async () => {
+        let quiet = 0;
+        for (let i = 0; i < 60 && quiet < 3; i++) {
+          if (await ovShown()) {
+            quiet = 0;
+            if (extraFlips < 3) { await b.realClick('#btn-flip-done'); extraFlips++; }
+            await sleep(200);
+          } else { quiet++; await sleep(150); }
+        }
+        return quiet >= 3;
+      };
+      const ovBefore = { shown: await ovShown() };
       let flipClick = '未开（无需收起）';
       if (ovBefore.shown) {
         flipClick = await b.realClick('#btn-flip-done');
         await waitExpr('P4-6：身份翻牌浮层已收起（此后状态条才真的可见）',
           `document.getElementById('role-overlay')?.classList.contains('hidden') === true`, { timeout: 6000 });
       }
+      const ovSettled = await settleOverlay();
       check('FIX-17 状态条前置：身份翻牌浮层已收起（状态条此刻真的没有被全屏层压住）',
-        await b.eval(`document.getElementById('role-overlay')?.classList.contains('hidden') === true`),
-        `浮层初始=${JSON.stringify(ovBefore)} realClick=${flipClick}`);
+        ovSettled && await b.eval(`document.getElementById('role-overlay')?.classList.contains('hidden') === true`),
+        `浮层初始=${JSON.stringify(ovBefore)} realClick=${flipClick} 追加收起=${extraFlips} 稳定=${ovSettled}`);
       // FIX-17：状态条（P4-6 的主角）也要量几何 + 遮挡（它在事件流里，先滚进视口再量）
       const barSet = await b.eval(`(() => {
         if (typeof setStreamStatus !== 'function') return { unavailable: true, count: -1, text: 'setStreamStatus 不可见（可能被 IIFE 包住）' };
@@ -3127,7 +3147,15 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         const els = [...document.querySelectorAll('#stream-status')];
         return { unavailable: false, count: els.length, text: els.map((e) => e.textContent).join(' | ') };
       })()`);
-      const barProbe = barSet.unavailable ? { found: false } : await b.probe('#stream-status', { scroll: true });
+      let barProbe = barSet.unavailable ? { found: false } : await b.probe('#stream-status', { scroll: true });
+      if (!barSet.unavailable && barProbe.hitSelf !== true) {
+        // 浮层在这个窗口里二次弹出（异步竞态，见上）时再收一次、再量一次。
+        // ⚠ 只重试"量这一次"，判据不变：复量出来的结果照样要 hitSelf=true 才算过。
+        const first = { coveredBy: barProbe.coveredBy, hit: barProbe.hit };
+        const again = await settleOverlay();
+        barProbe = await b.probe('#stream-status', { scroll: true });
+        log(`  · 状态条第一次量到被遮挡 ${JSON.stringify(first)}；收浮层（稳定=${again}）后复量 = ${JSON.stringify({ coveredBy: barProbe.coveredBy, hit: barProbe.hit, hitSelf: barProbe.hitSelf })}`);
+      }
       checkGeometry('FIX-17 状态条：可见、非零尺寸、滚进视口后中心点命中它自己（未被遮挡）', barProbe, { minW: 80, minH: 14 });
       const barAfterRemove = await b.eval(`(() => { setStreamStatus(null); return document.getElementById('stream-status') ? 1 : 0; })()`);
       const bannerState = { count: barSet.count, text: barSet.text, after: barAfterRemove };
