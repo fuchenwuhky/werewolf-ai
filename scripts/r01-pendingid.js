@@ -849,10 +849,16 @@ async function boundaryStaleePanel() {
       const armed = window.__r01Armed || [];
       return { domTask: box ? (box.dataset.task || '') : '(无)', armedNow: armed.length ? armed[armed.length - 1].pendingId : null, btn: !!document.getElementById('tmp-r01-submit') };
     })()`);
-    check('B1 旧面板：屏幕上仍是旧面板（页面收不到视图更新，武装的仍是旧 ID）',
+    check('B1 旧面板：屏幕上仍是旧面板（页面已停止接收视图更新，武装的仍是旧 ID）',
       stalePanelStillThere.armedNow === armedId, `屏幕上武装=${stalePanelStillThere.armedNow} 面板签名=${stalePanelStillThere.domTask}`);
     check('B1 旧面板：服务端此刻已换成**新任务**（旧 ID 确实过期）',
       !!newP && newP.pendingId !== armedId, `新任务=${newP && newP.task} 新 ID=${newP && newP.pendingId} 旧 ID=${armedId}`);
+    if (stalePanelStillThere.armedNow !== armedId || !newP) {
+      // 脚手架没造出"屏幕旧面板 + 服务端新任务"这个前提 → 如实记未验证，不拿它当产品失败
+      blockedCheck('B1 旧面板：未能造出"屏幕停在旧面板、服务端已换新任务"的前提',
+        `屏幕上武装=${stalePanelStillThere.armedNow}（期望仍为 ${armedId}）服务端新任务=${newP && newP.task}`);
+      return;
+    }
 
     const actsBefore = (((await viewOf(g)).events) || []).length;
     const cap = await clickSubmitAndCapture('发送发言|留下遗言|发言', 'B1 旧面板');

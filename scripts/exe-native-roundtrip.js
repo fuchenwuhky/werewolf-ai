@@ -144,25 +144,31 @@ function ensureAppPids(rootPid) {
   return { retried: again.names || again, set: [...APP_PIDS] };
 }
 /**
- * 可见顶层窗口。行格式：hwnd|pid|WxH@x,y|<flag><title>|thread=<owningThreadId>
+ * 可见顶层窗口。行格式：hwnd|pid|thread=<owningThreadId>|WxH@x,y|<title>（title 放最后，可含 '|'）
  * appOnly=true 时 PowerShell 侧就按 PID 白名单过滤 ⇒ 用户桌面上其它应用的标题**根本不会进入日志**。
  */
 function listWindows({ appOnly = true, qualify = null } = {}) {
   const r = ps('list-windows', appOnly ? [...APP_PIDS].join(',') : '');
   if (r.code !== 0) return { error: r.err || ('exit ' + r.code), windows: [] };
   const windows = r.out.split(/\r?\n/).filter(Boolean).map((l) => {
-    const [hwnd, pidStr, geo, ...rest] = l.split('|');
-    const joined = rest.join('|');
-    const thread = (joined.match(/\|thread=(\d+)\s*$/) || [])[1];
-    const title = joined.replace(/\|?thread=\d+\s*$/, '').replace(/^pid0\(系统对话框\/无主\)/, '');
-    return { hwnd: Number(hwnd), pid: Number(pidStr), thread: thread ? Number(thread) : null, geo, app: APP_PIDS.has(Number(pidStr)), title };
+    const parts = l.split('|');
+    const hwnd = Number(parts[0]);
+    const pid = Number(parts[1]);
+    const thread = Number((parts[2] || '').replace(/^thread=/, '')) || null;
+    const geo = parts[3] || '';
+    const title = parts.slice(4).join('|');
+    return { hwnd, pid, thread, geo, app: APP_PIDS.has(pid), title };
   });
   return { error: null, windows: qualify ? windows.filter(qualify) : windows };
 }
-/** 本应用所有窗口的 owning thread 集合（无主系统对话框 pid=0 时靠它判归属） */
+/** 本应用所有窗口的 owning thread 集合（无主系统对话框 pid=0 时靠它判归属）；带短缓存避免密集轮询时反复起 PowerShell */
+let _threadCache = { at: 0, set: new Set() };
 function appThreads() {
+  if (Date.now() - _threadCache.at < 3000) return _threadCache.set;
   const { windows } = listWindows({ appOnly: true });
-  return new Set(windows.map((w) => w.thread).filter(Boolean));
+  const set = new Set(windows.filter((w) => APP_PIDS.has(w.pid)).map((w) => w.thread).filter(Boolean));
+  _threadCache = { at: Date.now(), set };
+  return set;
 }
 /**
  * 窗口是否属于"本应用会话"：① pid 在本应用进程树里；或 ② 无主系统对话框（pid=0）但 owning thread
