@@ -603,32 +603,49 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-sheet-foot .btn { flex: 1 1 0; justify-content: center; }
 .m-sheet h4 { margin: var(--sp-2) 0 var(--sp-1); color: var(--gold); font-size: var(--fs-md); letter-spacing: 1px; }
 
-/* 弹层内表单：镜像 style.css 的 .modal .mbody 控件样式（style.css 不许动，只能在这里补） */
+/* 弹层内表单：镜像 style.css 的 .modal .mbody 控件样式（style.css 不许动，控件皮肤在本文件统一维护）。
+   R03 起这份皮肤由独立页与弹层**共用**，见下方共享选择器组。 */
 .m-sheet .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin: var(--sp-2) 0 var(--sp-3); }
 .m-sheet label {
   display: flex; flex-direction: column; gap: var(--sp-2);
   margin: 0 0 var(--sp-3); color: var(--text-dim); font-size: var(--fs-md); line-height: 1.5;
 }
-.m-sheet input:not([type=checkbox]):not([type=radio]),
-.m-sheet select,
-.m-sheet textarea {
-  width: 100%; margin: 0; padding: 0 var(--sp-3); min-height: var(--h-ctl);
+/* R03（审核 P2）：共享控件皮肤 —— 弹层（.m-sheet）与独立页（#m-app .pc-field）同一套。
+   审核实测 390×844：独立玩家中心的「当前档案 / 界面字号 / 阅读布局」三个 select 只有 21px 高、
+   「减少动态效果」的可点 label 仅约 22.39px。根因就是这套皮肤此前**只写在 .m-sheet 下**，
+   独立页拿不到，退回浏览器原生小下拉框。故这里抽成一份共享选择器组，而不是给 .m-sheet 追加补丁。
+   触区按 §3 约定取 48px（原生 select 保留，键盘与无障碍能力不变）。 */
+:is(.m-sheet, #m-app .pc-field) input:not([type=checkbox]):not([type=radio]),
+:is(.m-sheet, #m-app .pc-field) select,
+:is(.m-sheet, #m-app .pc-field) textarea {
+  width: 100%; margin: 0; padding: 0 var(--sp-3); min-height: 48px; min-width: 0;
   border: 1px solid var(--line); border-radius: var(--r-sm);
   background: linear-gradient(180deg, rgba(5, 8, 16, .92), rgba(9, 14, 26, .78));
   color: var(--text); font-size: var(--fs-base); font-family: inherit;
   box-shadow: var(--inset-field);
 }
 .m-sheet textarea { height: auto; min-height: 84px; padding: var(--sp-2) var(--sp-3); line-height: 1.6; resize: vertical; }
-.m-sheet input:focus, .m-sheet select:focus, .m-sheet textarea:focus {
+:is(.m-sheet, #m-app .pc-field) input:focus,
+:is(.m-sheet, #m-app .pc-field) select:focus,
+:is(.m-sheet, #m-app .pc-field) textarea:focus {
   outline: none; border-color: var(--gold); background-color: rgba(13, 20, 38, .95);
   box-shadow: var(--inset-field), var(--ring-soft);
 }
-.m-sheet input::placeholder, .m-sheet textarea::placeholder { color: #616a89; }
-.m-sheet select {
+:is(.m-sheet, #m-app .pc-field) input::placeholder,
+:is(.m-sheet, #m-app .pc-field) textarea::placeholder { color: #616a89; }
+:is(.m-sheet, #m-app .pc-field) select {
   appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 34px;
   background-image: var(--ico-chevron-gold);
   background-repeat: no-repeat; background-position: right 12px center;
 }
+
+/* 独立页的 .pc-field 是「文字 | 控件」的 flex 行（定义在 style.css，两端共用）：
+   控件允许收缩（min-width: 0），长昵称 / 长选项不会把整行撑出视口（R03 要求无横向溢出）；
+   文字侧同样允许收缩换行，不挤占控件。 */
+#m-app .pc-field { min-height: 48px; }
+#m-app .pc-field > span { flex: 0 1 auto; min-width: 0; }
+#m-app .pc-field > select,
+#m-app .pc-field > input:not([type=checkbox]) { flex: 1 1 auto; min-width: 0; }
 
 /* 弹层里的档案列表复用 style.css 的 .pm-*；高度交给 .m-sheet-body 滚动 */
 #m-sheet .pm-list { max-height: none; }

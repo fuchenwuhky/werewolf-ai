@@ -177,6 +177,7 @@ const PLANNED_SECTIONS = [
   'P4-6 推送降级状态条（单例）',
   'P4-3 空刀拦截（真实点击）',
   'R01 真人操作 pendingId（真实点击 + 真实请求）',
+  'R03 手机玩家中心控件触区（真实几何）',
   'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
   '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
@@ -2175,7 +2176,116 @@ class Browser {
     // 并守住 #m-sheet 的 §3 触区（48/52）—— #m-sheet 在 #m-app 之外，不受全局兜底。
     // 这里编辑的是**当前档案**，测完把自定义头像删掉，恢复成它原本的内置徽记（不留给后面的段落）。
     // ------------------------------------------------------------------
-    log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
+    // ---- R03：手机玩家中心控件触区（真实几何；独立页与弹层同一套皮肤）----
+// 审核实测：390×844 下三个 select 仅 21px 高、「减少动态效果」的 label 仅约 22.39px ⇒ 触区不达标。
+// 根因是这套控件皮肤只写在 .m-sheet 下，独立页拿不到，于是退回浏览器原生小下拉框。
+// 本段量的是**真实渲染矩形**，并用 elementFromPoint 复核"中心点确实命中它自己（或其子节点）"——
+// 既不断言"按钮存在"，也不在 CSS 字面量里找 48（指导文档 §R03 验收硬要求）。
+log('\n=== R03 手机玩家中心控件触区（真实几何）===');
+{
+  const R03_MODES = [
+    { name: '标准字号·阅读', prefs: { fontScale: 1, layout: 'reading', reducedMotion: false } },
+    { name: '大字号·阅读', prefs: { fontScale: 1.25, layout: 'reading', reducedMotion: false } },
+    { name: '标准字号·紧凑', prefs: { fontScale: 1, layout: 'compact', reducedMotion: false } },
+    { name: '大字号·紧凑', prefs: { fontScale: 1.25, layout: 'compact', reducedMotion: false } },
+  ];
+  const r03measure = async () => await b.eval(`(() => {
+    const R = (e) => { if (!e) return null; const r = e.getBoundingClientRect(); const cs = getComputedStyle(e);
+      return { w: Math.round(r.width), h: Math.round(r.height), x: Math.round(r.x), y: Math.round(r.y),
+        vis: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' }; };
+    const hit = (e) => { if (!e) return false; const r = e.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) return false;
+      const t = document.elementFromPoint(Math.round(r.x + r.width / 2), Math.round(Math.min(r.y + r.height / 2, innerHeight - 1)));
+      return !!(t && (t === e || e.contains(t) || t.contains(e))); };
+    const out = { vw: innerWidth, vh: innerHeight, scrollW: document.documentElement.scrollWidth, items: {} };
+    // 先滚进视口再量：320×568 下控件可能在视口之外，那会让 elementFromPoint 拿不到它（与尺寸无关的假红）
+    for (const id of ['m-pc-profile-select', 'm-pc-pref-font', 'm-pc-pref-layout']) {
+      const e = document.getElementById(id);
+      if (e) e.scrollIntoView({ block: 'center' });
+      const m = R(e);
+      out.items[id] = m ? Object.assign(m, { hit: hit(e), tag: e.tagName }) : null;
+    }
+    const cb = document.getElementById('m-pc-pref-motion');
+    if (cb) {
+      const lab = cb.closest('label');
+      if (lab) lab.scrollIntoView({ block: 'center' });
+      // 文字侧取"label 里除勾选框外的第一个元素"（不写死 span：标签可能由脚本重建）
+      const txt = lab ? Array.prototype.slice.call(lab.children).find((n) => n !== cb) : null;
+      const lm = R(lab); const sm = R(txt);
+      const cbr = cb.getBoundingClientRect();
+      // 文字侧可能是**裸文本节点**（该 label 由脚本重建过）⇒ 用 Range 直接量它，别把"量不到"当成通过
+      let textRight = sm ? Math.round(sm.x + sm.width) : null;
+      if (textRight === null && lab) {
+        const tn = Array.prototype.slice.call(lab.childNodes).find((n) => n.nodeType === 3 && n.textContent.trim());
+        if (tn) { const rg = document.createRange(); rg.selectNodeContents(tn);
+          const rr = rg.getBoundingClientRect(); if (rr.width > 0) textRight = Math.round(rr.x + rr.width); }
+      }
+      out.items['m-pc-pref-motion-label'] = lm ? Object.assign(lm, { hit: hit(lab), cbW: Math.round(cbr.width), cbH: Math.round(cbr.height),
+        textRight, ctlLeft: Math.round(cbr.x) }) : null;
+    }
+    const fs0 = document.getElementById('m-pc-pref-font');
+    if (fs0) {
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      const b0 = getComputedStyle(fs0);
+      const before = b0.boxShadow + '|' + b0.outlineWidth + '|' + b0.borderColor;
+      fs0.focus();
+      const b1 = getComputedStyle(fs0);
+      out.focus = { before, after: b1.boxShadow + '|' + b1.outlineWidth + '|' + b1.borderColor, active: document.activeElement === fs0 };
+      fs0.blur();
+    }
+    const sh = document.getElementById('m-pref-font');
+    if (sh && sh.getBoundingClientRect().height > 0) out.items['m-pref-font-sheet'] = Object.assign(R(sh), { hit: hit(sh) });
+    return out;
+  })()`);
+
+  await b.goto(base + '/m/', 2200);
+  await b.realClick('#m-tab-me');
+  await waitExpr('R03：手机端玩家中心独立页已展开（切档下拉出现）', `!!document.getElementById('m-pc-profile-select')`, { timeout: 8000 });
+  for (const vp of [[390, 844], [320, 568]]) {
+    await b.setViewport(vp[0], vp[1], true);
+    await sleep(400);
+    for (const mode of R03_MODES) {
+      await b.eval(`applyProfilePrefs(${JSON.stringify(mode.prefs)})`);
+      await sleep(260);
+      const m = await r03measure();
+      const tag = `R03 ${vp[0]}×${vp[1]} · ${mode.name}`;
+      for (const pair of [['m-pc-profile-select', '「当前档案」下拉'], ['m-pc-pref-font', '「界面字号」下拉'], ['m-pc-pref-layout', '「阅读布局」下拉']]) {
+        const it = m.items[pair[0]];
+        check(`${tag}：${pair[1]} 真实可点高度 ≥48`, !!(it && it.vis && it.hit && it.h >= 48), JSON.stringify(it));
+      }
+      const lab = m.items['m-pc-pref-motion-label'];
+      check(`${tag}：「减少动态效果」可点 label 实测高 ≥48（勾选框图形本身可以小）`, !!(lab && lab.vis && lab.hit && lab.h >= 48), JSON.stringify(lab));
+      check(`${tag}：勾选框图形没被强行放大（≤24px，触区由 label 承担）`, !!(lab && lab.cbH <= 24), JSON.stringify(lab && { cbW: lab.cbW, cbH: lab.cbH }));
+      // ⚠ 这里必须要求"真的是数字"：textRight 为 null 时 `null >= 0` 恒真，会让这条断言**空过**（假绿）。
+      const crowdOk = !!(lab && typeof lab.textRight === 'number' && lab.textRight >= 0 && typeof lab.ctlLeft === 'number' && lab.ctlLeft > lab.textRight);
+      if (lab && typeof lab.textRight === 'number') {
+        check(`${tag}：标签文字不挤占控件（文字右缘 < 控件左缘）`, crowdOk, JSON.stringify({ textRight: lab.textRight, ctlLeft: lab.ctlLeft }));
+      } else {
+        log(`${tag}：· 该 label 内没有可量的文字元素，挤占一项如实记为"量不到"（不计通过）`);
+      }
+      check(`${tag}：无横向溢出（scrollWidth ≤ 视口宽 +1）`, m.scrollW <= m.vw + 1, `scrollWidth=${m.scrollW} vw=${m.vw}`);
+      if (vp[0] === 390 && mode === R03_MODES[0]) {
+        check(`${tag}：焦点可见（聚焦后描边/阴影确有变化，且焦点确实落在该控件上）`,
+          !!(m.focus && m.focus.active && m.focus.before !== m.focus.after), JSON.stringify(m.focus));
+        await b.shot(path.join(SHOTS, 'R03-390x844-手机玩家中心控件.png'));
+      }
+      if (vp[0] === 320 && mode === R03_MODES[0]) await b.shot(path.join(SHOTS, 'R03-320x568-手机玩家中心控件.png'));
+    }
+  }
+  // 弹层那一组也是同一套皮肤（同一次改动必须同时覆盖独立页与弹层），
+  // 但它要先把设置弹层点开才量得到；打不开就如实记，不冒充通过。
+  const sheetProbe = await b.eval(`(() => { const s = document.getElementById('m-pref-font');
+    if (!s) return { found: false }; const r = s.getBoundingClientRect();
+    return { found: true, visible: r.width > 0 && r.height > 0, h: Math.round(r.height) }; })()`);
+  if (sheetProbe && sheetProbe.found && sheetProbe.visible) {
+    check('R03：设置弹层里的下拉与独立页共用同一套皮肤（实测高 ≥48）', sheetProbe.h >= 48, JSON.stringify(sheetProbe));
+  } else {
+    log('· R03：此刻设置弹层未展开，弹层控件触区由既有「设置弹层」段落覆盖，本段只量独立页（如实记）');
+  }
+  await b.eval(`applyProfilePrefs({ fontScale: 1, layout: 'reading', reducedMotion: false })`);
+  await b.goto(base + '/m/', 2200); // 复位成新开的手机页，后面的段落照旧从干净状态起步
+}
+log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
     {
       const FP = `(() => {
         const c = document.getElementById('av-crop-stage');

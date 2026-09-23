@@ -131,8 +131,12 @@ function walkPng(buf, { label = 'PNG' } = {}) {
  * 只查块 CRC 是不够的：一个有 CRC 但 zlib 流损坏 / IDAT 被截断后重算过 CRC 的文件，
  * 结构看完全合法，交给浏览器就是一张破图 —— 那正是 §4.1「不能先清空再上传」要避免的结果。
  * `maxOutputLength` 兼作 zip bomb 上限：解压结果超过期望值就直接失败，不会把内存交出去。
+ *
+ * R07（审核 P2）：长度对**还不够** —— 每行开头的滤波类型字节必须是 0–4。审核已复现：
+ * CRC 正确、512×512、解压长度正确的 PNG，只要某行滤波值是 5/255，交给浏览器依旧是一张破图；
+ * 直接上传与导入包两条路径都能触发。故这里逐行校验（不重算 CRC、不动既有判据）。
  */
-function assertImageDataReadable(buf, chunks, ihdr) {
+function assertImageDataReadable(buf, chunks, ihdr, label = '头像') {
   const idat = chunks.filter((c) => c.type === 'IDAT');
   const first = chunks.findIndex((c) => c.type === 'IDAT');
   for (let i = 0; i < idat.length; i++) {
@@ -151,6 +155,15 @@ function assertImageDataReadable(buf, chunks, ihdr) {
   }
   if (raw.length !== expected) {
     throw new AvatarError(`PNG 图像数据长度不符（解压后 ${raw.length} 字节 ≠ 期望 ${expected} 字节）`);
+  }
+  // R07：PNG 规范里每行 = 1 字节滤波类型(0–4) + stride 字节数据。
+  // 只对长度不做这一步，就会出现"结构合法、CRC 正确、长度正确，但解码必崩"的破图被接受。
+  const rowLen = 1 + stride;
+  for (let y = 0; y < ihdr.height; y++) {
+    const t = raw[y * rowLen];
+    if (t > 4) {
+      throw new AvatarError(`${label}的 PNG 图像数据里有非法滤波类型（第 ${y + 1} 行 = ${t}，合法值 0–4）`);
+    }
   }
 }
 
@@ -175,7 +188,7 @@ function validateAvatarBuffer(buf, { label = '头像' } = {}) {
   if (ihdr.width !== AVATAR_SIZE || ihdr.height !== AVATAR_SIZE) {
     throw new AvatarError(`${label}尺寸必须是 ${AVATAR_SIZE}×${AVATAR_SIZE}（实际 ${ihdr.width}×${ihdr.height}）`);
   }
-  assertImageDataReadable(buf, chunks, ihdr);
+  assertImageDataReadable(buf, chunks, ihdr, label);
   return {
     width: ihdr.width, height: ihdr.height, colorType: ihdr.colorType, bitDepth: ihdr.bitDepth,
     bytes: buf.length, sha256: sha256Hex(buf),

@@ -45,26 +45,57 @@ function strideOf({ width, colorType = 6, bitDepth = 8 }) {
   return Math.ceil((width * CHANNELS[colorType] * bitDepth) / 8);
 }
 
-/** 解压后的原始图像数据（每行 = 1 字节 filter(0) + stride 字节像素） */
-function rawImage({ width, height, colorType = 6, bitDepth = 8, noise = false }) {
+/** PNG 的 Paeth 预测器（滤波类型 4 用；与规范逐字对应） */
+function paeth(a, b, c) {
+  const p = a + b - c;
+  const pa = Math.abs(p - a); const pb = Math.abs(p - b); const pc = Math.abs(p - c);
+  if (pa <= pb && pa <= pc) return a;
+  return pb <= pc ? b : c;
+}
+
+/**
+ * 解压后的原始图像数据（每行 = 1 字节 filter + stride 字节像素）。
+ * filters 按行循环取滤波类型，默认 [0]；传 [1,2,3,4] 时**真正按 PNG 规范做前向滤波**
+ * （Sub/Up/Average/Paeth），所以产出的仍是任何解码器都能还原的真图，而不是只改标签字节的假图。
+ * R07 用它造"合法 1–4 必须被接受"的正例；反例则在此结果上直接篡改某行的滤波字节（CRC 由 chunk() 真算）。
+ * filters 省略时输出与旧实现**逐字节一致**，既有用例不受影响。
+ */
+function rawImage({ width, height, colorType = 6, bitDepth = 8, noise = false, filters = null }) {
   const stride = strideOf({ width, colorType, bitDepth });
+  const bpp = Math.max(1, Math.round((CHANNELS[colorType] * bitDepth) / 8));
   const raw = Buffer.alloc((stride + 1) * height);
+  const f = filters && filters.length ? filters : [0];
   // noise=true 造"不可压缩"的图（xorshift 伪随机、确定性）⇒ 落盘 PNG ≈ 原始体积 ≈ 1MB，
   // 用来验证"头像字节确实计入 20MiB 总上限"这类体积账，而不是靠一张 3KB 的渐变图蒙混过关
   let seed = 0x2545f491;
+  let up = null; // 上一行的**未滤波**字节（Up/Paeth 需要）
   for (let y = 0; y < height; y++) {
     const row = y * (stride + 1);
-    raw[row] = 0; // filter type 0（None）
+    const type = f[y % f.length];
+    raw[row] = type;
+    const cur = Buffer.alloc(stride); // 本行未滤波字节（Sub 的 left 与下一行的 up 都用它）
     for (let x = 0; x < stride; x++) {
+      let v;
       if (noise) {
         seed ^= seed << 13; seed >>>= 0;
         seed ^= seed >>> 17;
         seed ^= seed << 5; seed >>>= 0;
-        raw[row + 1 + x] = seed & 0xff;
+        v = seed & 0xff;
       } else {
-        raw[row + 1 + x] = (x * 7 + y * 13) & 0xff;
+        v = (x * 7 + y * 13) & 0xff;
       }
+      cur[x] = v;
+      const left = x >= bpp ? cur[x - bpp] : 0;
+      const u = up ? up[x] : 0;
+      const ul = (up && x >= bpp) ? up[x - bpp] : 0;
+      let out = v;
+      if (type === 1) out = v - left;
+      else if (type === 2) out = v - u;
+      else if (type === 3) out = v - Math.floor((left + u) / 2);
+      else if (type === 4) out = v - paeth(left, u, ul);
+      raw[row + 1 + x] = out & 0xff;
     }
+    up = cur;
   }
   return raw;
 }
@@ -138,6 +169,6 @@ function notPng(size = 4096) {
 }
 
 module.exports = {
-  PNG_SIGNATURE, CHANNELS, crc32, chunk, strideOf, rawImage,
+  PNG_SIGNATURE, CHANNELS, crc32, chunk, strideOf, rawImage, paeth,
   makePng, makePngWithUserMetadata, corruptByte, truncatePng, appendTrailingGarbage, notPng,
 };
