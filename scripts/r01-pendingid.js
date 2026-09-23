@@ -500,14 +500,23 @@ async function enterGame(spec, g) {
   const url = BASE + (isMobile ? '/m/' : '/');
   if (isMobile) await browser.setViewport(390, 844, true);
   else await browser.setViewport(1440, 900, false);
-  // localStorage 只能在应用源下写：先落到应用页，再写句柄，再重载进局
-  await browser.goto(url);
-  await waitUntil(() => browser.eval(`({ ok: document.readyState === 'complete' && !!document.body })`), { label: '首次落到应用源', timeout: 20000 });
+  /**
+   * 句柄必须在**同源但不跑 app.js 的文档**里写：落到应用页再 setItem 会跟页面自己的异步
+   * `checkResume()` 抢 —— 它读到的是上一局的旧句柄（已结束）时会 `clearHandle('ww_current')`，
+   * 那一刀可能落在我们 setItem **之后**，把刚写好的句柄抹掉（实测：诊断里 `ww=false`），
+   * 于是页面停在设置页、后续全部误判。`/api/meta` 是同源 JSON 文档，写完再进应用页即可。
+   */
+  await browser.goto(BASE + '/api/meta');
+  await waitUntil(() => browser.eval(`({ ok: document.readyState === 'complete' && !!document.body })`), { label: '落到同源文档写句柄', timeout: 20000 });
   const handle = JSON.stringify(g);
   await browser.eval(isMobile
     ? `localStorage.setItem('mww_current', ${JSON.stringify(handle)}); localStorage.setItem('ww_current', ${JSON.stringify(handle)}); 'ok'`
     : `localStorage.setItem('ww_current', ${JSON.stringify(handle)}); 'ok'`);
-  await browser.reload();
+  const echo = await browser.eval(`({ ww: !!localStorage.getItem('ww_current'), mww: !!localStorage.getItem('mww_current') })`);
+  if (!echo.ww) { blockedCheck('写对局句柄到 localStorage', JSON.stringify(echo)); return 'BLOCKED_ENTRY'; }
+  log(`  · 句柄已写入 localStorage（${isMobile ? 'mww_current+ww_current' : 'ww_current'}，gameId=${g.gameId}）`);
+  await browser.goto(url);
+  await waitUntil(() => browser.eval(`({ ok: document.readyState === 'complete' && !!document.body })`), { label: '进入应用页', timeout: 20000 });
   if (isMobile) {
     // 手机端首页是**异步** loadResumeCard：必须等"继续上局"卡真的出现再点，
     // 否则会停在板子页空等（本轮初版就是这个竞态 —— 4/5 个手机场景停在了板子页）。
