@@ -190,6 +190,48 @@ function findAppWindow(re, qualifyExtra = null) {
 }
 function bringToFront(re) { return ps('bring-to-front', re, [...APP_PIDS].join(',')); }
 
+/**
+ * **原生动态对话框探测**（本脚本唯一靠得住的"对话框出现了吗"判据）。
+ *
+ * 为什么不能用 PID 过滤：实测 Windows 通用文件对话框（class=#32770，标题"打开"/"另存为"）是由
+ * **另一个进程**承载的（COM 代理/宿进程，pid 既不在被测应用进程树里、也不是 0）。
+ * 早期版本按 PID 白名单过滤窗口，于是对话框被整体滤掉，得出了"点导入不弹选择器"的**错误结论** ——
+ * 那是量具的盲区，不是产品缺陷。`GetLastActivePopup` 走的是 owner 关系，与承载进程是谁无关。
+ * 这里仍只输出**被测应用顶层窗口的 popup**，所以不会把用户桌面上别的应用的窗口写进日志。
+ */
+function appPopups() {
+  const r = ps('popups', [...APP_PIDS].join(','));
+  if (r.code !== 0) return { error: r.err || ('exit ' + r.code), popups: [] };
+  const popups = r.out.split(/\r?\n/).filter(Boolean).map((l) => {
+    const g = (k) => (l.match(new RegExp(k + "=('[^']*'|\\S+)")) || [])[1];
+    const unq = (v) => (v || '').replace(/^'|'$/g, '');
+    return {
+      base: Number(g('base')), basePid: Number(g('basePid')), hwnd: Number(g('popup')), pid: Number(g('popupPid')),
+      proc: g('popupProc'), cls: g('class'), isBase: g('isBase') === 'True', geo: g('geo'), title: unq(g('title')),
+    };
+  });
+  return { error: null, popups };
+}
+/** 真正弹出来的原生对话框（popup != 主窗口本身），标题/类名都记下来 */
+function appDialogs() {
+  const { popups } = appPopups();
+  return popups.filter((p) => !p.isBase);
+}
+/** 密集轮询抓原生对话框；命中的同时把"它属于哪个 pid/什么 class"一并留证 */
+async function watchAppDialog(re, { ms = 15000, label = '' } = {}) {
+  const t0 = Date.now();
+  const seen = [];
+  while (Date.now() - t0 < ms) {
+    for (const d of appDialogs()) {
+      if (!seen.some((x) => x.hwnd === d.hwnd)) { seen.push(d); log(`[watchAppDialog ${label}] +${Date.now() - t0}ms 出现原生对话框：title=${JSON.stringify(d.title)} class=${d.cls} pid=${d.pid}（proc=${d.proc}）hwnd=${d.hwnd} ${d.geo}`); }
+      if (re.test(d.title) || (d.cls === '#32770' && d.title === '')) return { hit: d, seen };
+    }
+    for (const d of appDialogs()) { if (!seen.some((x) => x.hwnd === d.hwnd)) seen.push(d); }
+    await sleep(200);
+  }
+  return { hit: null, seen };
+}
+
 /** 把文本送进原生对话框（真实键盘事件）后回车。foreground=发给当前前台窗口（已确认是本应用） */
 function sendKeys(text, { titleRe = null, foreground = false } = {}) {
   const args = foreground ? ['sendkeys-fg', text] : ['sendkeys', text, titleRe ? 'focus:' + titleRe : ''];
