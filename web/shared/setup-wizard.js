@@ -21,6 +21,7 @@
  *      如实返回 `unknown: true` + 查到的东西，由上层让用户确认；**绝不**自动重发。
  */
 'use strict';
+/* global require */
 (function (global) {
   const D = (typeof module !== 'undefined' && module.exports && typeof require === 'function')
     ? require('./draft-store')

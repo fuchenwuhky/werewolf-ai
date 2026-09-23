@@ -1917,3 +1917,21 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 .pc-hist { display: flex; flex-direction: column; gap: var(--sp-1); max-height: 52vh; overflow-y: auto; }
 .pc-hist-row { display: flex; align-items: baseline; gap: var(--sp-2); }
 .pc-hist-txt { overflow-wrap: anywhere; }
+
+/* ======== M3 三步开局（§8.2 :255-268）：按 #setup-section[data-step] 只显示当前步 ========
+   默认（没有 data-step，例如向导还没初始化）不隐藏任何东西，避免"某一步整块消失"。 */
+#setup-section[data-step="1"] [data-setup-step]:not([data-setup-step="1"]),
+#setup-section[data-step="2"] [data-setup-step]:not([data-setup-step="2"]),
+#setup-section[data-step="3"] [data-setup-step]:not([data-setup-step="3"]) { display: none !important; }
+#setup-section[data-step]:not([data-step="3"]) #setup-confirm-box { display: none !important; }
+.setup-steps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; }
+.setup-step-btn { background: transparent; border: 1px solid var(--line, #3a3a44); color: inherit;
+  border-radius: 999px; padding: 5px 12px; font-size: 13px; cursor: pointer; opacity: .72; }
+.setup-step-btn[aria-selected="true"] { border-color: var(--gold, #c8a24a); color: var(--gold, #c8a24a); opacity: 1; }
+.setup-nav { display: flex; gap: 8px; align-items: center; margin: 0 0 12px; flex-wrap: wrap; }
+#setup-section[data-step]:not([data-step="3"]) #setup-confirm,#setup-section:not([data-step]) #setup-confirm { display: none; }
+.setup-confirm-box { margin: 0 0 12px; }
+.setup-confirm-rows { display: grid; gap: 6px; margin: 0 0 8px; }
+.setup-confirm-row { display: flex; gap: 10px; align-items: baseline; }
+.setup-confirm-row .k { min-width: 84px; opacity: .72; }
+.setup-confirm-row .v { font-weight: 600; }

@@ -152,6 +152,25 @@
 
       <!-- ======== 开局设置区：分组折叠，默认在首屏之下（FIN-04 §8.2/8.3） ======== -->
       <div class="setup-section" id="setup-section" hidden>
+      <!-- ======== 三步开局（M3 §8.2 :255-268）：板子与规则 → 参与与座位 → 确认开局 ========
+           前两步只写草稿、**不发任何建局请求**；第三步冻结档案与全部参数后单次提交（闸门在共享模块里）。 -->
+      <div class="setup-steps" id="setup-steps" role="tablist" aria-label="开局步骤">
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="1">1 板子与规则</button>
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="2">2 参与与座位</button>
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="3">3 确认开局</button>
+        <span class="hint" id="setup-step-hint" role="status"></span>
+      </div>
+      <div class="setup-nav" id="setup-nav">
+        <button class="btn ghost" type="button" id="setup-prev">← 上一步</button>
+        <button class="btn" type="button" id="setup-next">下一步 →</button>
+        <button class="btn primary" type="button" id="setup-confirm">确认开局</button>
+      </div>
+      <div class="setup-confirm-box" id="setup-confirm-box">
+        <div class="setup-confirm-rows" id="setup-confirm-rows"></div>
+        <div class="btnrow">
+          <button class="btn ghost small" type="button" id="setup-fix-settings">去配置模型与密钥</button>
+        </div>
+      </div>
         <div class="setup-grid">
           <!-- 左列：⓪ 外观与操作 + ① 板子 + ② 玩家 + ③ 规则 -->
           <div class="setup-col">
@@ -181,7 +200,7 @@
             <h2 class="group-head">游戏默认偏好 <span class="hint">开局后板子与规则固定，中途不可修改</span></h2>
 
             <!-- 板子 -->
-            <div class="card" id="card-board">
+            <div class="card" id="card-board" data-setup-step="1">
               <h2 data-no="①" data-i18n="board.title">板子</h2>
               <label><span data-i18n="board.template">模板</span>
                 <select id="board-template"></select>
@@ -191,7 +210,7 @@
             </div>
 
             <!-- 玩家 -->
-            <div class="card" id="card-players">
+            <div class="card" id="card-players" data-setup-step="2">
               <h2 data-no="②" data-i18n="players.title">玩家</h2>
               <!-- 玩家档案（PROF-01）：本机多档案，切换不换 API 配置；对局创建时把归属固化到所选档案 -->
               <div class="profile-strip" id="profile-strip">
@@ -213,7 +232,7 @@
                 </div>
                 <div class="hint" id="seat-hint"></div>
               </div>
-              <label class="checkline"><input id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
+              <label class="checkline"><input checked id="use-mock" type="checkbox"> <span data-i18n="players.mock">Mock 试玩（不调用 API，随机脚本 AI，用于测试流程）</span></label>
               <h3 data-i18n="players.aiNames">AI 玩家昵称</h3>
               <div id="ai-names" class="ai-names"></div>
               <div class="btnrow"><button class="btn ghost" id="btn-rand-names" data-i18n="players.randNames">随机昵称</button><a class="btn ghost" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a></div>
@@ -222,7 +241,7 @@
             </div>
 
             <!-- 规则开关（长表单默认折叠） -->
-            <div class="card" id="card-rules">
+            <div class="card" id="card-rules" data-setup-step="1">
               <h2 data-no="③"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
               <details class="fold" id="rules-fold">
                 <summary>展开规则长表（夜晚顺序 / 自救 / 警长竞选…通常不用改）</summary>
@@ -236,7 +255,7 @@
             <h2 class="group-head">模型与密钥 <span class="hint">此设备共享 · 不随档案切换</span></h2>
 
             <!-- API 配置 -->
-            <div class="card" id="card-api">
+            <div class="card" id="card-api" data-setup-step="3">
               <!-- 编号走 CSS 的 attr(data-no) 伪元素：data-i18n 会整块替换 textContent，写子元素会被抹掉 -->
               <h2 data-no="④" data-i18n="api.title">API 配置</h2>
               <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>

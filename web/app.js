@@ -408,7 +408,7 @@ async function initSetup() {
     state.setup.boardId = e.target.value;
     if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); renderRulesEditor(); }
   });
-  $('#btn-start').addEventListener('click', openStartConfirm);
+  $('#btn-start').addEventListener('click', () => openSetupWizard(1));
   // 玩家档案（PROF-01）：加载列表 + 绑定选择/管理入口；失败不阻塞开局（服务端会归默认档案）
   $('#profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#btn-profile-manage').addEventListener('click', openProfileManager);
@@ -523,7 +523,16 @@ function renderBoardEditor() {
   renderSeatsSelect();
 }
 
-function boardTotal() { return Object.values(state.setup.boardCounts).reduce((a, b) => a + (b || 0), 0); }
+function boardTotal() {
+  // boardCounts 在初始状态里是 null（:27），并且模板选择是异步把 roles 拷进来的（:492）。
+  // 直接 Object.values(null) 会抛错，被上层 catch 吞掉后表现为"向导永远拿不到板子与人数" —— 这里先补齐再求和。
+  if (!state.setup.boardCounts) {
+    const tpl = boardRecordOf(state.setup.boardId);
+    const seed = (tpl && tpl.roles) || {};
+    state.setup.boardCounts = Object.keys(seed).length ? { ...seed } : {};
+  }
+  return Object.values(state.setup.boardCounts).reduce((a, b) => a + (b || 0), 0);
+}
 
 function updateBoardTotal() {
   const total = boardTotal();
@@ -576,6 +585,7 @@ function renderSetupDigest() {
   // 这里说的是"这一局会归到谁名下" —— 两句话不同，不是把同一份内容渲染两遍。
   const profile = (state.profiles || []).find((p) => p.id === state.profileId);
   if (profile) facts.push(`<li>本局归属 👤 ${escapeHtml(profile.nickname)}</li>`);
+  syncWizardFromSetup();
   const box = $('#hero-facts');
   if (box) box.innerHTML = facts.join('');
   // 真实模式缺 Key 的显式警示（不阻止浏览，但按下开始时会被拦截并引导 —— 见 startGame）
@@ -932,6 +942,170 @@ function openStartConfirm() {
   openModal(wrap);
 }
 
+/* ======== M3 三步开局（§8.2 :255-268）—— 桌面端接线 ========
+   闸门（submitGate）、模式解析（resolveMode）、单次提交锁（createSubmitLock）与冻结快照都在
+   web/shared/setup-wizard.js + draft-store.js 里，这里只负责：步进、把当前设置喂给向导、
+   以及把"最终提交"交给向导的 commit()。**页面里不再有自己的建局判断**。 */
+let setupWiz = null;
+/** 惰性接线标志：renderSetupDigest() 每次重算都会跑到同步这一步，监听器只能绑一次 */
+let setupWired = false;
+
+/** 按当前档案建实例（`profileId` 决定草稿键与冻结快照里的归属） */
+function newWizard() {
+  const me = (state.profiles || []).find((p) => p.id === state.profileId);
+  return window.WWSetupWizard.createWizard({
+    storage: sessionStorage,
+    profileId: state.profileId || null,
+    ownerNickname: me ? me.nickname : null,
+    // 模式轴：桌面端由 #use-mock 表达（试玩/真实）。这里显式给值、不传 existingMode，
+    // 于是后面用户在第二步改模式是允许的；"恢复既有草稿不许静默换档"由草稿里的模式在 C2 后续切片接管。
+    mode: ($('#use-mock') && $('#use-mock').checked) ? 'mock' : 'real',
+  });
+}
+
+/**
+ * 向导实例（按档案跟随）。
+ *
+ * ⚠ 实例必须**跟着 state.profileId 走**：向导第一次被创建的时刻可以早于档案列表加载完成
+ * （renderSetupDigest 在 init 里就跑，那时 profileId 还是 null），而实例里的 profileId 是**建实例时
+ * 固化**的 —— 不重建的话，`commit()` 的冻结快照里归属永远是 null，确认区也会一直显示「（未命名）」，
+ * 与"冻结的是当前档案"这条语义（§8.2 :265）不符。切档同理。
+ * 重建时把**当前步数**带过去，用户已经走到第几步不会被重置回第 1 步。
+ */
+function wizardOf() {
+  const pid = state.profileId || null;
+  if (setupWiz && setupWiz.profileId !== pid) {
+    const keepStep = setupWiz.step;
+    setupWiz = null;
+    const rebuilt = newWizard();
+    rebuilt.goTo(keepStep);
+    setupWiz = rebuilt;
+  }
+  if (!setupWiz) setupWiz = newWizard();
+  return setupWiz;
+}
+
+/** 板子记录：`state.meta.boards` 是 **id → 记录** 的映射（不是数组），这里两种形状都能取 */
+function boardRecordOf(boardId) {
+  const all = state.meta && state.meta.boards;
+  if (!all) return null;
+  if (Array.isArray(all)) return all.find((x) => x.id === boardId) || null;
+  return all[boardId] || null;
+}
+
+/** 把当前设置喂给向导（草稿按档案落 sessionStorage；这里只是"当前值同步"） */
+function syncWizardFromSetup() {
+  const w = wizardOf();
+  const seat = $('#my-seat') ? String($('#my-seat').value || '') : '';
+  try {
+    w.set({
+      boardId: state.setup.boardId,
+      board: { boardId: state.setup.boardId, boardName: boardNameOf(state.setup.boardId), playerCount: boardTotal() },
+      playerCount: boardTotal(),
+      rules: state.setup.rules,
+      participation: state.setup.mode === 'watch' ? 'watch' : 'play',
+      nickname: $('#my-name') ? $('#my-name').value.trim() : '',
+      mySeat: state.setup.mode === 'play' ? (seat === 'random' ? 'random' : Number(seat) || null) : null,
+      seatStrategy: seat === 'random' ? 'random' : 'fixed',
+      mode: ($('#use-mock') && $('#use-mock').checked) ? 'mock' : 'real',
+    });
+  } catch (e) { console.warn('[ww] 同步向导草稿失败', e); }
+}
+
+function boardNameOf(boardId) {
+  const b = boardRecordOf(boardId);
+  return b ? (b.name || b.label || boardId) : boardId;
+}
+
+/** 板子合法性：与设置屏顶部计数条**同一条判据**（人数 ≥4、狼 ≥1、狼不得过半），不合法要给具体原因 */
+function boardLegality() {
+  try {
+    const total = boardTotal();
+    const tpl = boardRecordOf(state.setup.boardId);
+    // 权威来源是设置屏当前的计数（选模板时已从模板 roles 拷入；手动加减后 boardId 会变 'custom'），
+    // 模板 roles 只作兜底 —— 否则"自定义板子"永远拿不到合法性判断、只会被判成合法。
+    const counts = state.setup.boardCounts || {};
+    const roles = Object.keys(counts).length ? counts : ((tpl && tpl.roles) || {});
+    const roleMeta = state.meta && state.meta.roles;
+    const wolves = roleMeta
+      ? Object.entries(roles).filter(([r]) => roleMeta[r] && roleMeta[r].team === 'wolf')
+        .reduce((a, [, n]) => a + (Number(n) || 0), 0)
+      : Number(roles.wolf || roles.wolfking || 0);
+    if (!total || total < 4) return { valid: false, reason: `板子人数不合法：当前 ${total || 0} 人（至少 4 人）` };
+    if (!wolves) return { valid: false, reason: '板子里没有狼人：请至少加 1 名狼人' };
+    if (wolves >= total - wolves) return { valid: false, reason: `狼人 ${wolves} 人不得达到或超过好人数（${total - wolves} 人）` };
+    return { valid: true, reason: '' };
+  } catch (e) { return { valid: true, reason: '' }; }
+}
+
+function openSetupWizard(step) {
+  // 惰性接线：模块加载时不绑（那时 #setup-section 还是 hidden 的展开前状态，而且 renderSetupDigest
+  // 在初始化里会被调用多次），只在用户第一次真的打开向导时绑一次，重复打开也不会叠监听器。
+  if (!setupWired) { setupWired = true; wireSetupWizard(); }
+  const sec = $('#setup-section');
+  if (sec) sec.hidden = false;
+  syncWizardFromSetup();
+  applySetupStep(step || 1, { scroll: true });
+}
+
+function applySetupStep(step, opts) {
+  const w = wizardOf();
+  w.goTo(step);
+  const sec = $('#setup-section');
+  const n = w.step;
+  if (sec) sec.dataset.step = String(n);
+  document.querySelectorAll('[data-setup-step-btn]').forEach((b) => {
+    b.setAttribute('aria-selected', String(Number(b.dataset.setupStepBtn) === n));
+  });
+  const hint = $('#setup-step-hint');
+  if (hint) {
+    // ⚠ 向导的返回对象**没有** STEPS（web/shared/setup-wizard.js:269 只导出 set/setMode/next/back/goTo/freeze/commit/snapshot
+    //   + step/stepId/steps 三个 getter）⇒ 这里只能用 stepId 取标签，写 w.STEPS[i].hint 会抛 TypeError、把后面的
+    //   dataset.step 与确认区渲染一起带走（这正是 M3 第二批真页面 --full 全线超时的原因之一）。
+    const stepLabels = {
+      board: '第 1 步 · 板子与规则（这一步不会建局）',
+      players: '第 2 步 · 参与与座位（这一步不会建局）',
+      confirm: '第 3 步 · 确认后才会建局',
+    };
+    hint.textContent = stepLabels[w.stepId] || '';
+  }
+  const prev = $('#setup-prev'); if (prev) prev.disabled = n <= 1;
+  const next = $('#setup-next'); if (next) next.disabled = n >= w.steps;
+  if (n === w.steps) renderSetupConfirm();
+  if (opts && opts.scroll && sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/** 第三步确认区：行文案来自共享 summarize()（两端同一份），不在页面里再拼一套 */
+function renderSetupConfirm() {
+  const box = $('#setup-confirm-rows');
+  if (!box) return;
+  const cfg = state.cfg || {};
+  const rows = window.WWSetupWizard.summarize(wizardOf().snapshot(), {
+    hasApiKey: !!cfg.hasKey,
+    bindingValid: cfg.keyBindingValid !== false,
+    model: cfg.model || '',
+  });
+  const esc = (s) => escapeHtml(String(s));
+  box.innerHTML = rows.map((r) => `<div class="setup-confirm-row"><span class="k">${esc(r.label)}</span><span class="v">${esc(r.text)}</span></div>`).join('');
+  const fix = $('#setup-fix-settings');
+  if (fix) fix.hidden = !(rows.some((r) => r.key === 'model' && /未配置|失效/.test(r.text)));
+}
+
+function wireSetupWizard() {
+  document.querySelectorAll('[data-setup-step-btn]').forEach((b) => {
+    b.addEventListener('click', () => applySetupStep(Number(b.dataset.setupStepBtn)));
+  });
+  const prev = $('#setup-prev'); if (prev) prev.addEventListener('click', () => applySetupStep(wizardOf().step - 1));
+  const next = $('#setup-next'); if (next) next.addEventListener('click', () => applySetupStep(wizardOf().step + 1));
+  const confirm = $('#setup-confirm'); if (confirm) confirm.addEventListener('click', () => startGame());
+  const fix = $('#setup-fix-settings');
+  if (fix) fix.addEventListener('click', () => { const c = $('#card-api'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  const mockCb = $('#use-mock');
+  if (mockCb) mockCb.addEventListener('change', () => {
+    try { wizardOf().set({ mode: mockCb.checked ? 'mock' : 'real' }); } catch (e) { console.warn('[ww] 模式切换失败', e); }
+  });
+}
+
 async function startGame() {
   $('#setup-error').textContent = '';
   try {
@@ -973,11 +1147,47 @@ async function startGame() {
     // 对局归属固化（PROF-02）：开局即锁定到所选档案；未加载出档案时不带字段（服务端归默认档案）
     if (state.profileId) body.profileId = state.profileId;
     persistSeatChoice(seatChoice);
-    const created = await api('POST', '/api/games', body);
+    // ---- 最终提交（§8.2 :265）：闸门 → 冻结快照 → 单次提交锁 → 建局。
+    // create 回调收的是**冻结载荷**（payload），不再读任何"当前"状态 ⇒ 提交那一刻之后切档/改昵称都影响不到这一局。
+    const wiz = wizardOf();
+    const legality = boardLegality();
+    let frozenMock = useMock;
+    const outcome = await wiz.commit({
+      hasApiKey: !!(state.cfg && state.cfg.hasKey),
+      bindingValid: !state.cfg || state.cfg.keyBindingValid !== false,
+      boardValid: legality.valid,
+      boardReason: legality.reason,
+      create: async (payload) => {
+        frozenMock = payload.mode !== 'real';
+        // 载荷以**冻结快照**为准：body 里那些"点提交那一刻的当前值"一律被快照覆盖。
+        // ⚠ profileId 只能在快照真的有归属时才带上：`profileId: null` 会被服务端判成
+        // 「profileId 非法」直接 400（src/api.js:1182-1184 对 `!== undefined` 的键做 UUID 校验），
+        // 于是建局永远失败、界面只剩一句"结果不明" —— 实测踩过。快照没有归属时**整个删掉这个键**，
+        // 让服务端走它自己的兼容分支（归入默认档案，那条路本来就是为旧客户端留的）。
+        const reqBody = Object.assign({}, body, { mock: frozenMock, myName: payload.nickname || humanName });
+        if (payload.profileId) reqBody.profileId = payload.profileId;
+        else delete reqBody.profileId;
+        return api('POST', '/api/games', reqBody);
+      },
+      // §8.2 :266「建局结果不明 ⇒ 先查已有对局」：只查、不自动重建，查到的东西交回给用户判断
+      queryExisting: async () => {
+        try { return await api('GET', '/api/games'); } catch (e) { return { error: String((e && e.message) || e) }; }
+      },
+    });
+    if (!outcome.allowed) {
+      const extra = outcome.unknown
+        ? ' 已先查本档案名下已有的对局（不会自动重建）：请在「对局历史」里确认那一局是否存在，再决定是否重试。'
+        : '';
+      $('#setup-error').textContent = `✗ ${outcome.reason}${extra}`;
+      if (outcome.fix === 'settings') { const c = $('#card-api'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      if (outcome.fix === 'board') { applySetupStep(1); }
+      return;
+    }
+    const created = outcome.created;
     const owner = (state.profiles || []).find((x) => x.id === state.profileId);
-    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!useMock,
+    state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!frozenMock,
       ownerProfileId: state.profileId || null, ownerNickname: owner ? owner.nickname : null };
-    state.gameMeta = { mock: !!useMock }; // 结算层要如实标注试玩局（视图负载里没有 mock 字段）
+    state.gameMeta = { mock: !!frozenMock }; // 结算层要如实标注试玩局（视图负载里没有 mock 字段）
     window.WWGameDraft.writeHandle(localStorage, 'ww_current', state.game);
     if (created.mySeat) console.info(`[ww] 本局你在 ${created.mySeat} 号座位`);
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });

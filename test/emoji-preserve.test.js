@@ -95,7 +95,10 @@ test('口径自检：字符簇折叠成 1，且裸 ✓/✗/≥/→ 不算 emoji�
  */
 const REQUIRED_LITERALS = [
   {
-    file: 'web/app.js', line: 558, window: 25,
+    // ⚠ M3 C2 + 卡框批次并行施工后再锚（**同样只动锚点行号**）：
+    //   ① web/app.js 前部新增三步开局的向导机器（+约 190 行）；② 同一窗口内另一批把 boardTotal()
+    //   的 null 兜底写进了 web/app.js（+10 行）。两条字面量逐字未动、整文件仍恰好各命中 1 次。
+    file: 'web/app.js', line: 587, window: 25,
     literal: '👤 ${escapeHtml(profile.nickname)}',
     note: '顶栏档案信息里的**玩家姓名**前缀（"不许误删玩家姓名 emoji"的直接落点）',
   },
@@ -115,7 +118,12 @@ const REQUIRED_LITERALS = [
   //      这是**产品导航的位置变更**，不是"字形被搬走/被删"；字面量在整文件仍恰好命中 1 次。
   //   ② web/m/m.js：本批新增了「我的对局」独立页的共用取数/行构建/切屏函数与底栏同步（+约 60 行），
   //      档案弹层标题跟着下移 1788→1848；字面量仍在，整文件恰好命中 1 次。
-  { file: 'web/app.js', line: 1361, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题' },
+  // ⚠ M3 第二批（C2）再锚 app.js 两条（**同样只动锚点行号，字面量与 window 一字未改**）：
+  //   本批在 web/app.js **前部**插入三步开局的向导机器（步进/汇总/提交接线，插在 async function
+  //   startGame() 之前），两条字面量一起下移；同一窗口里另一批又把 boardTotal() 的 null 兜底
+  //   写进 web/app.js（+10 行）。最终：顶栏档案姓名 558→587、档案弹层标题 1361→1590。
+  //   两条字面量逐字未动、整文件恰好各命中 1 次，判据强度（±25 行内逐字命中）不变。
+  { file: 'web/app.js', line: 1590, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题（M3 C2：向导机器插入后 1361→1547；同窗口 boardTotal 兜底 +10 行后再锚到 1590）' },
   { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
   { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
   { file: 'web/m/index.html', line: 278, window: 25, literal: '👤 我的', note: '手机端"我的"页签（M3 C1b：随底栏移到全部屏之后，109→278）' },

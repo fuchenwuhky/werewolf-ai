@@ -1615,9 +1615,28 @@ class Browser {
       })()`);
       check('档案管理弹层里有回收区入口且可点（尺寸非 0、非隐藏）', !!entryBtn && entryBtn.visible === true && entryBtn.h >= 20, JSON.stringify(entryBtn));
 
+      // 回收区入口：点完**必须确认面板真的打开了**。
+      // 为什么需要这个前置：`b.realClick` 的返回值过去没被检查，于是"这一下没命中/点了但面板没开"
+      // 要等到 6 秒后那一整组断言同时变红，看不出根因（本次实测两侧都出现过：空态那下、以及造完
+      // 两条档案后那下）。为什么会点空：mousePressed/mouseReleased 按**点下那一刻的坐标**发，弹层在这
+      // 几十毫秒里重排（档案列表/回收站计数刷新）时事件会落到别处 —— 本文件在手机端档案弹层已经为此
+      // 加了"位置连续 150ms 不变"的站定判据（见 §3 触点门禁那段），这里用"确认 + 重试"达到同一目的。
+      // ⚠ 判据一点没放宽：面板里的内容仍由后面每一条断言逐字钉；这里只保证"面板真的开过"。
+      const openTrashPanel = async () => {
+        for (let i = 1; i <= 4; i++) {
+          const r = await b.realClick('#pm-trash-entry');
+          if (r !== 'OK') { log(`  · 回收区入口未命中（realClick=${r}），重试 ${i}/4`); await sleep(250); continue; }
+          try {
+            await waitFor(async () => await b.eval(`(() => ({ ok: !!document.getElementById('pm-trash-list') }))()`),
+              { label: '回收区面板已打开', timeout: 3000, interval: 100 });
+            return 'OK';
+          } catch (_) { log(`  · 回收区面板第 ${i} 次点击后未打开，重试`); }
+        }
+        return 'NOT_OPENED';
+      };
       // 空态先测：ui:check 用的是全新临时数据目录，回收区此刻真的是空的。
       // 空态必须是**有文案的面板**，不能是一块空白（"内容在、盒子 0 高"是本项目的真实事故）。
-      await b.realClick('#pm-trash-entry');
+      await openTrashPanel();
       // FIX-18：原来是"固定 sleep(150) × 40 次"的轮询，改成带超时的条件等待
       await waitExpr('回收区面板：状态已判定（empty/items/error）',
         `['empty','items','error'].includes(document.getElementById('pm-trash-list')?.dataset.state || '')`, { timeout: 6000 });
@@ -1648,7 +1667,7 @@ class Browser {
       await waitExpr('回收区面板：已返回档案列表', `!!document.getElementById('pm-trash-entry') && !document.getElementById('pm-trash-list')`, { timeout: 5000 });
       const first = await mkTrashed('回收区测试甲');
       const second = await mkTrashed('回收区测试乙');
-      await b.realClick('#pm-trash-entry');
+      await openTrashPanel();
       // FIX-18：原来是"固定 sleep(150) × 40 次"的轮询，改成带超时的条件等待
       await waitExpr('回收区面板：列表已渲染（items/error）',
         `['items','error'].includes(document.getElementById('pm-trash-list')?.dataset.state || '')`, { timeout: 6000 });
@@ -1716,7 +1735,7 @@ class Browser {
 
       // 失败路径（不静默）：回收区目录消失后再点「恢复」→ 服务端 404 → 面板必须给出可读原因。
       // 场景就是"另一个窗口已经把它恢复了"：那条随即从回收站消失，但本窗口手里还捏着一个可点的按钮。
-      await b.realClick('#pm-trash-entry');
+      await openTrashPanel();
       // FIX-18：原来是"固定 sleep(150) × 40 次"的轮询，改成带超时的条件等待
       await waitExpr('回收区面板：再次进入后列表已渲染（items）',
         `document.getElementById('pm-trash-list')?.dataset.state === 'items'`, { timeout: 6000 });
@@ -2768,9 +2787,36 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       // FIX-18：原来是固定 sleep(400)，改成等到观战模式真的被选中
       await waitExpr('--full：模式已切到纯观战', `document.querySelector('input[name=mode]:checked')?.value === 'watch'`, { timeout: 3000 });
       check('切换到纯观战', await b.eval(`document.querySelector('input[name=mode]:checked').value`) === 'watch');
-      await b.click('#use-mock');
-      await b.click('#btn-start');
-      await b.realClick('#modal-root .start-review .btn.primary:not(:disabled)');
+      // M3 §8.2 :255-268：开局走**真三步** —— 前两步只写草稿、不发任何建局请求，第 3 步点「确认开局」才提交。
+      // 判据必须是**实测到的推进**：`b.click` 在元素不存在时返回 'NOT_FOUND' 且**不抛错**（时机不对/选择器写错
+      // 都不会报错，脚本会继续往下走），所以"点了三下"本身不算走过 —— 三段返回值 + #setup-section[data-step]
+      // + 第 3 步时「确认开局」的真实高度一起钉住（第三步之外 CSS 会把它 display:none，量到 0）。
+      const stepProbe = () => b.eval(`(() => {
+        const s = document.getElementById('setup-section');
+        const c = document.getElementById('setup-confirm');
+        const r = c ? c.getBoundingClientRect() : null;
+        return { step: s ? (s.dataset.step || '(未设)') : '(无设置区)', confirmH: r ? Math.round(r.height) : -1 };
+      })()`);
+      const runThreeStepStart = async (label) => {
+        const rStart = await b.click('#btn-start');
+        const st1 = await stepProbe();
+        const rNext1 = await b.click('#setup-next');
+        const st2 = await stepProbe();
+        const rNext2 = await b.click('#setup-next');
+        const st3 = await stepProbe();
+        const rConfirm = await b.click('#setup-confirm');
+        check(`M3 三步开局（${label}）：点「开始游戏」落到第 1 步 → 两次「下一步」真的到第 3 步 → 第 3 步的「确认开局」可见且点得中`,
+          rStart === 'OK' && st1.step === '1' && st2.step === '2' && st3.step === '3' && st3.confirmH > 0 && rConfirm === 'OK',
+          JSON.stringify({ 点开始: rStart, 第1步: st1, 下一步1: rNext1, 第2步: st2, 下一步2: rNext2, 第3步: st3, 点确认: rConfirm }));
+      };
+      // M3：新草稿默认试玩 ⇒ 不能再「用点击切换」（已勾选时点击会关掉试玩、反而开真实局）。
+      // 改成幂等：确保 #use-mock 处于勾选态（试玩），未勾选才点一次。
+      await b.eval(`(() => { const el = document.getElementById('use-mock'); if (el && el.checked !== true) el.click(); return el ? el.checked : null; })()`);
+      await runThreeStepStart('观战局 7a');
+      // M3 C2：这里原来还有一行 realClick('#modal-root .start-review .btn.primary') —— 那是**一步开局**时代
+      // 「开局确认弹层」的主按钮。三步化后 #btn-start 只开向导（不再开 .start-review 弹层），该元素不存在，
+      // realClick 会打空（返回 NOT_FOUND，不抛错）且这行本身没有任何效果，故删除该行。
+      // 建局现在只经 #setup-confirm → startGame() → 向导 commit() 这一条路径。
       // FIX-18：原来是固定 sleep(2500)，改成等到真的进入对局页
       await waitExpr('--full：已进入对局页', `document.querySelector('.screen:not(.hidden)')?.id === 'screen-game'`, { timeout: 10000 });
       check('开局进入对局页', await b.eval(`document.querySelector('.screen:not(.hidden)')?.id`) === 'screen-game');
@@ -2833,9 +2879,12 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       await b.realClick('input[name=mode][value=play]');
       // FIX-18：原来是固定 sleep(300)，改成等到"我参战"模式真的被选中
       await waitExpr('--full 7b：模式已切到"我参战"', `document.querySelector('input[name=mode]:checked')?.value === 'play'`, { timeout: 3000 });
-      await b.click('#use-mock');
-      await b.click('#btn-start');
-      await b.realClick('#modal-root .start-review .btn.primary:not(:disabled)');
+      // M3：新草稿默认试玩 ⇒ 不能再「用点击切换」（已勾选时点击会关掉试玩、反而开真实局）。
+      // 改成幂等：确保 #use-mock 处于勾选态（试玩），未勾选才点一次。
+      await b.eval(`(() => { const el = document.getElementById('use-mock'); if (el && el.checked !== true) el.click(); return el ? el.checked : null; })()`);
+      await runThreeStepStart('玩家视角 7b');
+      // M3 C2：同上 —— 一步开局时代的 .start-review 弹层主按钮已不存在（三步化后 #btn-start 只开向导），
+      // 该行是空转调用，故删除。建局只经 #setup-confirm → startGame() → 向导 commit()。
       // FIX-18：原来是固定 sleep(2500)，改成等到翻牌遮罩真的出现
       await waitExpr('--full 7b：身份翻牌遮罩已出现',
         `(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`, { timeout: 10000 });
