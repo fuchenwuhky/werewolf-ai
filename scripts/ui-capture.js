@@ -128,6 +128,15 @@ function plan() {
     if (size && declared && (size.w !== declared.w || size.h !== declared.h)) {
       reasons.push('实测 ' + size.w + 'x' + size.h + ' 与文件名声明 ' + declared.w + 'x' + declared.h + ' 不符');
     }
+    // 空白/未画完帧一律判废（事故记录）：真机那张 1920x1080 有 99.90% 的像素是同一个 RGBA(241,240,244,255)，
+    // 看图软件衬白底就是一片纯白 —— 它却因为"PNG 有效、宽高对得上"蒙混进仓过。
+    // 判据必须是像素而不是文件字节数（我早期那版看字节数，还把报警降级成了只记录，等于没判）。
+    if (size) {
+      const { statsOf } = require('./png-stats.js');
+      const st = statsOf(fs.readFileSync(path.join(SRC, f)));
+      if (st.error) reasons.push('像素统计失败：' + st.error);
+      else if (st.blank) reasons.push(st.reason);
+    }
     if (reasons.length) bad += 1;
     rows.push({ f, size, declared, route, page, reasons });
   }

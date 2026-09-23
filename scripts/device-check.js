@@ -108,37 +108,55 @@ function main() {
   const alive = new RegExp('\\s' + PKG.replace(/\./g, '\\.') + '\\s*$', 'm').test(ps.out || '');
   check('应用进程存活', alive, alive ? 'ps 命中' : 'ps 未命中');
 
-  // 8) 截图非空且是 PNG（本机证据，用于人眼复核画面层）
+  // 8) 截图：必须拍到**真实画面**，不能是启动窗口的空背景（见下方事故记录）
   fs.mkdirSync(SHOTS, { recursive: true });
   const shot = path.join(SHOTS, 'emu-01-home.png');
+  const handoff = path.join(ROOT, 'logs', 'ui-shots', 'EMU-mumu-android12-home.png');
   try {
-    const buf = execFileSync(ADB, (SERIAL ? ['-s', SERIAL] : []).concat(['exec-out', 'screencap', '-p']), { maxBuffer: 64 * 1024 * 1024, timeout: 60000 });
+    const { statsOf } = require('./png-stats.js');
+    // 事故记录：上一版一看"前台 Activity 是目标包"就截图，结果在 MuMu 上拍到的是**启动窗口的背景色**
+    // —— 1920x1080 里 99.90% 的像素是同一个 RGBA(241,240,244,255)，看图软件衬白底就是一片纯白。
+    // 连拍实测：启动后 3~15 秒的帧约 21KB（96% 是深色底，界面还没画完），约 18 秒后跳到约 528KB、
+    // 唯一色 1.7 万 —— 那才是界面。所以这里改成：拿到帧就判像素，空白就等两秒重拍，最多等 40 秒。
+    let buf = null;
+    let st = null;
+    let tries = 0;
+    for (tries = 1; tries <= 20; tries += 1) {
+      buf = execFileSync(ADB, (SERIAL ? ['-s', SERIAL] : []).concat(['exec-out', 'screencap', '-p']), { maxBuffer: 64 * 1024 * 1024, timeout: 60000 });
+      st = statsOf(buf);
+      if (!st.blank) break;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2000);
+    }
     fs.writeFileSync(shot, buf);
     const isPng = buf.length > 24 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47;
-    // 交接点：同一张真机图再写一份到 logs/ui-shots/，交给 scripts/ui-capture.js 上仓核对。
-    // 上一版我只给 capture 脚本登记了 EMU- 前缀，却没注意 device-check 写的是 logs/device/、
-    // 而 capture 读的是 logs/ui-shots/ —— 两个目录不同，结果真机图一张也没进仓。
-    // 两份都落在 gitignore 下的本机目录，进仓的是 capture 复制到 docs/evidence 的那一份。
-    fs.mkdirSync(path.join(ROOT, 'logs', 'ui-shots'), { recursive: true });
-    fs.writeFileSync(path.join(ROOT, 'logs', 'ui-shots', 'EMU-mumu-android12-home.png'), buf);
-    // 结构判据：PNG 签名 + IHDR 里的宽高应等于设备物理分辨率（这才是"截图有效"的硬证据）。
+    // 结构判据：PNG 签名 + IHDR 里的宽高应等于设备物理分辨率（允许横竖对调：这台 MuMu 截图是横屏）。
     const ihdr = isPng && buf.slice(12, 16).toString('latin1') === 'IHDR';
     const w = ihdr ? buf.readUInt32BE(16) : 0;
     const h = ihdr ? buf.readUInt32BE(20) : 0;
     const sizeM = /Physical size: (\d+)x(\d+)/.exec(sizeTxt);
     const expW = sizeM ? Number(sizeM[1]) : 0;
     const expH = sizeM ? Number(sizeM[2]) : 0;
-    // 朝向要容错：实测这台 MuMu 当时是横屏（截图 1920x1080）而 wm size 报的是竖屏物理尺寸
-    // （1080x1920），上一版只认一种朝向就假红了。宽高对调也算成立，并把实际朝向打出来。
     const sameOrientation = w === expW && h === expH;
     const rotated = w === expH && h === expW;
     check('真机截图是有效 PNG 且宽高等于设备物理分辨率（允许横竖对调）', isPng && ihdr && (sameOrientation || rotated),
       `png=${isPng} ihdr=${ihdr} 截图 ${w}x${h} / wm size ${expW}x${expH} → ${rotated ? '横屏（与 wm size 对调）' : (sameOrientation ? '同向' : '不符')} → ${shot}`);
-    // 画面内容这条**单列且只记录**：字节数小往往意味着空白/纯黑帧，但脚本无权断言"画面正常"，
-    // 上一版我拿 20000 字节当阈值，把"PNG 有效"和"画面有内容"混成一条，结果 14262 字节时假红。
-    console.log(`  · 截图字节数 ${buf.length}（仅记录，不作判据）${buf.length < 40000 ? ' ⚠ 偏小，疑似空白帧，需人眼复核' : ''}`);
+    // 画面判据（硬）：最高频像素占比 > 25% 即空白/未画完帧（阈值依据见 scripts/png-stats.js 注释：
+    // 190 张正常图的上限是 8.08%，半成品帧是 96%，启动窗口背景是 99.90%）。
+    // 上一版我把这条降级成"只记录字节数"，等于把唯一在说真话的信号掐掉；现在用像素判，空白即判红。
+    check('真机截图是真实画面（非空白/未画完帧；最高频像素占比 ≤ 25%）', !!st && !st.blank,
+      st && st.error ? st.error
+        : `重拍 ${tries} 次；${st.w}x${st.h} 唯一色=${st.distinct} 最高频 ${st.modal} 占 ${(st.modalShare * 100).toFixed(2)}% 平均色=(${st.avg.join(',')}) 文件 ${buf.length}B`);
+    // 交接点：只有真画面才写进上仓目录；空白帧一律不写（并清掉可能存在的旧空图），
+    // 避免"空图冒充真机证据"再进一次仓。
+    if (st && !st.blank) {
+      fs.mkdirSync(path.dirname(handoff), { recursive: true });
+      fs.writeFileSync(handoff, buf);
+    } else {
+      try { fs.rmSync(handoff, { force: true }); } catch (_) {}
+      console.log('  · 交接点：本次帧是空白帧，不写入 logs/ui-shots/，以免空图被当成真机证据上仓');
+    }
   } catch (e) {
-    check('真机截图是有效 PNG 且宽高等于设备物理分辨率', false, String((e && e.message) || e));
+    check('真机截图是真实画面（非空白/未画完帧；最高频像素占比 ≤ 25%）', false, String((e && e.message) || e));
   }
 
   const bad = results.filter((r) => !r.ok);
