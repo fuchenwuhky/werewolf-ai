@@ -21,7 +21,7 @@
 
 // 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
 // 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v21-m2e'; // 预缓存加入 /shared/export-status.js（M2-e 浏览器导出臂的三态归一化；前代 ww-v20-m2d 加的是 5 个 M2-d 纯逻辑模块）
+const VERSION = 'ww-v22-m3'; // 预缓存加入 /shared/setup-wizard.js（M3 三步开局的纯状态机；前代 ww-v21-m2e 加的是 /shared/export-status.js）
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -49,6 +49,7 @@ const SHELL = [
   '/shared/request-guard.js',
   '/shared/switch-guard.js',
   '/shared/draft-store.js',
+  '/shared/setup-wizard.js',
   '/shared/stats-bucket.js',
   '/shared/export-status.js',
   '/ai-cast.js',

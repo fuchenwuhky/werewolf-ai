@@ -98,7 +98,6 @@
           <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
         </div>
         <button class="btn ghost small hero-lang" id="btn-lang" data-ww-icon="lang" data-i18n-title="api.langSwitch" title="切换界面语言">中</button>
-        <button class="btn ghost small hero-codex" id="btn-codex" data-ww-icon="codex" data-i18n="codex.entry">角色图鉴</button>
       </div>
     </header>
 
@@ -127,23 +126,23 @@
               </div>
             </div>
             <div id="resume-empty" class="home-card home-empty hidden">
-              <p class="hint">没有进行中的对局。点「开始游戏」直接开一局，或先在下方「开局设置」里调整板子与规则。</p>
+              <p class="hint">没有进行中的对局。点「开始游戏」按三步开局：板子与规则 → 参与与座位 → 确认开局（前两步不会建局，随时可以后退改）。</p>
             </div>
 
             <!-- 主行动区：开始按钮 + 确认要素行（这一局是什么）+ 费用说明 -->
             <div class="home-cta">
               <button class="btn primary big" id="btn-start" data-ww-icon="start" data-i18n="start.button" disabled title="界面加载配置中…">开始游戏</button>
-              <span class="hint">Mock 试玩不调用 API、完全免费；真实对局按你配置的模型服务商计费。</span>
+              <span class="hint">试玩局用本地流程脚本推进（不调用模型、完全免费，用于演练流程）；真实对局才调用你配置的模型服务商，按用量计费。</span>
               <span class="hint setup-warn" id="setup-warn" role="status"></span>
             </div>
             <ul class="hero-facts" id="hero-facts"></ul>
-            <div class="setup-summary" id="setup-summary"></div>
             <span class="hint" id="setup-error"></span>
           </div>
 
-          <!-- 次级入口行：低频资料与设置不占第一屏主体 -->
-          <nav class="home-side" aria-label="资料与设置入口">
-            <button class="btn ghost home-entry" id="entry-codex" data-ww-icon="codex" type="button">角色图鉴</button>
+          <!-- 次级入口行：历史 / 资料 / 设置等低频入口压成一组，不占第一屏主体（§8.2 :245-254） -->
+          <nav class="home-side" aria-label="历史、资料与设置入口">
+            <button class="btn ghost home-entry" id="entry-history" data-ww-icon="timeline" type="button" title="对局历史（按当前档案）">对局历史</button>
+            <button class="btn ghost home-entry" id="btn-codex" data-ww-icon="codex" data-i18n="codex.entry" type="button">角色图鉴</button>
             <a class="btn ghost home-entry" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a>
             <button class="btn ghost home-entry" id="entry-rulebook" data-ww-icon="rulebook" type="button">规则书</button>
             <button class="btn ghost home-entry" id="entry-settings" data-ww-icon="settings" type="button">开局设置 · 模型与密钥</button>
@@ -459,6 +458,7 @@
 <script src="shared/request-guard.js"></script>
 <script src="shared/switch-guard.js"></script>
 <script src="shared/draft-store.js"></script>
+<script src="shared/setup-wizard.js"></script>
 <script src="shared/stats-bucket.js"></script>
   <script src="shared/export-status.js"></script>
 <script src="app.js"></script>

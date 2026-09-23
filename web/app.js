@@ -348,8 +348,6 @@ async function initSetup() {
   const codexBack = $('#btn-codex-back');
   if (codexBack) codexBack.addEventListener('click', closeCodex);
   // ---- 首页次级入口与分组（FIN-04 §8.1/8.3）：都是真实存在的能力，不做假开关 ----
-  const entryCodex = $('#entry-codex');
-  if (entryCodex) entryCodex.addEventListener('click', openCodex);
   const entryRulebook = $('#entry-rulebook');
   if (entryRulebook) entryRulebook.addEventListener('click', openRulebook);
   const entrySettings = $('#entry-settings');
@@ -358,6 +356,14 @@ async function initSetup() {
     if (!sec) return;
     sec.hidden = !sec.hidden; // AC-11：长表单默认收起，入口展开/收起
     if (!sec.hidden) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+  // 历史入口（§8.2 :247 次级入口含历史）：直接复用玩家中心里的「对局与战绩」组，
+  // 不另造第二份列表 —— 同一份数据两处渲染，正是本批要清掉的重复。
+  const entryHistory = $('#entry-history');
+  if (entryHistory) entryHistory.addEventListener('click', async () => {
+    await openPlayerCenter();
+    const group = document.querySelector('[data-ww-group="games"]');
+    if (group) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   const profilesEntry = $('#btn-profiles-entry');
   if (profilesEntry) profilesEntry.addEventListener('click', openPlayerCenter);
@@ -568,18 +574,6 @@ function renderSetupDigest() {
   if (paceTxt) facts.push(`<li>${T('digest.pace', { p: escapeHtml(paceTxt) })}</li>`);
   const box = $('#hero-facts');
   if (box) box.innerHTML = facts.join('');
-  const sum = $('#setup-summary');
-  if (sum) {
-    sum.innerHTML = `${isWatch ? T('digest.watch') : T('digest.play')} · ${T('digest.players', { n: total })} · ${T('digest.wolves', { w: wolves })}/${T('digest.good', { g: total - wolves })}`
-      + `<span class="ss-sep">|</span>${cleanBoard}`
-      + (mock ? `<span class="ss-sep">|</span>${T('digest.mock')}` : `<span class="ss-sep">|</span>${escapeHtml(model)}`)
-      + (paceTxt ? `<span class="ss-sep">|</span>${escapeHtml(paceTxt)}` : '');
-    // 开局确认要素（FIN-04 §8.2）：档案归属与模型状态要与板子/人数一样一眼可见
-    const profile = (state.profiles || []).find((p) => p.id === state.profileId);
-    if (profile) sum.innerHTML += `<span class="ss-sep">|</span>👤 ${escapeHtml(profile.nickname)}`;
-    const seatChoice = $('#my-seat') ? String($('#my-seat').value || '') : '';
-    if (seatChoice) sum.innerHTML += `<span class="ss-sep">|</span>座位 ${seatChoice === 'random' ? '随机' : seatChoice + ' 号'}`;
-  }
   // 真实模式缺 Key 的显式警示（不阻止浏览，但按下开始时会被拦截并引导 —— 见 startGame）
   const warn = $('#setup-warn');
   if (warn) {
