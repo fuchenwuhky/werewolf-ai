@@ -3784,6 +3784,24 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       check('手机端进入对局页', mobGame.shown.includes('m-game'), `入口=${resumed || '直接进局'} 可见=${mobGame.shown}`);
       check('手机端渲染座位与流程', mobGame.seats >= 8 && mobGame.flow >= 1, `座位=${mobGame.seats} 流程=${mobGame.flow} ${mobGame.day}/${mobGame.phase}`);
       check('手机端有待办面板或明确提示', mobGame.dialogBtns >= 1 || mobGame.hint.length > 0, `按钮=${mobGame.dialogBtns} 提示="${mobGame.hint.slice(0, 40)}"`);
+      // 前置：把身份牌翻过来，并等阶段横幅播完。不这么做的话，局中截图拍到的是「身份牌 / 点击翻开」遮罩
+      // （.m-flip，z-index 80）+「警长竞选」横幅（.m-flash，95），根本拍不到对局界面本身。
+      // 真机 390×844 实测过：13-mobile-game 与 13e-mobile-annotation-cleared 都被这层遮罩盖着，
+      // 后者名为「标注已清除」却连标注区都看不到，属名不副实。
+      const flipTried = await b.eval(`(() => { const f = document.getElementById('m-flip') || document.querySelector('.m-flip');
+        if (!f || f.hidden || f.offsetParent === null) return 'no-flip';
+        const btn = document.getElementById('m-flip-done') || f.querySelector('button');
+        if (!btn) return 'no-btn'; btn.click(); return 'clicked'; })()`);
+      const flipGone = await b.eval(`(async () => { for (let i = 0; i < 25; i++) {
+        const f = document.getElementById('m-flip') || document.querySelector('.m-flip');
+        if (!f || f.hidden || f.offsetParent === null) return true;
+        await new Promise((r) => setTimeout(r, 200)); } return false; })()`);
+      log(`  · 局中截图前置：身份牌 ${flipTried}，遮罩${flipGone ? '已收起' : '仍在（5s 内没翻过去，如实记录）'}`);
+      // 横幅等空档：等不到就如实记录，**不判失败** —— 横幅按时间出现，把它当硬判据只会让 run 变脆。
+      const flashGone = await b.eval(`(async () => { for (let i = 0; i < 60; i++) {
+        if (!document.querySelector('.m-flash')) return true;
+        await new Promise((r) => setTimeout(r, 200)); } return false; })()`);
+      log(`  · 局中截图前置：阶段横幅${flashGone ? '已播完' : '仍在播（12s 内没等到空档，如实记录；这张图会带过场横幅）'}`);
       await b.shot(path.join(SHOTS, '13-mobile-game.png'));
       // 对局内设置：旧版点开只有一句"配置在首页改" + 两个按钮，用户反馈"设置失效、只有一条线"；
       // 而齿轮入口却写着「接口 / 模型 / 节奏」，名不副实。现在必须有本局信息 + 可用入口 + 真路。
@@ -3960,6 +3978,11 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         // "量不到"是事实，用 log 记录，不用 check(…, true, …) 冒充一条通过。
         log('· §3 触点门禁：局中此刻已收走动作键（该阶段量测不适用，如实记录）');
       }
+      // 同 13：这一张也可能撞上阶段横幅（中间隔了几十秒检查）。等一次空档，等不到就如实记录、不判失败。
+      const flashGone320 = await b.eval(`(async () => { for (let i = 0; i < 60; i++) {
+        if (!document.querySelector('.m-flash')) return true;
+        await new Promise((r) => setTimeout(r, 200)); } return false; })()`);
+      log(`  · 320×568 局中截图前置：阶段横幅${flashGone320 ? '已播完' : '仍在播（12s 内没等到空档，如实记录）'}`);
       await b.shot(path.join(SHOTS, '14-320x568-mobile-game.png'));
 
       await b.setViewport(1280, 900, false);

@@ -386,9 +386,10 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-keys .btnrow { display: flex; gap: 5px; }
 .m-keys .btnrow .btn { flex: 1 1 0; }
 .m-modal .modal { width: min(560px, 96vw); }
-/* 移动端弹窗遮罩（桌面样式作用域为 #modal-root，移动端容器是 #m-modal） */
+/* 移动端弹窗遮罩（桌面样式作用域为 #modal-root，移动端容器是 #m-modal）。z-index 97：
+   必须高于底部弹层（96）与全屏阶段横幅（95）—— 横幅压上来会把弹窗内容盖住（同 13b/13c 那个缺陷）。 */
 #m-modal .modal-mask {
-  position: fixed; inset: 0; background: radial-gradient(ellipse at center, rgba(20,10,25,.82), rgba(3,2,6,.94)); z-index: 90;
+  position: fixed; inset: 0; background: radial-gradient(ellipse at center, rgba(20,10,25,.82), rgba(3,2,6,.94)); z-index: 97;
   display: flex; align-items: center; justify-content: center; padding: var(--sp-4);
 }
 #m-modal .modal { max-height: 82vh; }
@@ -567,11 +568,15 @@ html, body { height: 100%; overscroll-behavior: none; }
 .m-profile-row label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); margin: 0; color: var(--text-dim); font-size: var(--fs-md); }
 .m-profile-row .btn { flex: none; min-height: var(--h-touch-min); }
 
-/* 底部弹层：贴底、圆角顶、内部滚动、按钮常驻（拇指位）。z-index 85：
-   高于全屏横幅/翻牌（80/95 中 95 是 m-flash 不需要被盖），低于 #m-modal 的 90 ——
-   409 冲突弹窗（走 #m-modal）要压在编辑器之上。 */
+/* 底部弹层：贴底、圆角顶、内部滚动、按钮常驻（拇指位）。z-index 96：
+   **必须高于全屏阶段横幅 .m-flash 的 95** —— 横幅是过场提示，弹层是用户主动打开的界面；
+   横幅压在上面会把「设置 / 本局总结」整体压暗、正文被大字盖住。真机 390×844 实测：
+   13b 设置面板被「警长竞选」压住、13c 本局总结的得分构成区被「10 号 翻牌」压住。
+   原注释写的是「z-index 85：高于全屏横幅/翻牌（80/95 中 95 是 m-flash 不需要被盖）」——
+   85 并不高于 95，这句注释本身就把缺陷写成了设计意图，故连注释一起更正。
+   仍低于 #m-modal 的 97：409 冲突弹窗要压在编辑器之上。 */
 #m-sheet .m-sheet-mask {
-  position: fixed; inset: 0; z-index: 85;
+  position: fixed; inset: 0; z-index: 96;
   background: radial-gradient(ellipse at center, rgba(20,10,25,.6), rgba(3,2,6,.8));
   display: flex; align-items: flex-end; justify-content: center;
 }
