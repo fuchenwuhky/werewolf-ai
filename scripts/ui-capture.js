@@ -152,6 +152,12 @@ function plan() {
   const missing = [];
   if (!rowsOk.some((r) => isDesktopTier(r.size))) missing.push('桌面档（实测宽 ≥1280）');
   if (!rowsOk.some((r) => isMobileTier(r.size))) missing.push('手机档（实测宽 ≤430）');
+  // 守卫：我自己踩过**两次**的坑 —— ui-check 启动时会清空 logs/ui-shots，而真机图是 device-check 写进去的，
+  // 所以「先 ui-check、再 device-check、最后 ui-capture」这个顺序靠人记必然出错：两次落盘都因此丢了真机图。
+  // E 批的核心证据就是真机图 ⇒ 缺了直接判失败，而不是让我"记得"。
+  if (BATCH === 'E' && !rowsOk.some((r) => /^EMU-|^emu-/.test(r.f))) {
+    missing.push('E 批必须含真机图（logs/ui-shots/EMU-*.png）—— 请先跑 node scripts/device-check.js 再落盘');
+  }
 
   console.log('源目录：' + SRC + '（' + files.length + ' 张）');
   rows.forEach((r) => {
