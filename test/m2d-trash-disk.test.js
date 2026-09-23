@@ -75,9 +75,22 @@ async function mkProfile(api, nickname) {
   return r.body.profile.id;
 }
 
+/**
+ * 归档一个档案。R05 契约（docs/dual-platform-optimization-plan.md §3.1）下，
+ * "有未结束局的档案"已经**不可能**通过 API 归档（服务端最终判定，前端预检只是第一道）。
+ * 本文件的用例要验的是**回收站**那条规则（§5.2）在"只存在于磁盘的未结束局"场景下也成立，
+ * 所以这里不把旧断言改绿，而是**两层都钉**：
+ *   · 有未结束局 ⇒ API 归档必须 400（并给出可读原因）；
+ *   · 然后用 store 内核（_updateInner）造出"已归档"态，继续验删除那条规则照样拦得住
+ *     —— 那正是"如果有旧版本留下的非法存量态，纵深防御还在"的场景。
+ * 没有未结束局时走 200，行为与从前一致。
+ */
 async function archive(api, pid) {
   const r = await call(api, 'PATCH', `/api/profiles/${pid}`, { archive: true });
-  assert.strictEqual(r.status, 200, `归档失败：${r.raw}`);
+  if (r.status === 200) return;
+  assert.strictEqual(r.status, 400, `归档若被拒必须是 400（实际 ${r.status}：${r.raw}）`);
+  assert.match(r.body.error, /未结束的对局/, '被拒原因必须说明还有未结束的对局');
+  await api.profiles._updateInner(pid, { archive: true }); // 直接写库：造出"已归档 + 未结束局"的存量态
 }
 
 /**
@@ -256,8 +269,12 @@ test('M2-d ⑧端到端重启：生产 saveGame 落下的进行中存档，在�
   assert.strictEqual(rows.status, 200, rows.raw);
   assert.deepStrictEqual(rows.body.rows.map((r) => r.id), [gid], '前置：重启后这局仍归属该档案（只在磁盘上）');
 
+  // R05 契约：重启后（内存为空）这局仍被认成未结束 ⇒ **API 归档先被拒**；删除那条规则用
+  // store 内核造出归档态后继续验（两层都钉，而不是把旧断言改绿）。
   const ar = await call(api2, 'PATCH', `/api/profiles/${pid}`, { archive: true });
-  assert.strictEqual(ar.status, 200, `归档失败：${ar.raw}`);
+  assert.strictEqual(ar.status, 400, `有未结束局必须拒绝归档（实际 ${ar.status}：${ar.raw}）`);
+  assert.match(ar.body.error, /未结束的对局/);
+  await api2.profiles._updateInner(pid, { archive: true });
   const del = await call(api2, 'DELETE', `/api/profiles/${pid}`);
   assert.strictEqual(del.status, 400, `重启后仅存于存档的进行中局必须拦住删除（实际 ${del.status}：${del.raw}）`);
   assert.match(del.body.error, /进行中/);

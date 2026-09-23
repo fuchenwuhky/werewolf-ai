@@ -242,8 +242,15 @@ test('对局与战绩 / 数据管理接的是**真实接口**（无示例数据�
   assert.ok(/R\.un\.ok/.test(games) && /R\.fin\.ok/.test(games), '桌面端②组的进行中/最近完成没有各自判成败');
   assert.ok(!/加载中/.test(games), '桌面端②组又变成"先画加载中再异步填"——弹层打开后会继续长高，④组按钮会位移');
 
-  assert.ok(/\/api\/profiles\/\$\{pid\}\/games\/\$\{encodeURIComponent\(gameId\)\}\/history\?limit=100/.test(app),
-    '桌面端没有接只读历史接口（已结束对局没有"历史"可看）');
+  // ⚠ R04 重锚 + 升级：原判据钉的是字面量 `history?limit=100`。R04 要的正是"按服务端游标分页读到底"，
+  //   所以桌面端那条请求改由 historyPager 统一发出（url 里是 `limit=${PAGE}` 与 `&after=${cursor}`）。
+  //   这里**不是放宽**：原判据只说"接了历史接口"，现在把分页四件（游标 / 去重 / 迟到丢弃 / 可点入口）
+  //   一起要求 —— 恰好是指导文档 §R04「不得把提高一次性 limit 或删除还有更多当修复」的正面判据。
+  assert.ok(/\/history\?limit=\$\{PAGE\}/.test(app), '桌面端没有接只读历史接口（已结束对局没有"历史"可看）');
+  assert.ok(app.includes('&after=${cursor}'), 'R04：桌面端历史没有按服务端游标（after=）续读');
+  assert.ok(app.includes('seen.has(seq)'), 'R04：桌面端历史没有按 seq 去重');
+  assert.ok(app.includes('state.profileId !== pid'), 'R04：桌面端历史没有"切档后丢弃迟到响应"的保护');
+  assert.ok(app.includes('加载更多'), 'R04：桌面端历史没有可点的「加载更多」（只留"还有更多"提示不算修复）');
   assert.ok(app.includes('/api/profiles/${cur.id}/export'), '桌面端没有接导出接口');
   assert.ok(app.includes("id = 'pm-trash-entry'"), '回收站入口 id（#pm-trash-entry）丢了 —— scripts/ui-check.js 的整段回收区真路会断');
 

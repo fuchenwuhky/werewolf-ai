@@ -471,14 +471,26 @@ test('M2-AB ④未结束局的 owner 不可删除：A 被拒且原因明确，B 
   assert.strictEqual(disk.game.started, true);
   assert.strictEqual(disk.game.finished, false, '前置：这局确实未结束');
 
-  // 归档是允许的（§5.2 只禁止「进入回收站」），删除必须被拒
+  // R05 契约（docs/dual-platform-optimization-plan.md §3.1）：有未结束局的档案**连归档都不允许**。
+  //   （旧契约此处允许归档、只在删除时拒 —— 那正是"前端禁止 / 后端放行 / 测试说必须成功"的三套定义。）
   const archA = await h.request('PATCH', `/api/profiles/${A.id}`, { body: { archive: true } });
-  assert.strictEqual(archA.status, 200, `归档必须允许：${archA.text}`);
+  assert.strictEqual(archA.status, 400, `有未结束局必须拒绝归档（实际 ${archA.status}：${archA.text}）`);
+  assert.match(archA.body.error, /未结束的对局/, '错误必须说明还有未结束的对局');
+  assert.match(archA.body.error, /还有 1 局未结束/,
+    `同一局内存+磁盘必须只算一次（实际文案：${archA.body.error}）`);
+  assert.strictEqual(h.api.profiles.get(A.id).archivedAt, null, '被拒后档案不得带上归档标记');
+
+  // 回收站那条规则（§5.2）依旧成立，而且是**两层**都在：
+  //   ① 走 API 时先被"未结束不得归档"挡在门外（拿不到归档态，自然进不了回收站）；
+  //   ② store 层的 trash() 对"已归档 + 有进行中局"独立拒绝（纵深防御，绕过 API 也拦得住）。
   const delA = await h.request('DELETE', `/api/profiles/${A.id}`);
-  assert.strictEqual(delA.status, 400, `有未结束对局必须拒绝删除（实际 ${delA.status}：${delA.text}）`);
-  assert.match(delA.body.error, /进行中/, '错误必须说明「仍有对局进行中」');
-  assert.match(delA.body.error, /仍有 1 局进行中/,
-    `同一局内存+磁盘必须只算一次（实际文案：${delA.body.error}）`);
+  assert.strictEqual(delA.status, 409, `未归档就删除必须被拒（实际 ${delA.status}：${delA.text}）`);
+  await h.api.profiles._updateInner(A.id, { archive: true }); // 直接写库：造出"已归档 + 有未结束局"的非法存量态
+  const delArchivedA = await h.request('DELETE', `/api/profiles/${A.id}`);
+  assert.strictEqual(delArchivedA.status, 400, `已归档但有进行中局必须拒绝删除（实际 ${delArchivedA.status}：${delArchivedA.text}）`);
+  assert.match(delArchivedA.body.error, /进行中/, '错误必须说明「仍有对局进行中」');
+  assert.match(delArchivedA.body.error, /仍有 1 局进行中/,
+    `同一局内存+磁盘必须只算一次（实际文案：${delArchivedA.body.error}）`);
 
   // 被拒的副作用必须为零：档案在、回收区空、存档原位
   assert.ok(h.api.profiles.get(A.id), '被拒后档案必须原样保留');
@@ -898,9 +910,14 @@ test('M2-AB ⑨合流：A 建局→记胜→导出→导入→A 归档删除→B
   assert.strictEqual((await h.request('PATCH', `/api/profiles/${A.id}`, { body: { archive: true } })).status, 200);
   const delA = await h.request('DELETE', `/api/profiles/${A.id}`);
   assert.strictEqual(delA.status, 200, `A 只有已结束局，必须放行：${delA.text}`);
-  assert.strictEqual((await h.request('PATCH', `/api/profiles/${B.id}`, { body: { archive: true } })).status, 200);
+  // R05 契约：B 有进行中局 ⇒ **连归档都不许**（旧契约此处允许归档、只在删除时拒）。
+  //   删除那条规则仍然成立，只是现在被前一道门挡住；两层都钉住（纵深防御）。
+  const archB = await h.request('PATCH', `/api/profiles/${B.id}`, { body: { archive: true } });
+  assert.strictEqual(archB.status, 400, `B 有未结束局，归档必须被拒（实际 ${archB.status}：${archB.text}）`);
+  assert.match(archB.body.error, /未结束的对局/);
+  await h.api.profiles._updateInner(B.id, { archive: true }); // 直接写库：造出"已归档 + 进行中"的非法存量态
   const delB = await h.request('DELETE', `/api/profiles/${B.id}`);
-  assert.strictEqual(delB.status, 400, `B 有未结束局，必须被拒（实际 ${delB.status}：${delB.text}）`);
+  assert.strictEqual(delB.status, 400, `B 有未结束局，删除必须被拒（实际 ${delB.status}：${delB.text}）`);
   assert.match(delB.body.error, /进行中/);
 
   // 收尾对账：A 的局仍归属 A（没有被转给任何人），B 的局仍归属 B

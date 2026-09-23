@@ -499,9 +499,15 @@ test('M2-b 历史①：只允许已结束对局；档案与对局归属校验', 
   assert.strictEqual(dotdot.status, 404, `'..' 被规范化 ⇒ 路由不匹配 ⇒ 404：${dotdot.text}`);
   assert.match(dotdot.body.error, /not found/, dotdot.text);
 
-  // 归档档案：与 stats/games 同一语义（404）
-  const archived = await h.request('PATCH', `/api/profiles/${p.id}`, { body: { archive: true } });
-  assert.strictEqual(archived.status, 200, archived.text);
+  // 归档档案：与 stats/games 同一语义（404）。
+  // R05 契约（docs/dual-platform-optimization-plan.md §3.1）：p 名下还有一局未结束（m2g-unf），
+  // API 归档会被拒 —— 本用例要验的是"已归档档案的历史读不到"，所以先用 store 内核造归档态，
+  // 同时把 API 那条拒绝也钉住（两层都在，而不是把旧断言改绿）。
+  const archAttempt = await h.request('PATCH', `/api/profiles/${p.id}`, { body: { archive: true } });
+  assert.strictEqual(archAttempt.status, 400,
+    `p 有未结束局，API 归档必须被拒（实际 ${archAttempt.status}：${archAttempt.text}）`);
+  assert.match(archAttempt.body.error, /未结束的对局/, archAttempt.text);
+  await h.api.profiles._updateInner(p.id, { archive: true });
   assert.strictEqual((await h.request('GET', `/api/profiles/${p.id}/games/m2g-fin/history`)).status, 404);
   assert.strictEqual((await h.request('GET', `/api/profiles/${p.id}/games`)).status, 404);
 });

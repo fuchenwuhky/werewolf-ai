@@ -178,6 +178,8 @@ const PLANNED_SECTIONS = [
   'P4-3 空刀拦截（真实点击）',
   'R01 真人操作 pendingId（真实点击 + 真实请求）',
   'R03 手机玩家中心控件触区（真实几何）',
+  'R04 完整历史分页（真页面）',
+  'R05 归档契约（真页面 + 服务端最终判定）',
   'FIX-07 清除标注走真 DELETE',
   'P5 手机端进入对局',
   '截图矩阵（320×568 小屏与玩家中心，计划书第 83 行）',
@@ -2285,8 +2287,239 @@ log('\n=== R03 手机玩家中心控件触区（真实几何）===');
   await b.eval(`applyProfilePrefs({ fontScale: 1, layout: 'reading', reducedMotion: false })`);
   await b.goto(base + '/m/', 2200); // 复位成新开的手机页，后面的段落照旧从干净状态起步
 }
+// ---- R04：完整历史必须能逐页读完（真页面：真实点击「加载更多」直到末尾）----
+// 审核点名的现象是"固定 limit=100，hasMore 只显示还有更多，没有下一页"。
+// 本段不看代码、也不看字面量：往**本次运行的数据目录**里放一局已结束、含 251 条**非连续 seq**
+// 公开事件（另夹带私密事件）的存档，然后在真页面上点「历史」→「加载更多」直到出现"已到末尾"，
+// 并逐条核对条数、去重、末条内容，以及私密事件始终不出现。
+log('\n=== R04 完整历史分页（真页面）===');
+{
+  const gid = 'ui-r04-hist';
+  const pub = [];
+  const priv = [];
+  let seq = 1;
+  for (let i = 0; i < 251; i++) {
+    pub.push({ seq, day: 1 + (i % 3), phase: 'day', type: 'speech', actor: 2, text: `R04 公开事件 #${i + 1}`, ts: 1000 + i, visibleTo: 'all' });
+    if (i % 10 === 3) {
+      priv.push({ seq: seq + 1, day: 1, phase: 'night', type: 'wolf_talk', actor: 2, text: `R04 私密狼队密谈 #${i}`, ts: 2000 + i, visibleTo: 'seat:2' });
+      priv.push({ seq: seq + 2, day: 1, phase: 'night', type: 'god_note', actor: 1, text: `R04 私密上帝笔记 #${i}`, ts: 3000 + i, visibleTo: 'god' });
+      seq += 3;
+    } else { seq += 1 + (i % 4); }
+  }
+  check('R04 夹具自证：公开事件恰好 251 条且 seq **非连续**',
+    pub.length === 251 && pub.filter((e, i) => i > 0 && e.seq - pub[i - 1].seq > 1).length > 50,
+    `条数=${pub.length} 跳跃处=${pub.filter((e, i) => i > 0 && e.seq - pub[i - 1].seq > 1).length}`);
+
+  await b.setViewport(1440, 900, false);
+  await b.goto(base + '/', 2200);
+  const pid = await b.eval(`(() => (state && state.profileId) || null)()`);
+  check('R04：拿到当前档案 id（夹具存档按它定归属）', !!pid, String(pid));
+  const savesDir = path.join(DIR, 'saves');
+  fs.mkdirSync(savesDir, { recursive: true });
+  fs.writeFileSync(path.join(savesDir, `${gid}.json`), JSON.stringify({
+    schemaVersion: 2, tokens: {}, mock: false, ownerProfileId: pid, ownerNicknameSnapshot: 'R04',
+    profileSchemaVersion: 1,
+    game: {
+      id: gid, day: 3, phase: 'ended', started: true, finished: true, winner: 'good', winReason: 'R04 夹具',
+      players: [{ seat: 1, name: '我', isHuman: true, role: 'seer' }, { seat: 2, name: 'A', isHuman: false, role: 'wolf' }],
+      // 物理顺序打乱：服务端必须显式按 seq 排序（否则非连续 seq 会错页）
+      events: pub.concat(priv).slice().reverse(),
+      board: { wolf: 1, villager: 3, seer: 1 }, rules: {},
+    },
+    anchor: null, review: null, savedAt: 4102444800000, // 2100-01-01：保证它排在"最近完成"最前，入口可见
+  }));
+  check('R04：夹具存档已写入本次运行的数据目录（服务端每次请求都读盘，无需重启）',
+    fs.existsSync(path.join(savesDir, `${gid}.json`)), path.join(savesDir, `${gid}.json`));
+
+  await b.goto(base + '/', 2200); // 重载：让玩家中心重新取数
+  await b.eval(`(() => { openPlayerCenter(); return true; })()`);
+  await waitExpr('R04：桌面玩家中心列出了夹具对局的历史入口', `!!document.getElementById('pc-history-${gid}')`, { timeout: 8000 });
+  // 真实点击前先滚进视野：玩家中心是长弹层，按钮可能在 900px 视口之下 —— 真实鼠标点空会被误判成"没反应"。
+  await b.eval(`(() => { const el = document.getElementById('pc-history-${gid}'); if (el) el.scrollIntoView({ block: 'center' }); return true; })()`);
+  await b.realClick(`#pc-history-${gid}`);
+  const modalUp = async () => await b.eval(`!!document.getElementById('pc-history-more-box')`);
+  let opened = false;
+  for (let i = 0; i < 8 && !opened; i++) { await new Promise((r) => setTimeout(r, 250)); opened = await modalUp(); }
+  if (!opened) {
+    // 兜底：真实点击确实没打开弹层时，改在产品自己的点击处理上用**同一次 eval 内派发**的合成点击
+    //（ui-check 既有成熟做法：弹层会被重渲染，坐标点击可能落空）。走了哪条路径如实记进日志。
+    log('  · R04：真实点击未打开历史弹层 ⇒ 改用合成点击重试（如实记录，不当作真实点击通过）');
+    await b.eval(`(() => { const el = document.getElementById('pc-history-${gid}'); if (el) el.click(); return true; })()`);
+  } else {
+    log('  · R04：历史弹层由**真实点击**打开 ✓');
+  }
+  await waitExpr('R04：历史弹层出现可点的「加载更多」（说明第一页走的是服务端游标契约，而不是"还有更多"提示）',
+    `!!document.getElementById('pc-history-more')`, { timeout: 8000 });
+  const readHist = async () => await b.eval(`(() => {
+    const list = document.getElementById('pc-history-list');
+    const rows = list ? Array.prototype.slice.call(list.querySelectorAll('.pc-row')) : [];
+    const texts = rows.map((r) => { const h = r.querySelector('.hint'); return h ? h.textContent : ''; });
+    const box = document.getElementById('pc-history-more-box');
+    return { rows: rows.length, unique: new Set(texts).size, last: texts[texts.length - 1] || '',
+      more: box ? box.textContent.trim() : '', priv: texts.filter((t) => /私密/.test(t)).length };
+  })()`);
+  const h1 = await readHist();
+  log('  · 首屏：' + JSON.stringify(h1));
+  check('R04：首屏按 100 条一页渲染（真实 DOM 行数）', h1.rows === 100, JSON.stringify(h1));
+  check('R04：首屏给出可点的「加载更多」并显示进度（已读 100 / 还有 151）',
+    /加载更多/.test(h1.more) && /已读 100 条/.test(h1.more), h1.more);
+  await b.shot(path.join(SHOTS, 'R04-历史分页-首屏.png'));
+
+  await b.realClick('#pc-history-more');
+  await waitExpr('R04：第二页渲染完成（200 条）', `(() => { const l = document.getElementById('pc-history-list'); return l && l.querySelectorAll('.pc-row').length === 200; })()`, { timeout: 8000 });
+  await b.realClick('#pc-history-more');
+  await waitExpr('R04：读到底（251 条）', `(() => { const l = document.getElementById('pc-history-list'); return l && l.querySelectorAll('.pc-row').length === 251; })()`, { timeout: 8000 });
+  const h2 = await readHist();
+  log('  · 读到底：' + JSON.stringify(h2));
+  check('R04：三页读完恰好 251 条，且无重复行（去重后条数一致）', h2.rows === 251 && h2.unique === 251, JSON.stringify(h2));
+  check('R04：能真的看到最后一项（末条即第 251 条公开事件）', h2.last.includes('#251'), h2.last);
+  check('R04：读完后按钮换成"已到末尾"（不再要求用户点）', /已到末尾/.test(h2.more) && !/加载更多/.test(h2.more), h2.more);
+  check('R04：私密事件（狼队密谈 / 上帝笔记）一条都没出现', h2.priv === 0, `命中 ${h2.priv} 条`);
+  await b.shot(path.join(SHOTS, 'R04-历史分页-读到底.png'));
+
+  // 切档后迟到请求不得串数据：拦在**产品自己的** api() 这一层造 1.2s 延迟，
+  // 首屏请求在途时就切到另一个档案，然后核对新页面上没有任何旧历史痕迹。
+  // 这段"切档竞态小实验"是本段唯一可能抛异常的地方（页面里的 async eval）。给它加 .catch：
+  // 失败只记一条失败，绝不中断整个 run —— 否则后面的 R05 段会变成"未执行"，严格模式读不出任何东西。
+  const switched = await b.eval(`(async () => {
+    const real = api;
+    const others = (state.profiles || []).filter((x) => !x.archivedAt && x.id !== state.profileId);
+    if (!others.length) return { skipped: '只有一个可用档案，无法切档' };
+    const target = others[0];
+    window.__r04rejects = window.__r04rejects || [];
+    const onRej2 = (e) => { window.__r04rejects.push(String((e && (e.reason && e.reason.message)) || (e && e.message) || e)); if (e && e.preventDefault) e.preventDefault(); };
+    window.addEventListener('unhandledrejection', onRej2); window.addEventListener('error', onRej2);
+    window.__r04api = api;
+    window.api = async (m, u, b) => {
+      if (m === 'GET' && /\\/history/.test(u)) await new Promise((r) => setTimeout(r, 1200));
+      return window.__r04api(m, u, b);
+    };
+    try {
+      // ⚠ 这里**不点任何东西**：上一版用 btn.click()（不 await）模拟"加载中切档"，
+      //   结果点击处理里的异常变成页面未捕获异常，直接把整个 run 打断（后面所有段变成"未执行"）。
+      //   改成直接 await 产品自己的 openPcHistory()：请求在途时切档，再等那次 promise 收尾，
+      //   断言"迟到的响应没有被画进列表" —— 判据是**列表里没有行**（不是"元素不存在"，
+      //   弹层本身是切档之前就打开的，拿它当判据会误报）。
+      const mine = state.profileId;
+      const inflight = openPcHistory('${gid}');   // 故意不立刻 await：让请求在途
+      await new Promise((r) => setTimeout(r, 150));
+      state.profileId = target.id;                 // 切档（模拟用户在加载中切走）
+      await inflight;                              // 等迟到响应落地（内部按世代号 + 档案比对丢弃）
+      state.profileId = mine;                      // 复原
+      const list = document.getElementById('pc-history-list');
+      const rows = list ? list.querySelectorAll('.pc-row').length : 0;
+      closeModal();
+      return { switchedTo: target.nickname, lateRows: rows, listExists: !!list };
+    } finally {
+      window.api = window.__r04api;
+      window.removeEventListener('unhandledrejection', onRej2); window.removeEventListener('error', onRej2);
+    }
+  })()`).catch((e) => ({ skipped: `竞态小实验本身出错：${(e && e.message) || e}` }));
+  log('  · 切档竞态：' + JSON.stringify(switched));
+  if (switched && switched.skipped) {
+    log('  · R04 切档竞态：' + switched.skipped + '（如实记，不计通过）');
+  } else {
+    check('R04：加载中切档后，迟到响应不得把旧档案的历史画进新页面（列表里不得出现任何行）',
+      switched && switched.lateRows === 0, JSON.stringify(switched));
+  }
+  await b.goto(base + '/', 2200);
+}
+// ---- R05：归档契约（真页面里的前端预检 + 服务端最终判定）----
+// 审核点名的冲突是：前端 archiveBlockReason() 禁止有未结束局的档案归档，服务端没有这个限制，
+// 测试反而断言"归档必须成功"。契约已在 docs/dual-platform-optimization-plan.md §3.1 登记。
+// 本段验两件事：① 真页面上点「归档」被拦下且给出可读原因；② 绕过前端直接打同一接口，
+// 服务端照样拒绝（最终判定在服务端，不是前端预检）。
+log('\n=== R05 归档契约（真页面 + 服务端最终判定）===');
+{
+  await b.setViewport(1440, 900, false);
+  await b.goto(base + '/', 2200);
+  const pid = await b.eval(`(() => (state && state.profileId) || null)()`);
+  check('R05：拿到当前档案 id（夹具存档按它定归属）', !!pid, String(pid));
+  const savesDir = path.join(DIR, 'saves');
+  fs.mkdirSync(savesDir, { recursive: true });
+  const fix = path.join(savesDir, 'ui-r05-running.json');
+  fs.writeFileSync(fix, JSON.stringify({
+    schemaVersion: 2, tokens: {}, mock: true, ownerProfileId: pid, ownerNicknameSnapshot: 'R05',
+    profileSchemaVersion: 1,
+    game: {
+      id: 'ui-r05-running', day: 1, phase: 'night', started: true, finished: false, winner: null, winReason: '',
+      players: [{ seat: 1, name: '我', isHuman: true, role: 'seer' }, { seat: 2, name: 'A', isHuman: false, role: 'wolf' }],
+      events: [], board: { wolf: 1, villager: 3, seer: 1 }, rules: {},
+    },
+    anchor: null, review: null, savedAt: 4102444800000,
+  }));
+  await b.goto(base + '/', 2200); // 重载：让玩家中心/档案列表重新取数
+
+  // ① 前端预检：点档案行上的「归档」，必须被拦下（不弹"确认归档"的二次确认，而是给出原因）
+  const pre = await b.eval(`(async () => {
+    window.__alerts = []; window.__confirms = 0; window.__r04rejects = [];
+    const realAlert = window.alert; const realConfirm = window.confirm;
+    // 点「归档」后产品自己的 async 处理若抛错，会成为「页面未捕获异常」并把整轮 ui-check 打断
+    //（读数里就是这样中断的）。这里临时接管并**记下原因**，finally 里恢复；不是静默吞掉。
+    const onRej = (e) => { window.__r04rejects.push(String((e && (e.reason && e.reason.message)) || (e && e.message) || e)); if (e && e.preventDefault) e.preventDefault(); };
+    window.addEventListener('unhandledrejection', onRej); window.addEventListener('error', onRej);
+    window.alert = (m) => { window.__alerts.push(String(m)); };
+    window.confirm = (m) => { window.__confirms++; return false; };
+    try {
+      openProfileManager();
+      await new Promise((r) => setTimeout(r, 500));
+      // ⚠ 必须点**当前档案那一行**的「归档」：档案列表里每个档案都有一枚「归档」按钮，
+      //   随便取第一枚会点到别的档案（上一轮读数就是弹出了"确认归档"，因为那一行没有未结束局）。
+      //   当前行有唯一标记「（当前）」（app.js 的行头文案），据此定位，并把这枚按钮的所属行文本一起记回来。
+      const rows = Array.prototype.slice.call(document.querySelectorAll('#modal-root *, body > *'))
+        .filter((x) => x.tagName === 'DIV' && /（当前）/.test(x.textContent || ''));
+      const rowEl = rows.sort((a, b) => (a.textContent || '').length - (b.textContent || '').length)
+        .find((x) => Array.prototype.slice.call(x.querySelectorAll('button')).some((y) => y.textContent.trim() === '归档'));
+      if (!rowEl) return { noBtn: true, alerts: window.__alerts.slice(), rows: rows.length };
+      const btn = Array.prototype.slice.call(rowEl.querySelectorAll('button'))
+        .find((y) => y.textContent.trim() === '归档');
+      if (!btn) return { noBtn: true, alerts: window.__alerts.slice() };
+      const rowText = (rowEl.textContent || '').slice(0, 80);
+      btn.click();
+      await new Promise((r) => setTimeout(r, 900));
+      const row = (state.profiles || []).find((x) => x.id === state.profileId);
+      return { alerts: window.__alerts.slice(), confirms: window.__confirms, archived: !!(row && row.archivedAt), rowText,
+        rejects: window.__r04rejects.slice() };
+    } finally {
+      window.confirm = realConfirm; window.alert = realAlert;
+      window.removeEventListener('unhandledrejection', onRej); window.removeEventListener('error', onRej);
+    }
+  })()`);
+  log('  · 前端预检：' + JSON.stringify(pre).slice(0, 300));
+  check('R05：真页面点「归档」被拦下，且给出了可读原因（未结束的对局数）',
+    !pre.noBtn && pre.alerts.some((m) => /未结束的对局/.test(m)), JSON.stringify(pre).slice(0, 240));
+  check('R05：被拦时**不进入**二次确认（说明是硬拦，不是"确认后照样归档"）', pre.confirms === 0, String(pre.confirms));
+  check('R05：被拦后档案没有被归档', pre.archived === false, String(pre.archived));
+
+  // ② 服务端最终判定：绕过前端（页面的 api() 直连），同一请求必须同样被拒
+  const direct = await b.eval(`(async () => {
+    try {
+      const r = await api('PATCH', '/api/profiles/' + state.profileId, { archive: true });
+      return { status: r && r.profile ? 200 : 200, err: '' };
+    } catch (e) { return { status: e && e.status, err: e && e.message }; }
+  })()`);
+  log('  · 直连接口：' + JSON.stringify(direct));
+  check('R05：绕过前端直接打接口，服务端同样拒绝归档（400 + 未结束局数）',
+    direct.status === 400 && /未结束的对局/.test(String(direct.err)), JSON.stringify(direct));
+  await b.shot(path.join(SHOTS, 'R05-归档被拦-真页面.png'));
+
+  // ③ 清理夹具并自证"拦的就是它"：移走那局后，未结束列表回到 0
+  fs.rmSync(fix, { force: true });
+  const after = await b.eval(`(async () => {
+    const r = await api('GET', '/api/profiles/' + state.profileId + '/games?status=unfinished&limit=50');
+    return { unfinished: (r.rows || []).length };
+  })()`);
+  check('R05：移走那局未结束存档后，未结束列表回到 0（证明拦的就是它，不是恒拒）',
+    after.unfinished === 0, JSON.stringify(after));
+  await b.goto(base + '/', 2200);
+}
 log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
     {
+      // 本段是手机端交互，必须**自设视口**：它原先隐含依赖"上一段留着的手机视口"，
+      // 而 R04/R05 两段是桌面段（1440×900）—— 段序一变，这里就会点不到 #m-profile-chip
+      //（实测：正是这一处超时，并伴随一次页面未捕获异常把整轮打断）。自洽，不依赖段序。
+      await b.setViewport(390, 844, true);
+      await b.goto(base + '/', 2200);
       const FP = `(() => {
         const c = document.getElementById('av-crop-stage');
         if (!c) return { ok: false, why: 'no-stage' };

@@ -123,7 +123,7 @@ test('FIN-07 R1 owner 固定：归属创建时锁定；后续建局/切档不改
 });
 
 // ---------- R2 进行中切档（服务端半）：activeGames 拒删 ----------
-test('FIN-07 R2 activeGames 拒删：有进行中对局的已归档档案删除被拒，结算后放行', async () => {
+test('FIN-07 R2 activeGames：有未结束局的档案归档与删除都被拒（两层），结算后放行', async () => {
   const { api, dataDir } = makeApi('active');
   try {
     await api._profileMigrationReady;
@@ -133,12 +133,20 @@ test('FIN-07 R2 activeGames 拒删：有进行中对局的已归档档案删除�
     assert.strictEqual(g.status, 200);
     makeGameEntry(api, g.body.gameId, pid); // game.started=true, finished=false → 进行中
 
+    // R05 契约（docs/dual-platform-optimization-plan.md §3.1 归档那一条）：有未结束局时**连归档都不允许**。
     const ar = await call(api, 'PATCH', `/api/profiles/${pid}`, { archive: true });
-    assert.strictEqual(ar.status, 200, `归档失败：${JSON.stringify(ar.body)}`);
+    assert.strictEqual(ar.status, 400, `有未结束局必须拒绝归档（实际 ${ar.status}：${JSON.stringify(ar.body)}）`);
+    assert.match(ar.body.error, /未结束的对局/, '错误必须说明还有未结束的对局');
+    assert.strictEqual(api.profiles.get(pid).archivedAt, null, '被拒后档案不得带上归档标记');
+    assert.ok(api.profiles.get(pid), '被拒后档案必须原样保留');
 
+    // 回收站那条规则（§5.2）依旧成立，而且是**两层**：
+    //   ① 走 API 时先被"未结束不得归档"挡住，压根到不了归档态；
+    //   ② store 层 trash() 仍对"已归档 + 有进行中局"独立拒绝（绕过 API 也拦得住）。
+    await api.profiles._updateInner(pid, { archive: true });
     const del = await call(api, 'DELETE', `/api/profiles/${pid}`);
     assert.strictEqual(del.status, 400, `有进行中对局必须拒绝删除（实际 ${del.status}：${JSON.stringify(del.body)}）`);
-    assert.match(del.body.error, /进行中/, '错误必须说明"仍有对局进行中"');
+    assert.match(del.body.error, /进行中/, '错误必须说明「仍有对局进行中」');
     assert.ok(api.profiles.get(pid), '被拒后档案必须原样保留');
 
     // 结算该局后放行

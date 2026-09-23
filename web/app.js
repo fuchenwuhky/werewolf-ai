@@ -1591,6 +1591,8 @@ function pcGameRow(g, resumable) {
   row.appendChild(main);
   const ops = el('div', 'pm-ops');
   const btn = el('button', 'btn small', resumable ? '继续对局' : '历史');
+  // 稳定定位点（与手机端 m-pc-resume-/m-pc-history- 对齐）：验收与自动化不靠中文文案找按钮
+  btn.id = (resumable ? 'pc-resume-' : 'pc-history-') + g.id;
   btn.addEventListener('click', () => { if (resumable) pcResumeFromRow(g, btn); else openPcHistory(g.id); });
   ops.appendChild(btn);
   row.appendChild(ops);
@@ -1623,28 +1625,25 @@ async function openPcHistory(gameId) {
   const body = el('div', 'mbody');
   body.appendChild(elText('p', 'hint', `只读历史 · ${gameId}：来自存档事件，不启动引擎、不调用模型。`));
   const listBox = el('div');
+  listBox.id = 'pc-history-list'; // R04：给验收一个稳定定位点（按 id 找，不靠文案）
   listBox.textContent = '加载中…';
-  body.appendChild(listBox);
+  // R04：分页入口单独一个盒子（按钮 + 进度/失败说明）—— 与列表内容分开，失败时列表内容不动
+  const moreBox = el('div');
+  moreBox.id = 'pc-history-more-box';
+  body.append(listBox, moreBox);
   wrap.append(head, body);
   openModal(wrap);
-  try {
-    const r = await api('GET', `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=100`);
-    listBox.textContent = '';
-    const rows = r.rows || [];
-    for (const e of rows) {
+  await historyPager({
+    pid, gameId, listBox, moreBox,
+    mkRow: (e) => {
       const row = el('div', 'pc-row');
       const main = el('div', 'pc-main');
       main.appendChild(elText('div', 'pc-name', `第 ${e.day || 0} 天 · ${PHASE_LABEL[e.phase] || e.phase || ''}`));
       main.appendChild(elText('div', 'hint', e.text || ''));
       row.appendChild(main);
-      listBox.appendChild(row);
-    }
-    if (!rows.length) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
-    if (r.hasMore) listBox.appendChild(elText('p', 'hint', `还有更多事件（共 ${r.total} 条），这里先显示前 ${rows.length} 条。`));
-  } catch (e) {
-    listBox.textContent = '';
-    listBox.appendChild(elText('p', 'hint', `历史加载失败：${e.message}`));
-  }
+      return row;
+    },
+  });
 }
 
 /** ③ 外观与操作：字号 / 阅读布局 / 减少动态效果 —— 与开局设置页 #pref-* 同一份偏好实现 */
@@ -5220,3 +5219,65 @@ initSetup().then(async () => {
 }).catch((e) => {
   document.body.innerHTML = `<div style="padding:40px;color:#ff8080">初始化失败：${escapeHtml(e.message)}<br>请确认服务已启动（node server.js）</div>`;
 });
+
+/**
+ * R04（审核 P2）：把一局历史**按服务端游标分页读完**（桌面端）。
+ *
+ * 为什么不是"把 limit 调大"或"删掉还有更多提示"：服务端早就给了游标契约
+ * （GET …/history?after=<seq>&limit=<n> → { rows, total, hasMore, nextAfter }，只下发 visibleTo=all 的
+ * 公开事件、且不构造 Game、不取 agentFactory、不调模型），用户看不到底是**前端没接**这条契约。
+ *
+ * 三条必须成立的行为：
+ *   · 续读用上一页的 nextAfter（游标），不是页码 —— 事件集合变化时不会跳条；
+ *   · 以 seq 去重（服务端已按 seq 排序），重试或重复点击不会出现重复行；
+ *   · 迟到响应一律丢弃：请求自带世代号，且**当前档案**必须还是发起时那个（切档不串数据）。
+ * 失败只影响 moreBox：已读内容保留，按钮变「重试」。
+ */
+async function historyPager({ pid, gameId, listBox, moreBox, mkRow }) {
+  const PAGE = 100;
+  const seen = new Set();
+  let cursor = 0;   // 下一页的 after（取自服务端 nextAfter）
+  let loaded = 0;   // 已渲染条数（去重后）
+  let gen = 0;      // 世代号：只有最新一次请求有权改页面
+  const stale = (my) => my !== gen || state.profileId !== pid;
+  const setMore = (hasMore, remaining, err) => {
+    moreBox.textContent = '';
+    if (err) moreBox.appendChild(elText('p', 'hint', `加载更多失败：${err}（已读内容保留，可直接重试）`));
+    if (hasMore || err) {
+      const b = el('button', 'btn ghost', err ? '重试' : `加载更多（已读 ${loaded} 条，还有 ${remaining} 条）`);
+      b.id = 'pc-history-more';
+      b.addEventListener('click', () => { b.disabled = true; void page(); });
+      moreBox.appendChild(b);
+    } else if (loaded) {
+      moreBox.appendChild(elText('p', 'hint', `已到末尾（共 ${loaded} 条公开事件）。`));
+    }
+  };
+  const page = async (first) => {
+    const my = ++gen;
+    const url = `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=${PAGE}${cursor ? `&after=${cursor}` : ''}`;
+    try {
+      const r = await api('GET', url);
+      if (stale(my)) return; // 档案已切走 / 已发起新一轮：这份响应作废，绝不动页面
+      if (first) listBox.textContent = '';
+      for (const e of (r.rows || [])) {
+        const seq = Number(e.seq);
+        if (!Number.isFinite(seq) || seen.has(seq)) continue; // 以 seq 去重
+        seen.add(seq); loaded++;
+        listBox.appendChild(mkRow(e));
+      }
+      if (Number.isFinite(Number(r.nextAfter))) cursor = Number(r.nextAfter);
+      if (first && !loaded) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
+      // 服务端 total = 该游标之后的**全部**公开事件数（含本页）⇒ 真正"还没读到"的要减掉本页条数，
+      // 否则按钮上"已读 N 条，还有 M 条"会自相矛盾（N+M 大于总数）。
+      setMore(!!r.hasMore, Math.max(0, (Number(r.total) || 0) - (r.rows || []).length), null);
+    } catch (e) {
+      if (stale(my)) return;
+      if (first) {
+        listBox.textContent = '';
+        listBox.appendChild(elText('p', 'hint', `历史加载失败：${e.message}`));
+      }
+      setMore(true, 0, e.message); // 失败：已读内容保留，按钮变「重试」
+    }
+  };
+  await page(true);
+}

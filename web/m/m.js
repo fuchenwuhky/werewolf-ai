@@ -1243,29 +1243,26 @@ async function openPcHistory(gameId) {
   const body = el('div');
   body.appendChild(el('p', 'hint', '只读历史：来自存档事件，不会启动引擎、也不会调用模型。'));
   const listBox = el('div', 'pc-hist');
+  listBox.id = 'm-pc-history-list'; // R04：验收定位点
   listBox.textContent = '加载中…';
-  body.appendChild(listBox);
+  // R04：分页按钮放在列表**之下、独立一个盒子**里 —— 失败时列表内容不动（已读内容保留）
+  const moreBox = el('div');
+  moreBox.id = 'm-pc-history-more-box';
+  body.append(listBox, moreBox);
   const foot = el('div', 'btnrow');
   const close = el('button', 'btn ghost', '关闭');
   close.addEventListener('click', closeSheet);
   foot.appendChild(close);
   openSheet(`对局历史 · ${gameId}`, body, foot, { icon: 'timeline' });
-  try {
-    const r = await api('GET', `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=100`);
-    listBox.textContent = '';
-    const rows = r.rows || [];
-    for (const e of rows) {
+  await historyPager({
+    pid, gameId, listBox, moreBox,
+    mkRow: (e) => {
       const line = el('div', 'pc-hist-row');
       line.appendChild(elText('span', 'hint', `第 ${e.day || 0} 天 · ${PHASE_LABEL[e.phase] || e.phase || ''}`));
       line.appendChild(elText('span', 'pc-hist-txt', e.text || ''));
-      listBox.appendChild(line);
-    }
-    if (!rows.length) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
-    if (r.hasMore) listBox.appendChild(el('p', 'hint', `还有更多事件（共 ${r.total} 条），这里先显示前 ${rows.length} 条。`));
-  } catch (e) {
-    listBox.textContent = '';
-    listBox.appendChild(el('p', 'hint', `历史加载失败：${e.message}`));
-  }
+      return line;
+    },
+  });
 }
 
 /** ④ 数据管理：导出、导入、归档、回收站和待清理恢复记录（全部接现有接口与现有弹层） */
@@ -4245,3 +4242,57 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else mountNavIcons();
 
 init().catch((e) => { document.body.innerHTML = `<div style="padding:40px;color:#e89ba4">初始化失败：${escapeHtml(e.message)}</div>`; });
+
+/**
+ * R04（审核 P2）：把一局历史**按服务端游标分页读完**（手机端；与桌面端同源实现）。
+ * 追加在文件末尾，是为了不动 m.js 那条行号钉点（emoji-preserve 的 1788±25）—— 判据一字未改。
+ * 续读用 nextAfter、以 seq 去重、迟到响应丢弃、失败不清空已读内容，逐条对应 §R04。
+ */
+async function historyPager({ pid, gameId, listBox, moreBox, mkRow }) {
+  const PAGE = 100;
+  const seen = new Set();
+  let cursor = 0;   // 下一页的 after（取自服务端 nextAfter）
+  let loaded = 0;   // 已渲染条数（去重后）
+  let gen = 0;      // 世代号：只有最新一次请求有权改页面
+  const stale = (my) => my !== gen || state.profileId !== pid;
+  const setMore = (hasMore, remaining, err) => {
+    moreBox.textContent = '';
+    if (err) moreBox.appendChild(elText('p', 'hint', `加载更多失败：${err}（已读内容保留，可直接重试）`));
+    if (hasMore || err) {
+      const b = el('button', 'btn ghost', err ? '重试' : `加载更多（已读 ${loaded} 条，还有 ${remaining} 条）`);
+      b.id = 'm-pc-history-more';
+      b.addEventListener('click', () => { b.disabled = true; void page(); });
+      moreBox.appendChild(b);
+    } else if (loaded) {
+      moreBox.appendChild(elText('p', 'hint', `已到末尾（共 ${loaded} 条公开事件）。`));
+    }
+  };
+  const page = async (first) => {
+    const my = ++gen;
+    const url = `/api/profiles/${pid}/games/${encodeURIComponent(gameId)}/history?limit=${PAGE}${cursor ? `&after=${cursor}` : ''}`;
+    try {
+      const r = await api('GET', url);
+      if (stale(my)) return; // 档案已切走 / 已发起新一轮：这份响应作废，绝不动页面
+      if (first) listBox.textContent = '';
+      for (const e of (r.rows || [])) {
+        const seq = Number(e.seq);
+        if (!Number.isFinite(seq) || seen.has(seq)) continue; // 以 seq 去重
+        seen.add(seq); loaded++;
+        listBox.appendChild(mkRow(e));
+      }
+      if (Number.isFinite(Number(r.nextAfter))) cursor = Number(r.nextAfter);
+      if (first && !loaded) listBox.appendChild(el('p', 'hint', '这条历史里没有可展示的公开事件。'));
+      // 服务端 total = 该游标之后的**全部**公开事件数（含本页）⇒ 真正"还没读到"的要减掉本页条数，
+      // 否则按钮上"已读 N 条，还有 M 条"会自相矛盾（N+M 大于总数）。
+      setMore(!!r.hasMore, Math.max(0, (Number(r.total) || 0) - (r.rows || []).length), null);
+    } catch (e) {
+      if (stale(my)) return;
+      if (first) {
+        listBox.textContent = '';
+        listBox.appendChild(el('p', 'hint', `历史加载失败：${e.message}`));
+      }
+      setMore(true, 0, e.message); // 失败：已读内容保留，按钮变「重试」
+    }
+  };
+  await page(true);
+}

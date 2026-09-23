@@ -1251,7 +1251,21 @@ class Api {
       ownerHumanSeat,
       createdAt: Date.now(), lastAccess: Date.now(), // 内存治理（TTL/LRU）用
     };
-    this.games.set(gameId, entry);
+    // R05（契约 §3.1）：登记的这一刻**再判一次**档案状态，并与登记一起放进同一个档案级串行周期。
+    // 归档的 [判定 + 写盘] 走同一条锁，所以两者不可能交错：
+    //   建局先拿锁 ⇒ 归档那边会把"刚建好还没开始"的待保存局一起数出来 ⇒ 归档被拒；
+    //   归档先拿锁 ⇒ 这里看到 archivedAt ⇒ 建局被拒（不会留下属于已归档档案的局）。
+    // 不复用上面那次检查（1186 行附近）：它与这里之间隔着整局的构造，是最典型的 TOCTOU 窗口。
+    // ⚠ 只包这一段：后面 _touchProfileUsage() 会再进 _serialize，整段包锁会自等待死锁。
+    const registered = await this.profiles._serialize(async () => {
+      if (ownerProfileId) {
+        const cur = this.profiles.get(ownerProfileId);
+        if (!cur || cur.archivedAt) return false;
+      }
+      this.games.set(gameId, entry);
+      return true;
+    });
+    if (!registered) return this.json(res, 400, { error: '档案不存在或已归档' });
     logger.openGameLog(gameId);
     logger.info('api', `对局已创建 ${gameId}（${useMock ? 'Mock' : llmCfg.model}，${check.total}人${mySeat ? '，你在 ' + mySeat + ' 号' : '，纯观战'}）`, { gameId });
     await this.saveGame(entry, { force: true });
@@ -1274,6 +1288,15 @@ class Api {
     if (entry.game.paused) return this.json(res, 409, { error: '对局处于暂停态，请走断点恢复（resume）' });
     if (entry.error) return this.json(res, 409, { error: '对局上次异常终止，请从存档恢复' });
     if (entry.game.started) return this.json(res, 409, { error: '对局已开始' });
+    // R05（契约 §3.1）：开始对局前**同步**再判一次所属档案。归档的 [判定 + 写盘] 在档案级
+    // 串行周期里跑，而 startGame 是同步的（remediation 的既有用例同步调用它，不能改成 async），
+    // 所以这里用两半合围：① 这里同步拦住"档案已归档"；② 下面立刻置 running，归档那边的计数
+    // 会把 running 的局算成未结束 ⇒ 反过来拦住。两边谁先动谁赢，绝不会"归档成功后那局才开始"。
+    if (entry.ownerProfileId) {
+      let owner = null;
+      try { owner = this.profiles.get(entry.ownerProfileId); } catch (_) { owner = null; }
+      if (!owner || owner.archivedAt) return this.json(res, 409, { error: '该对局所属档案已归档，无法开始（请先恢复档案）' });
+    }
     entry.running = true;
     this._drive(entry);
     return this.json(res, 200, { ok: true });
@@ -1965,7 +1988,37 @@ class Api {
   /** 档案更新（方案 §3.6 PATCH）：expectedRevision 乐观并发，失败 409 */
   async updateProfile(res, pid, body) {
     try {
-      const prof = await this.profiles.update(pid, body);
+      // R05（契约 docs/dual-platform-optimization-plan.md §3.1「归档」）：有未结束对局的档案不得归档。
+      // 三条要点，逐条对应指导文档 R05：
+      //  ① 最终判定在**服务端** —— 前端 archiveBlockReason() 只是预检，绕过前端就没了；
+      //  ② 判定用 _activeGameCount()：内存 ∪ 磁盘（重启后仅存于存档的局也算）、同 id 去重、
+      //     坏档按保守拒绝（读不出就无法排除它是本档案的未结束局）；
+      //  ③ 判定与写盘在**同一个档案级串行周期**内完成，与建局/开始排同一条队 ——
+      //     否则"预检通过 → 并发建出一局 → 归档成功"会留下一个无归属的未结束局。
+      // ⚠ 必须调 store._updateInner（update 的无锁内核）：update() 会再次进 _serialize，
+      //   而互斥量此刻正被本周期占用 ⇒ 自等待死锁（store 不改，故走内核入口；见 restoreProfile）。
+      const wantsArchive = !!(body && body.archive === true && body.restore !== true);
+      const prof = await this.profiles._serialize(async () => {
+        if (wantsArchive) {
+          const cur = this.profiles.get(pid);
+          if (cur && !cur.archivedAt) {
+            const scan = this._activeGameCount(pid);
+            if (scan.active > 0) {
+              // 文案与前端 web/shared/switch-guard.js 的 archiveBlockReason() 逐字一致：
+              // 同一条规则只留一份说法（测试也按这句文案钉）
+              throw new ValidationError(`该档案还有 ${scan.active} 局未结束的对局，不能归档或删除（不会替你终止它们：请先回到该档案结束或显式终止对局）`);
+            }
+            if (scan.corrupt.length) {
+              throw new ValidationError(
+                `存档目录有 ${scan.corrupt.length} 份读不出的存档（${scan.corrupt.join('；')}），`
+                + '无法确认其中没有该档案尚未结束的对局；为避免归档后这些对局失去归属，已保守拒绝归档。'
+                + '请先修复或移走这些文件后重试。',
+              );
+            }
+          }
+        }
+        return this.profiles._updateInner(pid, body);
+      });
       // FIX-11：归档动作让"默认档案"失效 → 必须同一次请求内清理/重指向
       if (prof.archivedAt) await this._repointDefaultProfile(pid);
       return this.json(res, 200, { profile: prof });
@@ -1985,7 +2038,8 @@ class Api {
    * 没有任何一处会报错，只是它再也回不到任何档案名下。计划书 §2：发现数据丢失必须立即修复。
    *
    * 去重口径与 `_profileGameRows` 一致：内存与磁盘同 id 时只算一次（内存是权威、磁盘是快照），
-   * 所以内存里已结算而磁盘快照还停在"进行中"时，不会把同一局重复计两次。
+   * 所以内存里已结算而磁盘快照还停在「进行中」时，**以内存为准**（这局不算未结束，也不重复计两次）；
+   * 反过来，只在磁盘上、内存里没有的局，按磁盘状态算。同 id 一律只算一次，两条路径（归档/删除）共用这一份口径。
    * 磁盘档没有 gameId 的（手工夹具）：用文件名占键（绝不与内存 id 撞键），**照常计入**——
    * 判据只认 game.started / game.finished，"这局还在跑"与有没有 id 无关。
    *
@@ -2002,6 +2056,19 @@ class Api {
   _activeGameCount(pid) {
     const activeIds = new Set();
     const corrupt = [];
+    // ⚠ R05 口径修正：先把**内存**这半边收齐，再扫磁盘 —— 同 id 时**以内存为准**
+    //（内存是权威、磁盘是快照，与 _profileGameRows 同一口径）。
+    // 旧实现在「内存已结算、磁盘快照还停在进行中」时，磁盘那圈照旧把它计成未结束
+    //（Set 只在两边都往同一个 id 里加时才去重）⇒ 一局刚打完就会因快照滞后锁住档案，
+    // 用户看到的是「归档/删除坏了」。保守的方向仍是"能确认没结束才算结束"，而内存就是那个确认。
+    const inMem = new Map(); // gameId → 是否未结束（仅本档案的对局）
+    for (const [gid, entry] of this.games) {
+      if (!entry || !entry.game || entry.ownerProfileId !== pid) continue;
+      // 口径与磁盘侧一致：started 且未 finished。**另外**把 entry.running 也算上 ——
+      // startGame 是先同步置 running、再驱动引擎，这一格正是"归档检查"与"开始对局"的交错窗口；
+      // 把它计入后两者互斥（谁先动谁赢，不会出现"归档成功之后那局才开始"）。
+      inMem.set(String(gid), !!entry.running || (!!entry.game.started && !entry.game.finished));
+    }
     for (const f of this._saveFileNames()) {
       const read = this._readSaveDocStrict(path.join(this.saveDir, f));
       if (!read.ok) {
@@ -2011,15 +2078,13 @@ class Api {
       const doc = read.doc;
       if (doc.ownerProfileId !== pid) continue;
       const gm = (doc.game && typeof doc.game === 'object' && !Array.isArray(doc.game)) ? doc.game : {};
-      if (gm.started !== true || gm.finished === true) continue;
       const id = gm.id;
-      activeIds.add((id === undefined || id === null || id === '') ? `\u0000file:${f}` : String(id));
+      const key = (id === undefined || id === null || id === '') ? `\u0000file:${f}` : String(id);
+      if (inMem.has(key)) continue; // 内存已有这局的权威状态 ⇒ 磁盘这份快照不参与计数
+      if (gm.started !== true || gm.finished === true) continue;
+      activeIds.add(key);
     }
-    for (const [gid, entry] of this.games) {
-      if (!entry || !entry.game || entry.ownerProfileId !== pid) continue;
-      if (!entry.game.started || entry.game.finished) continue;
-      activeIds.add(String(gid)); // 与磁盘同 id 时 Set 天然去重
-    }
+    for (const [gid, active] of inMem) if (active) activeIds.add(gid);
     return { active: activeIds.size, corrupt };
   }
 
