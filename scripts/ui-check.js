@@ -2828,6 +2828,84 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       const mid = await b.eval(`({ seats: document.querySelectorAll('#seats .seat').length, msgs: document.querySelectorAll('#stream .msg').length, ring: !!document.querySelector('#seats .ring-stage') })`);
       check('中局：圆桌座位与事件流都已渲染', mid.seats >= 4 && mid.msgs >= 3 && mid.ring, JSON.stringify(mid));
       await b.shot(path.join(SHOTS, '07a-midgame.png'));
+      // D 批（M4）跨宽度切换：guidance §3.3 :156 —— ≥961px 三栏且笔记常驻；≤960px 玩家与笔记都改抽屉。
+      // 上一版我在这里把两档判据写反了（说 960 仍三栏、按钮隐藏），已按下述正确口径重写：
+      // 960 属抽屉档（CSS 是 max-width:960，JS 的 .docked 是 min-width:961），1024 才是宽屏档。
+      // 先记住当前视口，拍完原样恢复，免得影响后续终局、教练面板与手机段。
+      const vp0 = await b.eval(`({ w: window.innerWidth, h: window.innerHeight })`);
+      {
+        await b.setViewport(1024, 900, false);
+        await b.eval(`new Promise((r) => setTimeout(r, 400))`); // 等布局与 matchMedia 落定
+        const wide = await b.eval(`({
+          cols: getComputedStyle(document.querySelector('.game-layout')).gridTemplateColumns,
+          docked: !!document.querySelector('#notes-drawer.docked'),
+          btnHidden: (() => { const b = document.querySelector('#btn-seats-toggle'); return b ? b.hidden : null; })(),
+        })`);
+        check('M4 1024px（宽屏档）：三栏且笔记常驻、玩家抽屉按钮隐藏',
+          wide.docked === true && wide.btnHidden === true && /320px/.test(wide.cols), JSON.stringify(wide));
+        await b.shot(path.join(SHOTS, 'M4-1024x900-midgame-3col.png'));
+
+        await b.setViewport(960, 900, false);
+        await b.eval(`new Promise((r) => setTimeout(r, 400))`);
+        const narrow = await b.eval(`({
+          cols: getComputedStyle(document.querySelector('.game-layout')).gridTemplateColumns,
+          docked: !!document.querySelector('#notes-drawer.docked'),
+          seatsPos: getComputedStyle(document.querySelector('.left-col')).position,
+          btnHidden: (() => { const b = document.querySelector('#btn-seats-toggle'); return b ? b.hidden : null; })(),
+        })`);
+        check('M4 960px（抽屉档）：玩家区脱离文档流、笔记不再常驻、按钮可见',
+          narrow.docked === false && narrow.seatsPos === 'fixed' && narrow.btnHidden === false,
+          JSON.stringify(narrow));
+        await b.shot(path.join(SHOTS, 'M4-960x900-midgame-drawer.png'));
+        // 真点一次开合按钮，证明抽屉是"能开"的（不是只写在样式里）
+        await b.click('#btn-seats-toggle');
+        await b.eval(`new Promise((r) => setTimeout(r, 350))`);
+        const opened = await b.eval(`({ open: !!document.querySelector('#screen-game.seats-open'), x: getComputedStyle(document.querySelector('.left-col')).transform })`);
+        check('M4 960px：点按钮后玩家抽屉真的滑入（.seats-open 生效）', opened.open === true, JSON.stringify(opened));
+        await b.shot(path.join(SHOTS, 'M4-960x900-midgame-drawer-open.png'));
+
+        await b.setViewport(vp0.w, vp0.h, false);
+        await b.eval(`new Promise((r) => setTimeout(r, 300))`);
+        // D 批（M4）长内容：guidance :185 要求"长内容截图"。
+        // 上一版我拿"本局最长发言 ≥120 字"当判据，实测只有 84 字 ⇒ 如实判红（不降阈值换绿）。
+        // 现在改用**用户自由文本**这一条真会变长的路径：走页面内真实标注弹层，真输入一段 200+ 字笔记，
+        // 由应用自己处理 revision 与保存，再断言"这段长文本真的渲染进笔记区"，最后拍图。
+        const longNote = '长笔记压力测试：' + '这一段用来压住笔记区与汇总列表的行宽与换行，'.repeat(9) + '（结束）';
+        const modalTried = await b.eval(`(() => {
+          if (typeof openTagModal !== 'function') return { ok: false, why: 'NOT_GLOBAL' };
+          openTagModal(3);
+          const ta = document.querySelector('#modal-root textarea');
+          return { ok: !!ta, why: ta ? 'TA_FOUND' : 'NO_TEXTAREA' };
+        })()`);
+        check('M4 长内容：标注弹层可打开且拿到笔记输入框', modalTried.ok === true, JSON.stringify(modalTried));
+        if (modalTried.ok) {
+          const typed = await b.eval(`(() => {
+            const ta = document.querySelector('#modal-root textarea');
+            if (!ta) return 0;
+            ta.value = ${JSON.stringify(longNote)};
+            ta.dispatchEvent(new Event('input', { bubbles: true }));
+            ta.dispatchEvent(new Event('change', { bubbles: true }));
+            return ta.value.length;
+          })()`);
+          check('M4 长内容：长笔记已真输入（≥200 字）', typed >= 200, `len=${typed}`);
+          const saved = await b.eval(`(() => {
+            const bt = [...document.querySelectorAll('#modal-root button')].find((x) => /保存/.test(x.textContent || ''));
+            if (!bt) return null;
+            bt.click();
+            return (bt.textContent || '').trim();
+          })()`);
+          check('M4 长内容：点得到并点得动保存键', typeof saved === 'string' && saved.length > 0, String(saved));
+          await waitExpr('M4 长内容：长笔记已渲染（笔记区出现该文本前缀）',
+            `!!document.querySelector('#notes-drawer') && document.querySelector('#notes-drawer').textContent.includes('长笔记压力测试')`,
+            { timeout: 6000 });
+          const shown = await b.eval(`(() => {
+            const d = document.querySelector('#notes-drawer');
+            return { has: !!d && d.textContent.includes('长笔记压力测试'), len: ${JSON.stringify(longNote)}.length };
+          })()`);
+          check('M4 长内容：长笔记在真实页面上渲染出来了', shown.has === true, JSON.stringify(shown));
+          await b.shot(path.join(SHOTS, 'M4-long-长笔记.png'));
+        }
+      }
       // FIX-18：原来是"固定 sleep(3000) × 140 次"的轮询，改成带超时的条件等待（最多等 7 分钟，语义不变）
       const finRes = await waitCheck('--full：观战局跑到终局（教练面板出现）', async () => await b.eval(
         `(() => { const p = document.getElementById('coach-panel'); return { ok: !!p && !p.classList.contains('hidden'), hidden: p ? p.classList.contains('hidden') : null }; })()`),
