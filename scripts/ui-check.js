@@ -3984,6 +3984,23 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       checkGeometry('第 83 行 320×568：首页上的当前档案头像可见、非零尺寸（M1 自定义头像的展示位）', mAvatar320, { minW: 16, minH: 16 });
       const mSw320 = await b.eval('document.documentElement.scrollWidth');
       check('第 83 行 320×568：首页在 320 宽下没有横向溢出', mSw320 <= 321, `scrollWidth=${mSw320}`);
+      // 板子卡片：标题文字不得压进右上角人数角标。320×568 实测压过字 —— 让位只留 30px，而角标实际宽约 36px
+      // （15px 字×2 位 + 8px×2 内边距 + 2px 边框），标题一折行就压上去。
+      // 这里量的是**最后一行文字的真实右缘**（Range.getClientRects），不是 h3 的盒宽：盒宽含让位内边距，
+      // 既量不出压字、也无法反映"文字有没有真的躲开"。留 1px 容差应对子像素。
+      const mSeats320 = await b.eval(`(() => { const out = [];
+        for (const c of document.querySelectorAll('.m-board-card')) {
+          const h = c.querySelector('h3'); const s = c.querySelector('.m-seats'); if (!h || !s) continue;
+          const sr = s.getBoundingClientRect();
+          const rg = document.createRange(); rg.selectNodeContents(h);
+          const rects = [...rg.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+          const textRight = rects.length ? Math.max(...rects.map((x) => x.right)) : null;
+          out.push({ t: (h.textContent || '').trim().slice(0, 10), textRight: textRight === null ? null : Math.round(textRight * 10) / 10, badgeLeft: Math.round(sr.left * 10) / 10, badgeW: Math.round(sr.width * 10) / 10, lines: rects.length });
+        } return out; })()`);
+      const badSeats = (mSeats320 || []).filter((x) => x.textRight === null || x.textRight > x.badgeLeft - 1);
+      check('第 83 行 320×568：板子卡片标题不压右上角人数角标（量文字真实右缘 < 角标左缘）',
+        Array.isArray(mSeats320) && mSeats320.length >= 2 && badSeats.length === 0,
+        `卡片=${(mSeats320 || []).length} 压字=${badSeats.length} ` + JSON.stringify(badSeats.length ? badSeats : (mSeats320 || [])[0]));
       await b.shot(path.join(SHOTS, '15-320x568-mobile-home.png'));
 
       // 玩家中心（手机端 = 首页档案 chip 点开的底部弹层）：用**真实点击**进入，再做几何判定

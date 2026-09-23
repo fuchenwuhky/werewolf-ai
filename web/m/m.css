@@ -127,7 +127,7 @@ html, body { height: 100%; overscroll-behavior: none; }
   border-color: var(--accent);
   box-shadow: 0 0 0 1px rgba(var(--sem-danger-rgb),.55), 0 0 20px rgba(var(--sem-danger-rgb),.3), var(--el-2);
 }
-.m-board-card h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); line-height: 1.45; color: var(--gold-bright); font-family: var(--font-cn-title); padding-right: 30px; /* 给右上角人数角标让位，防止折行文字压字（UI 审查） */ }
+.m-board-card h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-md); line-height: 1.45; color: var(--gold-bright); font-family: var(--font-cn-title); padding-right: 44px; /* 给右上角人数角标让位。实测角标宽约 36px（15px 字×2 位 + 8px×2 内边距 + 2px 边框），原来留 30px 不够，320×568 折行时文字压进角标；留 44px 有余量。ui-check 另有几何断言把关（不等实测） */ }
 .m-board-card p { margin: 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; }
 .m-board-card .m-seats {
   position: absolute; top: var(--sp-2); right: var(--sp-3);
@@ -770,6 +770,13 @@ html, body { height: 100%; overscroll-behavior: none; }
   border: 1px solid var(--line-dim); border-radius: var(--r-sm);
   background: linear-gradient(180deg, #131b2e, var(--ink-800)); color: var(--text-dim);
   font-size: var(--fs-md); font-family: inherit; letter-spacing: 1px;
+  /* 标签一律不换行：320×568 实测最右那格「我的」被挤成两行（👤 我 / 的），两字标签被劈开。 */
+  white-space: nowrap;
+}
+/* 窄屏再收紧内边距、字距与图标间距，把宽度让给文字（触区高度 min-height 不动，仍然 ≥48）。
+   只作用于底部主入口，不影响局内页签（.m-tabs 下的同名按钮）。 */
+@media (max-width: 360px) {
+  .m-tabbar .m-tab-btn { padding: 0 4px; letter-spacing: 0; gap: 2px; font-size: var(--fs-sm); }
 }
 .m-tab-btn:active { transform: translateY(1px); }
 .m-tab-btn.active {
