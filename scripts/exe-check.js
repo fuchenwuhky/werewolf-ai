@@ -225,8 +225,16 @@ class Cdp {
     c.close();
     try { child.kill(); } catch (_) {}
     await sleep(1200);
-    try { fs.rmSync(dataDir, { recursive: true, force: true }); } catch (_) {}
-    try { fs.rmSync(userDir, { recursive: true, force: true }); } catch (_) {}
+    // 清理要看得见：上一版把 rmSync 失败包在 catch (_) {} 里静默吞掉，实测在 EXE 进程仍持有句柄时
+    // 会残留 ww-exe-data-* / ww-exe-userdata-* 临时目录，而输出里一句提示都没有 —— 这正是 :193
+    // 要的"清理生命周期"被做成了假动作。失败一律打印告警并计入未通过项。
+    for (const pair of [['数据目录', dataDir], ['用户数据目录', userDir]]) {
+      try {
+        fs.rmSync(pair[1], { recursive: true, force: true });
+      } catch (e) {
+        bad('清理' + pair[0] + '失败（进程可能仍持有句柄）', String((e && e.message) || e) + ' → ' + pair[1]);
+      }
+    }
   // guidance :197 要求把"没做的事"摆明，而不是让读者以为 EXE 列已被完整关闭：
   // 原生保存对话框那一步必须有真人，本脚本刻意绕开了它（只用非法 profileId）。
   console.log('  · 未覆盖（guidance :197）：原生"保存导出文件 → 选回刚保存的文件 → 导入" —— 需真人；');
