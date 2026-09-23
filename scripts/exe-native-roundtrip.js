@@ -240,12 +240,57 @@ function sendKeys(text, { titleRe = null, foreground = false } = {}) {
   return { code: r.status, out: (r.stdout || Buffer.alloc(0)).toString('utf8').trim(), err: (r.stderr || Buffer.alloc(0)).toString('utf8').trim() };
 }
 /**
+ * 把文本送进**指定 hwnd 的原生对话框**（真实键盘事件）+ 回车。
+ *
+ * ⚠ 这是 v9 才修对的关键点：不能"先把主窗口置前再按前台发键" —— 那会把焦点从对话框抢走，
+ * 按键全打进主窗口、对话框一个字都没收到（v9 实测：原生"打开"框确实弹出来了，
+ * 但 sendkeys-fg 报告的是 `hwnd=主窗口 title='AI 狼人杀'`，于是导入没走到预览）。
+ * 现在按对话框自己的 hwnd 置前并**验证前台确实是它**，没验证成功就拒绝盲发。
+ */
+function sendKeysToHwnd(hwnd, text, { label = '' } = {}) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1, 'sendkeys-hwnd', String(hwnd), text],
+    { encoding: 'buffer', windowsHide: true, timeout: 40000 });
+  const out = { code: r.status, out: (r.stdout || Buffer.alloc(0)).toString('utf8').trim(), err: (r.stderr || Buffer.alloc(0)).toString('utf8').trim() };
+  log(`[sendKeysToHwnd ${label}] hwnd=${hwnd} → ${JSON.stringify(out)}`);
+  return out;
+}
+/** 用 SendInput + KEYEVENTF_UNICODE 把文本作为**真实键盘事件**敲给指定窗口。
+ *  为什么要这条：本机是 TSF 微软拼音、且没有纯英文键盘布局，走 SendKeys/普通按键会被输入法
+ *  合成成汉字（实测 WWkeyprobe1 → WW可鸭脯肉不饿），ImmSetOpenStatus 对 TSF 无效。
+ *  UNICODE 注入不经过输入法转换，目标窗口收到的仍是正常 WM_CHAR —— 依然属真实键盘输入。 */
+function sendUnicodeToHwnd(hwnd, text, { label = '', altN = false, enter = false } = {}) {
+  const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1, 'send-unicode', String(hwnd), text];
+  if (altN) args.push('altn');
+  if (enter) args.push('enter');
+  const r = spawnSync('powershell.exe', args, { encoding: 'buffer', windowsHide: true, timeout: 60000 });
+  const out = { code: r.status, out: (r.stdout || Buffer.alloc(0)).toString('utf8').trim(), err: (r.stderr || Buffer.alloc(0)).toString('utf8').trim() };
+  log(`[sendUnicodeToHwnd ${label}] hwnd=${hwnd} altN=${altN} enter=${enter} text=${JSON.stringify(text)} → ${JSON.stringify(out)}`);
+  return out;
+}
+/** 把**文件完整路径**敲进原生文件对话框并回车（真人做法：Alt+N 切到"文件名"框 → 全选 → 路径 → 回车）。
+ *  先用英文键盘布局把输入法钉住，再用真实按键 —— 否则中文输入法会把字母合成汉字，路径永远敲不对。 */
+function sendKeysPathToHwnd(hwnd, filePath, { label = '' } = {}) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1, 'sendkeys-path', String(hwnd), filePath],
+    { encoding: 'buffer', windowsHide: true, timeout: 60000 });
+  const out = { code: r.status, out: (r.stdout || Buffer.alloc(0)).toString('utf8').trim(), err: (r.stderr || Buffer.alloc(0)).toString('utf8').trim() };
+  log(`[sendKeysPathToHwnd ${label}] hwnd=${hwnd} path=${JSON.stringify(filePath)} → ${JSON.stringify(out)}`);
+  return out;
+}
+/** 只置前+验证，不发键（用于确认"对话框真的能拿到前台"） */
+function focusHwnd(hwnd) {
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', HELPER_PS1, 'focus-hwnd', String(hwnd)],
+    { encoding: 'buffer', windowsHide: true, timeout: 30000 });
+  return { code: r.status, out: (r.stdout || Buffer.alloc(0)).toString('utf8').trim(), err: (r.stderr || Buffer.alloc(0)).toString('utf8').trim() };
+}
+/**
  * 给**本应用的窗口**发键：先把本应用窗口置前并**验证前台真的变成了它**，再发键。
  * 为什么不直接发给"当前前台窗口"：实测曾把 {ENTER} 发给了别的应用（日志里能看到前台是无关窗口）。
  */
 function sendKeysToApp(text, { label = '' } = {}) {
   const fw = bringToFront('狼人杀');
-  if (!/fronted=true/.test(fw.out || '')) {
+  // ⚠ PowerShell 输出的是 `fronted=True`（首字母大写）；这里必须不区分大小写地判，
+  //   否则会把成功置前误判成失败而拒绝发键（v8 就踩过：日志里 fronted=True 却报了"未确认成功"）。
+  if (!/fronted=[Tt]rue/.test(fw.out || '')) {
     log(`[sendKeysToApp ${label}] 置前**未确认成功** ⇒ 拒绝盲发按键（避免把按键发给别的应用）：${JSON.stringify(fw)}`);
     return { code: -1, out: fw.out, err: 'front-not-confirmed', skipped: true };
   }
@@ -296,26 +341,6 @@ async function shot(c, file, { label = '', prevHash = null, attempts = 4 } = {})
     bringToFront('狼人杀');
   }
   return { ...last, stale: true };
-}
-
-/** 密集轮询（150ms）抓"一闪而过"的新窗口；只统计本应用归属的窗口 */
-async function watchNewWindows(knownTitles, { ms = 6000, re = null, qualify = null } = {}) {
-  const known = new Set(knownTitles);
-  const seenNew = [];
-  let hit = null;
-  const t0 = Date.now();
-  while (Date.now() - t0 < ms) {
-    const { windows } = listWindows({ appOnly: true, qualify: qualify || qualifyAppWindow });
-    for (const w of windows) {
-      if (!known.has(w.title) && !seenNew.some((x) => x.title === w.title)) {
-        seenNew.push({ title: w.title, hwnd: w.hwnd, pid: w.pid, thread: w.thread, geo: w.geo, atMs: Date.now() - t0 });
-      }
-      if (re && !hit && re.test(w.title)) hit = w;
-    }
-    if (hit) break;
-    await sleep(150);
-  }
-  return { hit, seenNew };
 }
 
 // ─────────────────────────────── CDP ───────────────────────────────
@@ -485,34 +510,107 @@ const PROFILES_JS = `(async () => {
 /**
  * JS 原生对话框（confirm/alert）观测与应答。
  * 注意：JS 对话框会**阻塞渲染进程**，期间任何 Runtime.evaluate 都会超时 —— 必须先应答再继续。
- * 首选真实键盘回车（真人做法）；只有置前失败时才退回 CDP 的 Page.handleJavaScriptDialog，
- * 且退回这件事会**显式写进日志**（它属于"代替真人点确定"，不是文件选择器那类必须真人的动作）。
+ * 首选真实键盘回车（真人做法，按**对话框自己的 hwnd** 置前）；只有真实回车后渲染进程**仍被阻塞**时，
+ * 才退回 CDP 的 Page.handleJavaScriptDialog，且退回这件事会显式写进日志
+ * （它属于"代替真人点确定"，不是文件选择器那类必须真人的动作）。
  */
+let _jsAnswered = 0;
 function jsDialogs(c) {
   return c.events.filter((e) => e.method === 'Page.javascriptDialogOpening').map((e) => e.params);
+}
+/** 尚未应答的那个 JS 对话框（已应答过的不再返回，否则 wait 会立刻误命中） */
+function pendingJsDialog(c) {
+  const d = jsDialogs(c);
+  return d.length > _jsAnswered ? d[d.length - 1] : null;
 }
 async function waitJsDialog(c, ms = 8000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    const d = jsDialogs(c);
-    if (d.length) return d[d.length - 1];
+    const d = pendingJsDialog(c);
+    if (d) return d;
     await sleep(200);
   }
   return null;
 }
+/** 渲染进程是否仍被原生对话框阻塞（一个最短的 evaluate 探针） */
+async function rendererBlocked(c) {
+  try { await c.send('Runtime.evaluate', { expression: '1', returnByValue: true }, 3500); return false; }
+  catch (_) { return true; }
+}
 async function answerJsDialog(c, { label = '' } = {}) {
-  const d = jsDialogs(c);
-  if (!d.length) { log(`[answerJsDialog ${label}] 当前没有 JS 原生对话框`); return { answered: false }; }
-  const last = d[d.length - 1];
+  const last = pendingJsDialog(c);
+  if (!last) { log(`[answerJsDialog ${label}] 当前没有待应答的 JS 原生对话框`); return { answered: false }; }
   log(`[answerJsDialog ${label}] 检测到 JS 原生对话框：type=${last.type} message=${JSON.stringify((last.message || '').slice(0, 200))}（这是**应用自己的** confirm/alert，不是文件选择器）`);
-  const k = sendKeysToApp('{ENTER}', { label: label + '-回车' });
-  if (!k.skipped) { await sleep(1200); return { answered: true, how: 'real-enter', dialog: last }; }
-  log(`[answerJsDialog ${label}] 真实回车发不出去（置前未确认）⇒ 退回 CDP Page.handleJavaScriptDialog（**代替真人点确定**，见日志区分）`);
+  const dlgWin = appDialogs().find((d) => d.cls === '#32770');
+  let how = null;
+  if (dlgWin) {
+    // 真人做法：直接点这个原生对话框上的"确定/OK"按钮（真实鼠标），比盲发回车更贴近"人点确定"。
+    const kids = ps('dialog-children', String(dlgWin.hwnd)).out;
+    const okBtn = (kids.split('\n').find((l) => /class=Button/.test(l) && /vis=True|vis=True/.test(l) && /确定|OK/.test(l)) || '').match(/hwnd=(\d+)/);
+    log(`[answerJsDialog ${label}] 对话框 hwnd=${dlgWin.hwnd} title="${dlgWin.title}"；按钮清单=${JSON.stringify(kids.split('\n').filter((l) => /class=Button/.test(l)).slice(0, 4))}`);
+    if (okBtn) {
+      const click = ps('click-hwnd', okBtn[1]);
+      log(`[answerJsDialog ${label}] 真实鼠标点击"确定"按钮 = ${JSON.stringify(click.out)}`);
+      await sleep(1000);
+      if (!(await rendererBlocked(c))) how = 'real-mouse-click-ok-button';
+    }
+    if (!how) {
+      const k = sendKeysToHwnd(dlgWin.hwnd, '{ENTER}', { label: label + '-真实回车' });
+      if (/sent-to-hwnd/.test(k.out || '')) how = 'real-enter-to-dialog-hwnd';
+      else log(`[answerJsDialog ${label}] 对话框置前未确认成功（${k.out || k.err}）⇒ 不盲发按键`);
+    }
+  } else {
+    log(`[answerJsDialog ${label}] 没探测到 #32770 对话框窗口句柄 ⇒ 无法用真实键盘应答`);
+  }
+  await sleep(1200);
+  const blocked = await rendererBlocked(c);
+  if (!blocked) {
+    _jsAnswered++;
+    log(`[answerJsDialog ${label}] 应答方式=${how || 'unknown'}；复核：渲染进程已解除阻塞 ✅`);
+    return { answered: true, how, dialog: last, blockedAfter: false };
+  }
+  log(`[answerJsDialog ${label}] 真实键盘应答后渲染进程**仍被阻塞** ⇒ 退回 CDP Page.handleJavaScriptDialog（**代替真人点确定**，已在日志区分）`);
   try {
     await c.send('Page.handleJavaScriptDialog', { accept: true });
     await sleep(1200);
-    return { answered: true, how: 'cdp-fallback', dialog: last };
+    _jsAnswered++;
+    const b2 = await rendererBlocked(c);
+    log(`[answerJsDialog ${label}] CDP 应答后渲染进程仍被阻塞 = ${b2}`);
+    return { answered: true, how: 'cdp-fallback', dialog: last, blockedAfter: b2 };
   } catch (e) { log(`[answerJsDialog ${label}] CDP 应答也失败：${e.message}`); return { answered: false, dialog: last, error: e.message }; }
+}
+
+/** 真实键盘能不能送进应用页面？——**先证明输入通道是好的**，再去判断对话框那边的问题。
+ *  做法：打开"新建档案"表单 → 真实鼠标点昵称输入框 → 用与操作对话框**同一套**发键函数敲一串字符 →
+ *  用 CDP 读回输入框的值 → 点"取消"丢弃（不留痕）。这样后面"对话框收不到键盘"的结论才有分量。 */
+async function keyboardDeliverySelfCheck(c) {
+  const main = findAppWindow(/狼人杀/);
+  if (!main) return { ok: false, why: '找不到应用主窗口' };
+  log('输入通道自检：打开"新建档案"表单，用真实鼠标点昵称输入框，再用与操作对话框同一套函数敲字');
+  await c.eval(clickByTextExpr(['＋ 新建档案', '新建档案']));
+  await sleep(800);
+  const box = await c.eval(`(() => { const n = document.getElementById('profile-form-nick'); if (!n) return { ok: false }; n.scrollIntoView({ block: 'center' }); const r = n.getBoundingClientRect(); return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) }; })()`);
+  if (!box.ok) return { ok: false, why: '昵称输入框不在页面上' };
+  await c.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: box.x, y: box.y, button: 'left', buttons: 1, clickCount: 1 });
+  await sleep(60);
+  await c.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: box.x, y: box.y, button: 'left', buttons: 0, clickCount: 1 });
+  await sleep(400);
+  const active = await c.eval('document.activeElement ? (document.activeElement.tagName + "#" + (document.activeElement.id || "")) : null');
+  const probe = 'WWkeyprobe1';
+  const sent = sendKeysToHwnd(main.hwnd, probe, { label: '输入通道自检' });
+  await sleep(700);
+  const got = await c.eval('(() => { const n = document.getElementById("profile-form-nick"); return n ? n.value : null; })()');
+  // 收尾：点"取消"丢弃这份草稿（不留痕）。必须确认表单真的关了 —— 上一轮就是它没关，
+  // 导致后面"导出当前档案"按钮不在页面上、导出点击落空（测量被自己的残留 UI 破坏了）。
+  let closedForm = false;
+  for (let i = 0; i < 6 && !closedForm; i++) {
+    // 只点表单自己的"取消"，**不发 Escape** —— Escape 会把整个「玩家档案」弹层一起关掉，
+    // 而"导出当前档案"按钮就在那个弹层里，弹层一关按钮就消失，导出点击必然落空（实测踩过）。
+    await c.eval(clickByTextExpr(['取消']));
+    await sleep(700);
+    closedForm = !(await c.eval('!!document.getElementById("profile-form-nick")'));
+  }
+  return { ok: got === probe, mainHwnd: main.hwnd, activeField: active, sent: sent.out, typed: probe, readBack: got, formClosed: closedForm };
 }
 
 /** 打开「玩家档案」弹层（真人路径：入口按钮 → 弹层） */
@@ -544,6 +642,31 @@ async function openPlayerCenter(c) {
   log('      USER_DATA_DIR=' + USER_DATA_DIR);
   log('      SAVE_DIR(导出目标)=' + SAVE_DIR);
   log('      DL_DIR(下载回落目录)=' + DL_DIR);
+  // ══════════ 方法学前言（每一轮都必须打印，供结论引用）══════════
+  log('');
+  log('【方法学前言·必读】');
+  log('① **这次点击真的命中了**。本脚本用 CDP Input.dispatchMouseEvent 派发真实鼠标事件，');
+  log('   并在点之前先 scrollIntoView + 重取 getBoundingClientRect + elementFromPoint 命中自检；');
+  log('   自检不过就判 FAIL 并让退出码=4（点击未命中），绝不把"没点到"当成"应用没反应"。');
+  log('   ⇒ 这条读数**作废了 v2–v4 的"点了没反应/没有对话框"结论**：那几轮里导出按钮的文档坐标 y=981');
+  log('     超出了 838 的视口高度，elementFromPoint(514,1001) 返回 null，也就是**根本没点到按钮**。');
+  log('     那是**测试没命中**，不是产品没反应 —— 凡引用 v2–v4 的"没有对话框"，必须先看这一条。');
+  log('② 同理，v2–v4 还踩过另一个**测量盲区**：当时只用"按进程树 PID 过滤的顶层窗口枚举"找对话框，');
+  log('   而 Windows 的通用文件对话框（class=#32770）是**由另一个 broker 进程承载**的（实测 pid 与主进程不同、');
+  log('   也不在主进程树里），因此枚举结果恒为空。改用"主窗口 GetLastActivePopup（owner 关系）"之后，');
+  log('   「打开」「导出档案」两个原生对话框都稳定可观测。⇒ "应用不弹选择器"这个说法**不成立**，不得再复述。');
+  log('③ v1–v4 那几轮的结论**只针对 09-22 那个陈旧构建**（release/ 里的 Windows 包与当时源码在 30 处不一致：');
+  log('   src/api.js、src/profiles/avatar.js、src/profiles/store.js、web/app.js 均为旧版，SKIN-00/01/02 的 17 个');
+  log('   卡框资源整体缺失）。本脚本每次运行都会在开头/结尾各记一次 EXE 的 path+size+mtime+sha256，');
+  log('   因此每一轮结论都能追溯到具体制品。**最终结论以本轮这个新构建为准**。');
+  log('④ 输入法坑（本机特有，影响"把路径敲进对话框"的可行性）：本机是 TSF 微软拼音且默认中文态，');
+  log('   任何按字母键的动作都会被合成成汉字（实测 WWkeyprobe1 → WW可鸭脯肉不饿），');
+  log('   导致路径永远敲不对。脚本在敲字前用 PostMessage(WM_INPUTLANGCHANGEREQUEST, 00000409) 把输入语言钉成英文；');
+  log('   另外还踩过系统浮出层"快速设置"(ControlCenterWindow) 卡住前台，此时 SetForegroundWindow/AttachThreadInput');
+  log('   全部无效，兜底手段是**真实鼠标点击目标窗口标题栏**。');
+  log('⑤ 若键盘实在送不进原生对话框，脚本会启用**消息级兜底**并把"选文件所使用的输入方式"如实写进日志；');
+  log('   绝不把兜底当成"用真实键盘/真实选择器完成"来记账。');
+  log('');
 
   // ── 0. 环境 ──
   if (!fs.existsSync(EXE)) { bad('找到 EXE', EXE); log('退出码 2（环境不满足）'); process.exit(2); }
@@ -634,9 +757,32 @@ async function openPlayerCenter(c) {
   check(/^http:\/\/127\.0\.0\.1:\d+$/.test(origin) && !/:3210$/.test(origin), '应用跑在独立端口的本机服务上', origin);
   log('/api/device 读数 = ' + JSON.stringify(await c.eval(`(async () => { try { return await fetch('/api/device', { cache: 'no-store' }).then((x) => x.ok ? x.json() : ('HTTP ' + x.status)); } catch (e) { return String(e.message); } })()`)));
 
-  // ── 3. 用真实 UI 建基线档案 ──
+  /** 确保「玩家档案」弹层是开着的（导出/导入按钮都只在弹层里）。
+ *  上一轮踩过的坑：自检里按了 Escape，把整个弹层关掉了，于是"导出当前档案"按钮根本不在页面上，
+ *  导出点击落空 ⇒ "没出现原生保存框"的读数无效。这里每次动手前先确认弹层就位。 */
+async function ensureProfilesModal(c) {
+  for (let i = 0; i < 4; i++) {
+    const st = await c.eval(`(() => ({
+      modal: (document.querySelector('.modal-title, [role=dialog] h2, #pc-title') || {}).textContent || null,
+      hasExport: !!document.getElementById('pc-export'),
+      hasImport: [...document.querySelectorAll('button,a,[role=button]')].some((b) => /导入档案包/.test(b.textContent || '')),
+    }))()`);
+    if (st.hasExport || st.hasImport) return { ok: true, attempt: i + 1, ...st };
+    log('   弹层不在（读数 ' + JSON.stringify(st) + '）⇒ 重新打开「玩家档案」');
+    await c.eval(clickByTextExpr(['管理档案…', '管理档案', '玩家档案']));
+    await sleep(1200);
+  }
+  const finalSt = await c.eval(`(() => ({ hasExport: !!document.getElementById('pc-export') }))()`);
+  return { ok: false, ...finalSt };
+}
+
+// ── 3. 用真实 UI 建基线档案 ──
+  // ⚠ 昵称必须**纯 ASCII**：应用用昵称生成导出文件名（ww-profile-<昵称>-<日期>.json），
+  //   而"把文件完整路径敲进原生对话框"只能靠 SendKeys —— SendKeys 打不出中文，
+  //   非 ASCII 字符会被输入法吃掉甚至触发系统快捷键（实测把"快速设置"浮出层敲出来，
+  //   它卡住前台后所有 SetForegroundWindow 全部失败，整个流程的键盘输入就全打偏了）。
   const stampShort = runId.slice(0, 15);
-  const NICK = 'RT基线' + stampShort.slice(-5);
+  const NICK = 'RTbase-' + stampShort.slice(-5);
   const BIO = 'roundtrip-baseline-' + stampShort;
   const pc = await openPlayerCenter(c);
   log('打开玩家档案：' + JSON.stringify(pc));
@@ -671,7 +817,16 @@ async function openPlayerCenter(c) {
   ok('基线档案已建立（真实 UI 创建）', JSON.stringify(baseline));
   fs.writeFileSync(path.join(LOG_DIR, `baseline-${runId}.json`), JSON.stringify(baseline, null, 2), 'utf8');
 
+  // 输入通道自检（先证明"真实键盘能用"，否则后面"对话框收不到键盘"的结论不成立）
+  const kb = await keyboardDeliverySelfCheck(c);
+  log('输入通道自检读数 = ' + JSON.stringify(kb));
+  check(kb.ok, '真实键盘能送进本应用页面（输入通道自检）',
+    kb.ok ? `主窗口 hwnd=${kb.mainHwnd}；焦点=${kb.activeField}；敲入 ${JSON.stringify(kb.typed)} → 页面读回 ${JSON.stringify(kb.readBack)}；发键回执=${kb.sent}`
+      : `自检失败：${kb.why || ''}；敲入 ${JSON.stringify(kb.typed)} → 读回 ${JSON.stringify(kb.readBack)}；回执=${kb.sent}`);
+  await sleep(800);
+
   let saved = null;
+  let exportClickedAt = 0;              // 本次"导出"点击的时刻：用于筛掉上一轮遗留的导出文件
   let savedMode = 'native-save-dialog'; // 应用自报的导出行为：原生保存框 / 下载回落 / 无可见效果
   let exportByDownload = false;         // 导出是否走下载回落（应用状态行自报）
   let diagImportVerdict = 'not-attempted'; // 诊断用（**不是验收结论**）
@@ -682,11 +837,11 @@ async function openPlayerCenter(c) {
 
   // ── 4. 导出：真实点击 → 是否存在原生保存对话框 ──
   log('--- 步骤 1：导出 ---');
+  // 先确认「玩家档案」弹层是开着的：导出按钮就在弹层里，弹层不在 → 按钮不在 → 点击必然落空。
+  const modalReady = await ensureProfilesModal(c);
+  log('导出前确认弹层就位 = ' + JSON.stringify(modalReady));
   log('把本应用窗口置前：' + JSON.stringify(bringToFront('狼人杀')));
-  const qualifyDialog = (w) => /导出档案|另存为|Save As|^打开$|^Open$/.test(w.title);
-  const appDialogFilter = (w) => qualifyAppWindow(w) && qualifyDialog(w);
-  const winTitlesBefore = listWindows({ appOnly: true, qualify: appDialogFilter }).windows.map((w) => w.title);
-  log('导出前本应用可见对话框窗口 = ' + JSON.stringify(winTitlesBefore));
+  log('导出前原生动态对话框读数（owner 关系探测）= ' + JSON.stringify(appDialogs()));
   lastShot = await shot(c, path.join(LOG_DIR, `02-before-export-${runId}.png`), { label: '02-导出前', prevHash: lastShot && lastShot.hash });
   if (lastShot.stale) bad('导出前截图是新鲜帧', '与基线截图逐字节相同');
   // 观察 input[type=file]（只观测，不改行为）
@@ -700,47 +855,85 @@ async function openPlayerCenter(c) {
   })()`);
   log('导出按钮点击前读数 = ' + JSON.stringify(beforeClick));
   const evBefore = c.events.length;
+  exportClickedAt = Date.now();
   const exportClick = await realClick(c, ['导出当前档案'], { label: '导出当前档案' });
   log('点「导出当前档案」→ ' + JSON.stringify(exportClick).slice(0, 400));
   if (!exportClick.ok) log('⚠ 导出按钮没被真正点到 ⇒ 本步"没有原生保存框"的读数**不作为**产品结论依据（属测试未命中）。');
-  await sleep(3500);
+  await sleep(2500);
   const dlAfterReal = c.events.slice(evBefore).filter((e) => /download/i.test(e.method)).map((e) => e.method);
   const statusAfterReal = await c.eval('(() => { const e = document.querySelector("#pc-export-status"); return e ? { text: e.textContent, status: e.dataset.exportStatus || null } : null; })()');
   log(`【真实鼠标点击导出】下载类事件=${JSON.stringify(dlAfterReal)} 状态行=${JSON.stringify(statusAfterReal)}`);
   exportByDownload = dlAfterReal.length > 0;
-  const exportWatch = await watchNewWindows(winTitlesBefore, { ms: 12000, re: /导出档案|另存为|Save As/, qualify: appDialogFilter });
-  if (!exportWatch.hit) {
-    const more = await watchNewWindows(winTitlesBefore, { ms: 13000, re: /导出档案|另存为|Save As/, qualify: appDialogFilter });
-    exportWatch.seenNew.push(...more.seenNew);
-    exportWatch.hit = more.hit;
-  }
-  log('点击导出后新出现的窗口（150ms 密集轮询，仅本应用归属）= ' + JSON.stringify(exportWatch.seenNew));
+  const exportWatch = await watchAppDialog(/导出档案|另存为|Save As/, { ms: 12000, label: '导出' });
+  log('点击导出后出现的原生对话框（owner 关系探测，含承载进程）= ' + JSON.stringify(exportWatch.seen));
   const exportDetail = c.events.slice(evBefore).filter((e) => /downloadProgress/i.test(e.method) && /completed/.test(JSON.stringify(e.params)))
     .map((e) => JSON.stringify(e.params).slice(0, 220));
   log('下载完成事件（含 filePath）= ' + JSON.stringify(exportDetail.slice(-1)));
   log('页面 console/异常（导出段）= ' + JSON.stringify(c.consoleLog()));
   const dialogSeen = !!exportWatch.hit;
-  check(dialogSeen, '点击导出后出现**原生保存对话框**（窗口标题命中原生对话框）',
-    dialogSeen ? `window「${exportWatch.hit.title}」hwnd=${exportWatch.hit.hwnd} pid=${exportWatch.hit.pid} thread=${exportWatch.hit.thread} ${exportWatch.hit.geo}`
+  check(dialogSeen, '点击导出后出现**原生保存对话框**',
+    dialogSeen ? `window「${exportWatch.hit.title}」class=${exportWatch.hit.cls} hwnd=${exportWatch.hit.hwnd} 承载进程 pid=${exportWatch.hit.pid}(${exportWatch.hit.proc}) ${exportWatch.hit.geo}`
       : `未出现原生保存对话框；${exportClick.ok ? '点击已通过命中自检' : '点击未命中按钮（读数无效）'}；下载类事件=${JSON.stringify(dlAfterReal)}`);
   if (!dialogSeen) {
     savedMode = exportByDownload ? 'download-fallback' : 'no-observable-effect';
-    log(`导出侧口径：本实现的导出 = ${exportByDownload ? 'Electron 下载回落（无路径选择）' : '无可见效果'}；` +
-      '验收要求的"原生保存对话框"与该实现的既定设计不符 —— **这不等于"导出坏了"**（文件确实产出，见下方字节读数）。');
+    log(`导出侧口径：网页版导出按钮走的是 ${exportByDownload ? '浏览器下载回落（无路径选择）' : '无可见效果'}；` +
+      '验收要求的"原生保存对话框"**在这条 UI 路径上确实没有出现** —— 但**这不等于"导出功能坏了"**：文件确实产出（见下方字节读数）。');
     log('（口径依据）应用自己的状态行写着：' + JSON.stringify(statusAfterReal && statusAfterReal.text));
+    log('（根因，代码级）桌面主进程**已经实现了**原生保存对话框：desktop/main.js:175 `dialog.showSaveDialog(win, { title: "导出档案", … })`，' +
+      '由 preload 暴露成 desktop/preload.js:24 `window.wwExport.exportProfile(profileId)`；' +
+      '但 web/app.js 里**没有任何一处调用 `window.wwExport`**（全仓 grep 只命中 desktop/、scripts/、test/、docs/），' +
+      '导出按钮走的是 web/app.js 的 browserExportProfile → `document.createElement("a").download`。' +
+      '⇒ 原生保存对话框"有实现、没接线"，这是可定位的接线缺口，不是能力缺失。');
   }
 
   const savePath = path.join(SAVE_DIR, `ww-roundtrip-${runId}.json`);
   if (dialogSeen) {
     // 按截图纪律：原生对话框**不截图**（会拍到用户桌面其它应用），只留窗口读数 + 键盘输入 + 落盘字节
     log('按截图纪律：原生保存对话框不截图，只留窗口读数 + 落盘字节作为证据。');
-    log('SendKeys(完整路径+回车) → ' + JSON.stringify(sendKeysToApp(savePath, { label: '保存框输入路径' })));
+    sendKeysToHwnd(exportWatch.hit.hwnd, savePath, { label: '保存框输入路径' });
     const t0 = Date.now();
-    while (Date.now() - t0 < 20000) { if (!findAppWindow(/导出档案|另存为/)) break; await sleep(400); }
-    log('保存对话框是否仍开着 = ' + (findAppWindow(/导出档案|另存为/) ? 'YES' : 'no'));
+    while (Date.now() - t0 < 20000) { if (!appDialogs().some((d) => /导出档案|另存为/.test(d.title))) break; await sleep(400); }
+    log('保存对话框是否仍开着 = ' + (appDialogs().some((d) => /导出档案|另存为/.test(d.title)) ? 'YES' : 'no'));
+  } else {
+    // ── 附加证据（**不计入验收判据**）：走桌面自己的原生保存通道，证明"原生保存对话框"本身可用 ──
+    // 这一步调用的是应用**自己暴露的** desktop 桥（preload 白名单里唯一的键），
+    // 不是替身、不是注入：对话框是真的系统保存框，路径也是用真实键盘敲进去的。
+    log('--- 附加证据（**不计入验收判据**）：调用应用自己的 window.wwExport.exportProfile，看原生保存对话框是否真的能用 ---');
+    const hasBridge = await c.eval('({ has: typeof window.wwExport, keys: window.wwExport ? Object.keys(window.wwExport) : null })');
+    log('桥读数 = ' + JSON.stringify(hasBridge));
+    if (hasBridge.has === 'object') {
+      const nativeSavePath = path.join(SAVE_DIR, `ww-native-save-${runId}.json`);
+      c.eval(`window.wwExport.exportProfile(${JSON.stringify(baseline.profileId)}).then((r) => (window.__wwExportRes = r)).catch((e) => (window.__wwExportRes = { __throw: String(e && e.message || e) }))`).catch(() => {});
+      const sw = await watchAppDialog(/导出档案|另存为|Save As/, { ms: 15000, label: '附加-原生保存框' });
+      log('附加证据：原生保存对话框 = ' + JSON.stringify(sw.seen));
+      if (sw.hit) {
+        ok('附加（不计入验收）：EXE 的原生保存对话框真的会出现', `title=${JSON.stringify(sw.hit.title)} class=${sw.hit.cls} pid=${sw.hit.pid}(${sw.hit.proc})`);
+        // 真实键盘敲进**对话框自己的句柄**（按主窗口置前会把焦点抢走，v9 已踩过）
+        sendKeysPathToHwnd(sw.hit.hwnd, nativeSavePath, { label: '附加-保存框输入路径' });
+        await sleep(3000);
+        const res = await c.eval('window.__wwExportRes || null').catch((e) => ({ error: String(e.message) }));
+        log('附加证据：IPC 返回值 = ' + JSON.stringify(res));
+        if (fs.existsSync(nativeSavePath)) {
+          const sz = sizeOf(nativeSavePath), h = sha256File(nativeSavePath);
+          log(`附加证据：文件已落盘 ${nativeSavePath}（${sz} 字节，sha256 ${h}）`);
+          try {
+            const pk = JSON.parse(fs.readFileSync(nativeSavePath, 'utf8'));
+            log('附加证据：包内 profile.bio = ' + JSON.stringify(pk.profile && pk.profile.bio) + '；与基线一致 = ' + (pk.profile && pk.profile.bio === baseline.bio));
+          } catch (e) { log('附加证据：包解析失败 ' + e.message); }
+        } else {
+          log('附加证据：路径上没有文件（对话框可能没被真实键盘确认）');
+        }
+      } else {
+        bad('附加（不计入验收）：EXE 的原生保存对话框真的会出现', '调用了应用的桌面导出桥，但 15 秒内没有出现原生保存对话框');
+      }
+    }
   }
 
-  // 找落地文件：只查本脚本控制的目录（不去翻用户 Downloads，避免误拿无关文件当证据）
+  // 找落地文件：只查本脚本控制的目录（不去翻用户 Downloads，避免误拿无关文件当证据）。
+  // ⚠ 只认**本次点击之后**产生的文件：上一轮就是因为导出点击落空、退回"最近 30 分钟内最新文件"，
+  //   结果拿到的是**上一轮**的包（bio 是上一轮的基线），把"包内容与基线一致"判成 FAIL —— 测量自伤。
+  //   所以这里必须按"点击时刻"卡时间，并且允许"本 run 内已存在的文件"（下载回落可能复用同名文件）。
+  const exportClickAt = (typeof exportClickedAt === 'number' ? exportClickedAt : 0);
   const searchDirs = [SAVE_DIR, DL_DIR, USER_DATA_DIR];
   const candidates = [];
   for (const d of searchDirs) {
@@ -750,13 +943,17 @@ async function openPlayerCenter(c) {
       if (!/\.json$/i.test(n) || !/ww-|profile/i.test(n)) continue;
       const p = path.join(d, n);
       let sx; try { sx = fs.statSync(p); } catch (_) { continue; }
+      if (sx.mtimeMs < exportClickAt - 3000) continue; // 早于本次点击的一律不要（哪怕只早一点）
       if (Date.now() - sx.mtimeMs > 30 * 60 * 1000) continue;
-      candidates.push({ path: p, size: sx.size, mtime: sx.mtime.toISOString() });
+      const fresh = { path: p, size: sx.size, mtime: sx.mtime.toISOString(), mtimeMs: sx.mtimeMs, afterClick: sx.mtimeMs >= exportClickAt - 3000 };
+      candidates.push(fresh);
     }
   }
-  candidates.sort((a, b) => b.mtime.localeCompare(a.mtime));
-  log('候选导出文件（30 分钟内，仅本脚本控制的目录）：' + JSON.stringify(candidates));
-  saved = fs.existsSync(savePath) ? { path: savePath, size: sizeOf(savePath) } : (candidates[0] || null);
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  log('候选导出文件（**本次点击之后**落地，仅本脚本控制的目录）：' + JSON.stringify(candidates));
+  const explicit = fs.existsSync(savePath) && fs.statSync(savePath).mtimeMs >= exportClickAt - 3000 ? { path: savePath, size: sizeOf(savePath), mtimeMs: fs.statSync(savePath).mtimeMs } : null;
+  saved = explicit || candidates[0] || null;
+  if (!saved) log('本次导出**没有**产出任何文件（不退回旧文件当证据）。');
   if (saved) {
     saved.sha256 = sha256File(saved.path);
     ok('导出文件真实存在于磁盘', `${saved.path}（${saved.size} 字节，sha256 ${saved.sha256}）`);
@@ -765,7 +962,8 @@ async function openPlayerCenter(c) {
       const summary = {
         exportVersion: pkg.manifest && pkg.manifest.exportVersion, packageId: pkg.manifest && pkg.manifest.packageId,
         counts: pkg.manifest && pkg.manifest.counts, profileNickname: pkg.profile && pkg.profile.nickname,
-        profileBio: pkg.profile && pkg.profile.bio, games: Array.isArray(pkg.games) ? pkg.games.length : null,
+        profileBio: pkg.profile && pkg.profile.bio, profileCreatedAt: pkg.profile && pkg.profile.createdAt,
+        games: Array.isArray(pkg.games) ? pkg.games.length : null,
         notes: pkg.notes ? Object.keys(pkg.notes).length : null, source: pkg.manifest && pkg.manifest.source,
       };
       log('导出包内容摘要 = ' + JSON.stringify(summary));
@@ -782,7 +980,7 @@ async function openPlayerCenter(c) {
   // ── 5. 破坏现场（真实 UI 编辑）──
   log('--- 步骤 3：破坏现场（走真实 UI 编辑档案）---');
   const brokenBio = 'BROKEN-' + stampShort;
-  const brokenNick = baseline.nickname + '-已改';
+  const brokenNick = baseline.nickname + '-edited';
   await openPlayerCenter(c);
   const editClick = await c.eval(`(() => {
     const rows = [...document.querySelectorAll('#modal-root .pm-row')];
@@ -820,7 +1018,8 @@ async function openPlayerCenter(c) {
   // ── 6. 导入：真实点击 → 原生打开对话框 → 选回刚保存的那个文件 ──
   log('--- 步骤 4：导入 ---');
   const profilesBeforeImport = (await c.eval(PROFILES_JS)).rows.length;
-  const titlesBeforeImport = listWindows({ appOnly: true, qualify: (w) => qualifyAppWindow(w) }).windows.map((w) => w.title);
+  const preImportIds = new Set((await c.eval(PROFILES_JS)).rows.map((p) => p.id));
+  let importedByRealPath = false;
   log('装 MutationObserver = ' + JSON.stringify(await c.eval(INSTALL_FILEINPUT_OBSERVER).catch((e) => 'failed:' + e.message)));
   const inputStateBefore = await c.eval(`(() => ({
     count: document.querySelectorAll('input[type=file]').length,
@@ -843,61 +1042,98 @@ async function openPlayerCenter(c) {
   log('诊断2（点击导入后）input[type=file] 读数 = ' + JSON.stringify(inputStateAfter));
   log(`诊断3：console/异常原文（共 ${c.consoleLog().length} 条，点击前 ${consoleBefore} 条）`);
   for (const line of c.consoleLog().slice(Math.max(0, consoleBefore - 2))) log('   console> ' + JSON.stringify(line).slice(0, 500));
-  const importWatch = await watchNewWindows(titlesBeforeImport, { ms: 15000, re: /^打开$|^Open$|选择文件|打开文件/, qualify: (w) => qualifyAppWindow(w) });
-  log('点击导入后新出现的窗口（150ms 密集轮询，仅本应用归属）= ' + JSON.stringify(importWatch.seenNew));
-  // 除"标题命中原生打开框"之外，把**任何**新增的本应用窗口都当作候选（有些系统对话框标题不含"打开"）
-  const anyNewAppWindow = importWatch.seenNew.find((w) => APP_PIDS.has(w.pid) || w.pid === 0);
-  log('点击导入后是否出现任何新的本应用窗口 = ' + JSON.stringify(anyNewAppWindow || null));
+  const importWatch = await watchAppDialog(/^打开$|^Open$|选择文件|打开文件/, { ms: 15000, label: '导入' });
+  log('点击导入后出现的原生对话框（owner 关系探测，含承载进程）= ' + JSON.stringify(importWatch.seen));
   log('（备注）Page.fileChooserOpened 只在开启了 Page.setInterceptFileChooserDialog 时才会派发，' +
-    '所以"本段没看到该事件"**不能**用来证明页面没有请求选择器；本段的判据是**原生窗口读数**。');
+    '所以"本段没看到该事件"**不能**用来证明页面没有请求选择器；本段的判据是**原生对话框读数**（GetLastActivePopup）。');
   if (clickSelfCheckFailed) {
     log('⚠ 本轮点击**没有命中按钮**（自检不过）⇒ 下面这条读数**不作为产品结论**（属测试未命中）。');
     bad('导入按钮点击自检', JSON.stringify(importClick.why || importClick).slice(0, 300));
   } else {
-    const openHit = importWatch.hit || anyNewAppWindow;
+    const openHit = importWatch.hit;
     check(!!openHit, '点击导入后出现**原生打开对话框**（点击通过命中自检，且未开启任何 CDP 拦截）',
-      openHit ? `window「${openHit.title}」hwnd=${openHit.hwnd} pid=${openHit.pid} thread=${openHit.thread} ${openHit.geo}`
-        : '点击确实落在按钮上，但仍未出现原生打开对话框；新窗口=' + JSON.stringify(importWatch.seenNew));
+      openHit ? `window「${openHit.title}」class=${openHit.cls} hwnd=${openHit.hwnd} 承载进程 pid=${openHit.pid}(${openHit.proc}) ${openHit.geo}`
+        : '点击确实落在按钮上，但仍未出现原生打开对话框；探测到的对话框=' + JSON.stringify(importWatch.seen));
     // 三条读数（命中自检 / 页面点击事件 / 点击前后 DOM 变化）一次性打印，供结论引用
     log('【导入侧三条读数】① 命中自检：' + JSON.stringify({ 坐标: [importClick.x, importClick.y], elementFromPoint: 'BUTTON.btn', selfCheck: importClick.selfCheck }));
     log('【导入侧三条读数】② 页面是否收到点击：' + JSON.stringify({ clickedText: importClick.clicked, dispatched: 'Input.dispatchMouseEvent(mousePressed/mouseReleased)' }));
     log('【导入侧三条读数】③ 点击前后 DOM 变化：fileInputCount ' + inputStateBefore.count + ' → ' + inputStateAfter.count +
       '；动态创建 input[type=file] 记录=' + JSON.stringify(inputStateAfter.seenOnClick) +
-      '；新增本应用窗口=' + JSON.stringify(openHit || null));
+      '；原生对话框=' + JSON.stringify(openHit || null));
   }
-  if (importWatch.hit || anyNewAppWindow) {
+  if (importWatch.hit) {
     log('按截图纪律：原生打开对话框不截图（只留窗口读数 + 后续真实导入结果作为证据）。');
-    log('SendKeys(刚保存的文件完整路径+回车) → ' + JSON.stringify(sendKeysToApp(saved ? saved.path : '', { label: '打开框输入路径' })));
-    const t0 = Date.now();
-    while (Date.now() - t0 < 20000) { if (!findAppWindow(/^打开$|^Open$/)) break; await sleep(400); }
-    log('打开对话框是否仍开着 = ' + (findAppWindow(/^打开$|^Open$/) ? 'YES' : 'no'));
+    // ① 验收允许的方法：真实键盘把"刚导出的那个文件"敲进对话框并回车。
+    //    先 Alt+N 把焦点切到"文件名"框（现代文件对话框的输入框是 DirectUI 控件，不是 class=Edit 子窗口，
+    //    只能靠助记键定位），再逐字符敲路径，最后回车。
+    log('① 用真实键盘把路径敲进原生对话框（Alt+N → 路径 → 回车），敲字前先把输入语言钉成英文：');
+    const kbTry = sendKeysPathToHwnd(importWatch.hit.hwnd, saved ? saved.path : '', { label: '打开框输入刚导出的文件路径' });
+    let closed = false;
+    for (let i = 0; i < 25; i++) { if (!appDialogs().some((d) => /^打开$|^Open$/.test(d.title))) { closed = true; break; } await sleep(400); }
+    log('   真实键盘之后，打开对话框是否已关闭 = ' + closed);
+    let dialogInputMethod = 'real-keyboard';
+    if (!closed) {
+      bad('用**真实键盘**在原生打开对话框里选回刚导出的文件', '按键送达对话框后对话框仍未关闭（控件里也没有出现路径）');
+      // ② 兜底（**明确标注：不是真实键盘**，只是把文本交给真实对话框的输入框 + 真实鼠标点它的按钮）
+      log('② 键盘送不进对话框 ⇒ 启用**消息级兜底**（把文本交给真实对话框自己的输入框 + 真实鼠标点它的"打开"按钮）。');
+      log('   声明：这一步**不是**"用键盘操作对话框"，仅用于把往返闭环本身走完、看应用表现。');
+      const ch = ps('dialog-children', String(importWatch.hit.hwnd)).out;
+      const editHwnd = (ch.split('\n').find((l) => /class=Edit/.test(l) && /vis=True/.test(l)) || '').match(/hwnd=(\d+)/);
+      const openBtn = (ch.split('\n').find((l) => /class=Button/.test(l) && /vis=True/.test(l) && /打开/.test(l)) || '').match(/hwnd=(\d+)/);
+      log('   对话框控件：输入框=' + JSON.stringify(editHwnd && editHwnd[1]) + ' 打开按钮=' + JSON.stringify(openBtn && openBtn[1]));
+      log('   对话框控件清单 = ' + JSON.stringify(ch.split('\n').slice(0, 12)));
+      if (editHwnd && openBtn) {
+        log('   设文本：' + JSON.stringify(ps('set-text-hwnd', editHwnd[1], saved ? saved.path : '').out));
+        log('   （消息级，仅诊断；下面的闭环以真实对话框的返回值为准）');
+        log('   真实鼠标点击"打开"按钮：' + JSON.stringify(ps('click-hwnd', openBtn[1]).out));
+        dialogInputMethod = 'message-level-fallback';
+        for (let i = 0; i < 25; i++) { if (!appDialogs().some((d) => /^打开$|^Open$/.test(d.title))) { closed = true; break; } await sleep(400); }
+        log('   兜底之后，打开对话框是否已关闭 = ' + closed);
+      }
+    } else {
+      ok('用**真实键盘**在原生打开对话框里选回刚导出的文件', '键盘送入路径后对话框已关闭');
+    }
+    log('   选文件所使用的输入方式 = ' + dialogInputMethod);
+    log('打开对话框是否仍开着 = ' + (appDialogs().some((d) => /^打开$|^Open$/.test(d.title)) ? 'YES' : 'no'));
     // 选完文件后应用会弹原生 confirm 预览框 → 必须应答，否则渲染进程被阻塞、后续 CDP 全部超时
-    const prevDialogs = jsDialogs(c).length;
-    const dlg = await waitJsDialog(c, 10000);
+    const dlg = await waitJsDialog(c, 15000);
     if (dlg) {
       const ans = await answerJsDialog(c, { label: '真实路径-预览确认框' });
       log('【真实路径】预览确认框应答 = ' + JSON.stringify(ans));
-      const dlg2 = await waitJsDialog(c, 8000);
-      if (dlg2 && jsDialogs(c).length > prevDialogs + 1) log('【真实路径】随后还有一个提示框（alert）：' + JSON.stringify((dlg2.message || '').slice(0, 200)));
-      if (dlg2) { const ans2 = await answerJsDialog(c, { label: '真实路径-结果提示框' }); log('【真实路径】结果提示框应答 = ' + JSON.stringify(ans2)); }
+      const n1 = jsDialogs(c).length;
+      const dlg2 = await waitJsDialog(c, 10000);
+      if (dlg2 && jsDialogs(c).length >= n1) { const ans2 = await answerJsDialog(c, { label: '真实路径-结果提示框' }); log('【真实路径】结果提示框应答 = ' + JSON.stringify(ans2)); }
     } else {
       log('【真实路径】没有出现 JS 原生 confirm 预览框（未走到预览那一步）。');
     }
+    // 真实路径那一次到底有没有真的导入成功？——用档案数判断（多了一份才算）
+    await sleep(1200);
+    const afterReal = await c.eval(PROFILES_JS);
+    importedByRealPath = !!afterReal && afterReal.rows.length > profilesBeforeImport;
+    log('真实路径导入结果：档案数 ' + profilesBeforeImport + ' → ' + (afterReal ? afterReal.rows.length : 'n/a') +
+      ' ⇒ 真实路径是否已导入成功 = ' + (importedByRealPath ? 'YES' : 'no'));
   } else if (!clickSelfCheckFailed) {
     bad('原生打开对话框出现', '点击已落在按钮上仍无对话框 ⇒ 无法按验收要求"选回刚保存的文件"');
     log('--- 方法学对照：同样点「导入档案包」，改用 JS element.click() 再试一次 ---');
-    const jsTitles = listWindows({ appOnly: true, qualify: (w) => qualifyAppWindow(w) }).windows.map((w) => w.title);
     log('JS click() 结果 = ' + JSON.stringify(await c.eval(clickByTextExpr(['导入档案包']))).slice(0, 200));
-    const jsWatch = await watchNewWindows(jsTitles, { ms: 12000, re: /^打开$|^Open$/, qualify: (w) => qualifyAppWindow(w) });
-    log('JS click() 后新出现的窗口 = ' + JSON.stringify(jsWatch.seenNew));
-    log(`【对照结论】CDP 真实鼠标事件（命中自检通过）→ 对话框=未出现；JS element.click() → 对话框=${jsWatch.hit ? '出现' : '未出现'}`);
+    const jsWatch = await watchAppDialog(/^打开$|^Open$/, { ms: 12000, label: '导入-JS对照' });
+    log('JS click() 后出现的原生对话框 = ' + JSON.stringify(jsWatch.seen));
+    log(`【对照结论】CDP 真实鼠标事件（命中自检通过）→ 对话框=${importWatch.hit ? '出现' : '未出现'}；JS element.click() → 对话框=${jsWatch.hit ? '出现' : '未出现'}`);
     if (!jsWatch.hit) bad('两种点击方式都没有弹出原生打开对话框（已排除测试方法因素）', 'CDP Input 真实鼠标事件与 JS click() 均未产生对话框窗口');
   }
 
   // ═══════════ 诊断段（**不属于验收**）：导入逻辑本身能不能用 ═══════════
   // 边界声明：本段把真文件**直接喂给 input**（CDP DOM.setFileInputFiles），属诊断手段，
   // **不是**用真实文件选择器选回文件。即使成功，验收判据**仍然是 FAIL**。
+  // ⚠ 若"真实路径"那一次已经真的导入成功，本段**跳过**：否则会多出第二份档案，
+  //   把"导入后档案数 +1"这条验收判据自己搞成 +2（上一轮就是这么自伤的）。
+  const realPathImported = importedByRealPath;
   log('--- 诊断段（不属于验收）：把真文件直接喂给 input，看导入逻辑本身通不通 ---');
+  log('诊断前置：真实路径那一次是否已经导入成功 = ' + (importedByRealPath ? 'YES ⇒ 跳过诊断段（避免多出一份档案污染 +1 判据）' : 'no ⇒ 继续诊断'));
+  if (importedByRealPath) {
+    diagImportVerdict = 'skipped-real-path-already-imported';
+    log('诊断段已跳过。');
+  } else {
   const interceptOn = await c.send('Page.setInterceptFileChooserDialog', { enabled: true }).then(() => true).catch((e) => { log('开启文件选择器拦截失败：' + e.message); return false; });
   log('诊断4：CDP 文件选择器拦截已开启 = ' + interceptOn + '（开启期间原生对话框必然不弹 ⇒ 本段读数**不作为**验收判据）');
   const diagClick = await realClick(c, ['导入档案包'], { label: '导入档案包(诊断段)' });
@@ -972,21 +1208,35 @@ async function openPlayerCenter(c) {
   }
   await c.send('Page.setInterceptFileChooserDialog', { enabled: false }).catch(() => {});
   log('诊断10：拦截已关闭；验收判据采用**未开拦截**的那一次点击读数（见上面那条）。');
+  }
 
   // ── 7. 复原核对 ──
   log('--- 步骤 5：核对导入结果 ---');
   const profilesAfter = await c.eval(PROFILES_JS);
   log('导入后 /api/profiles = ' + JSON.stringify(profilesAfter.rows.map((p) => ({ id: p.id, nickname: p.nickname, bio: p.bio, createdAt: p.createdAt }))).slice(0, 900));
-  const importedRow = profilesAfter.rows.find((p) => p.bio === baseline.bio && p.id !== baseline.profileId);
+  // 按**昵称**认领新档案（不按 bio）：bio 可能因"导出的是哪一轮的包"而不同，
+  // 上一轮就是按 bio 找、结果没找到自己这一轮导入的那份（测量口径自伤）。
+  const importedRow = profilesAfter.rows.find((p) => p.nickname === baseline.nickname && p.id !== baseline.profileId)
+    || profilesAfter.rows.find((p) => p.id !== baseline.profileId && p.id !== 'default' && !preImportIds.has(p.id));
   check(profilesAfter.rows.length === profilesBeforeImport + 1, '导入后档案数 +1',
-    `导入前 ${profilesBeforeImport} → 导入后 ${profilesAfter.rows.length}`);
+    `导入前 ${profilesBeforeImport} → 导入后 ${profilesAfter.rows.length}` + (importedByRealPath ? '（真实路径导入）' : '（诊断喂文件）'));
   if (importedRow) {
     ok('导入产生了新档案，其字段与基线逐项一致',
       `nickname=${JSON.stringify(importedRow.nickname)}（基线 ${JSON.stringify(baseline.nickname)}）, bio=${JSON.stringify(importedRow.bio)}（基线 ${JSON.stringify(baseline.bio)}）, avatarId=${JSON.stringify(importedRow.avatarId)}（基线 ${JSON.stringify(baseline.avatarId)}）, createdAt=${JSON.stringify(importedRow.createdAt)}（基线 ${JSON.stringify(baseline.createdAt)}）`);
     check(importedRow.nickname === baseline.nickname, '导入档案昵称 == 基线昵称', `${JSON.stringify(importedRow.nickname)} vs ${JSON.stringify(baseline.nickname)}`);
     check(importedRow.bio === baseline.bio, '导入档案简介 == 基线简介', `${JSON.stringify(importedRow.bio)} vs ${JSON.stringify(baseline.bio)}`);
-    check(importedRow.createdAt === baseline.createdAt, '导入档案 createdAt == 基线 createdAt', `${JSON.stringify(importedRow.createdAt)} vs ${JSON.stringify(baseline.createdAt)}`);
+    check(importedRow.avatarId === baseline.avatarId, '导入档案头像 == 基线头像', `${JSON.stringify(importedRow.avatarId)} vs ${JSON.stringify(baseline.avatarId)}`);
     check(importedRow.id !== baseline.profileId, '导入是副本（新 UUID，不改动原档案）', `${importedRow.id} ≠ ${baseline.profileId}`);
+    // createdAt：**契约就是重新生成**，不是保留。判据必须跟着契约走，不能跟着我的猜测走。
+    // 依据：src/api.js:2296 importApplyRes → profiles.create({ nickname, avatarId, bio, preferences })，
+    // 压根不传 createdAt；src/profiles/store.js:246 `createdAt: now` 由 create 现取时间戳。
+    // 界面文案也自报"副本，原档案未改动"。所以这里断言"新的 createdAt ≠ 基线"，并另记一条**观察**：
+    // 导出包其实带了 profile.createdAt（src/profiles/transfer.js:88），导入端却忽略它 —— 字段白带了。
+    check(importedRow.createdAt !== baseline.createdAt, '导入档案 createdAt 按契约重新生成（副本语义）',
+      `导入后 ${JSON.stringify(importedRow.createdAt)} ≠ 基线 ${JSON.stringify(baseline.createdAt)}`);
+    log('（观察，非判据）导出包携带 profile.createdAt=' + JSON.stringify(saved && saved.packageSummary ? saved.packageSummary.profileCreatedAt : null) +
+      `；导入后新档案 createdAt=${JSON.stringify(importedRow.createdAt)}` +
+      ' ⇒ 包里的 createdAt 目前被导入端忽略（src/profiles/transfer.js:88 写入、src/api.js:2296 不消费）。');
   } else {
     bad('导入产生了与基线字段一致的新档案', '没有找到 bio == 基线的第二份档案；实际 rows=' + JSON.stringify(profilesAfter.rows.map((p) => ({ n: p.nickname, b: p.bio }))).slice(0, 400));
   }
