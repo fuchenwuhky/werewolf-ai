@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536" fill="none">
+<title>月蚀圣龛 · 月谕 · 小卡精雕 R2</title>
+<desc>52/62 像素专用：薄银倒角、四枚镂空角扣、月冠宝石和底部月牙。中心透明，无文字，无位图或滤镜。</desc>
+<defs>
+<linearGradient id="r2-silver" x1="0" y1="0" x2=".85" y2="1"><stop stop-color="#f0ead7"/><stop offset=".16" stop-color="#9da9ae"/><stop offset=".30" stop-color="#414e58"/><stop offset=".46" stop-color="#d1d2c3"/><stop offset=".52" stop-color="#a49877"/><stop offset=".68" stop-color="#3c4954"/><stop offset=".85" stop-color="#abb5b7"/><stop offset="1" stop-color="#303d48"/></linearGradient>
+<linearGradient id="r2-gold" x1=".12" y1="0" x2=".9" y2="1"><stop stop-color="#fbefd0"/><stop offset=".32" stop-color="#c4b184"/><stop offset=".59" stop-color="#786544"/><stop offset=".82" stop-color="#d5c29a"/><stop offset="1" stop-color="#8a7858"/></linearGradient>
+<linearGradient id="r2-edge" x1="0" x2="1"><stop stop-color="#0a121c"/><stop offset=".12" stop-color="#c3c9c6"/><stop offset=".26" stop-color="#72808c"/><stop offset=".40" stop-color="#283440"/><stop offset=".75" stop-color="#101b27"/><stop offset="1" stop-color="#727b78"/></linearGradient>
+<linearGradient id="r2-dark" x1="0" y1="0" x2=".9" y2="1"><stop stop-color="#30424d"/><stop offset=".5" stop-color="#0e1b28"/><stop offset="1" stop-color="#030810"/></linearGradient>
+<radialGradient id="r2-gem" cx=".28" cy=".22" r=".84"><stop stop-color="#daf5f0"/><stop offset=".22" stop-color="#417a8f"/><stop offset=".66" stop-color="#112b3c"/><stop offset=".89" stop-color="#417a8f"/><stop offset="1" stop-color="#060b14"/></radialGradient>
+<g id="r2-clasp">
+<path d="M28 216L36 86L79 20L120 68L168 38L151 116L116 138L77 219L65 170Z M67 101L81 65L111 92L101 125L77 144Z" fill="url(#r2-dark)" fill-rule="evenodd" stroke="#050b13" stroke-width="16" stroke-linejoin="round"/>
+<path d="M28 216L36 86L79 20L120 68L168 38L151 116L116 138L77 219L65 170Z M67 101L81 65L111 92L101 125L77 144Z" fill="url(#r2-silver)" fill-rule="evenodd" stroke="#c2c7bf" stroke-width="5" stroke-linejoin="round"/>
+<path d="M43 187L49 94L80 39L90 62L63 103L73 142L97 152L79 193L77 156Z" fill="#0b1723" opacity=".83"/>
+<path d="M47 105L79 38L101 72M37 206L64 155L78 199L109 133L146 109L158 54L124 81" fill="none" stroke="url(#r2-gold)" stroke-width="8" stroke-linejoin="round"/>
+<path d="M69 107L79 78L101 95L92 119L79 131Z" fill="#091420" stroke="#526575" stroke-width="4"/>
+<path d="M110 120L131 83L154 54L145 96Z" fill="#121f2b"/>
+<path d="M109 132L132 110L145 96M50 106L51 143" stroke="#f2ebd4" stroke-opacity=".65" stroke-width="6" stroke-linecap="round"/>
+</g>
+<g id="r2-pin"><path d="M0 -42L25 -11L12 6L0 42L-12 6L-25 -11Z" fill="url(#r2-dark)" stroke="url(#r2-silver)" stroke-width="8"/><path d="M0 -27L10 -7L0 19L-10 -7Z" fill="#417a8f" stroke="#cbbb91" stroke-width="4"/><path d="M-8 -7L0 -25L3 -5Z" fill="#daf5f0" opacity=".55"/></g>
+</defs>
+<!-- Narrow rails; corner clasps carry the ornament. -->
+<path d="M80 36H944L990 82V1454L944 1500H80L34 1454V82Z M80 114H944V1416H80Z" fill="#07111c" fill-rule="evenodd" stroke="#02050a" stroke-width="13"/>
+<path d="M80 36H944L990 82V1454L944 1500H80L34 1454V82Z M80 114H944V1416H80Z" fill="url(#r2-edge)" fill-rule="evenodd"/>
+<path d="M80 36H944L990 82V1454L944 1500H80L34 1454V82Z" stroke="url(#r2-silver)" stroke-width="12"/>
+<path d="M88 55H936L972 90V1446L936 1481H88L53 1446V90Z" stroke="#0b1722" stroke-width="9"/>
+<path d="M80 114H944V1416H80Z" stroke="#030a12" stroke-width="14"/>
+<path d="M80 114H944V1416H80Z" stroke="url(#r2-gold)" stroke-width="5"/>
+<path d="M57 249V623M57 825V1295M967 249V623M967 825V1295" stroke="#d7e1dc" stroke-opacity=".56" stroke-width="6"/>
+<path d="M70 264V594M70 854V1268M954 264V594M954 854V1268" stroke="#cbbb91" stroke-opacity=".48" stroke-width="6"/>
+<path d="M55 297L64 315L55 333M969 297L960 315L969 333M55 1161L64 1179L55 1197M969 1161L960 1179L969 1197" stroke="url(#r2-gold)" stroke-width="6" stroke-linecap="round"/>
+<use href="#r2-pin" transform="translate(57 721)"/><use href="#r2-pin" transform="translate(967 721)"/>
+<use href="#r2-clasp"/><use href="#r2-clasp" transform="translate(1024 0)scale(-1 1)"/>
+<use href="#r2-clasp" transform="translate(0 1536)scale(1 -1)"/><use href="#r2-clasp" transform="translate(1024 1536)scale(-1 -1)"/>
+<!-- Moon crown: a cabochon between two open crescents. -->
+<path d="M365 68L428 77L468 36L512 14L556 36L596 77L659 68L612 127L569 133L551 166L512 193L473 166L455 133L412 127Z" fill="url(#r2-dark)" stroke="#030810" stroke-width="14"/>
+<path d="M365 68L428 77L468 36L512 14L556 36L596 77L659 68L612 127L569 133L551 166L512 193L473 166L455 133L412 127Z" fill="url(#r2-dark)" stroke="url(#r2-silver)" stroke-width="7"/>
+<path d="M436 76A34 34 0 1 0 447 132A31 31 0 0 1 436 76Z" fill="url(#r2-gold)"/>
+<path d="M588 76A34 34 0 1 1 577 132A31 31 0 0 0 588 76Z" fill="url(#r2-gold)"/>
+<path d="M512 32L555 62L566 111L536 153L512 177L488 153L458 111L469 62Z" fill="url(#r2-silver)" stroke="#040b14" stroke-width="7"/>
+<path d="M512 47L546 70L554 109L529 143L512 158L495 143L470 109L478 70Z" fill="url(#r2-gem)" stroke="url(#r2-gold)" stroke-width="5"/>
+<path d="M478 70L512 47L496 97L470 109Z" fill="#daf5f0" opacity=".35"/>
+<path d="M529 143L554 109L519 114L512 158Z" fill="#417a8f" opacity=".7"/>
+<path d="M512 76L518 95L534 102L518 108L512 129L506 108L490 102L506 95Z" fill="#daf5f0" opacity=".8"/>
+<path d="M482 76L489 62" stroke="#fff5db" stroke-width="5" stroke-linecap="round"/>
+<path d="M397 1454L460 1438L482 1409L512 1421L542 1409L564 1438L627 1454L574 1475L544 1473L512 1519L480 1473L450 1475Z" fill="url(#r2-dark)" stroke="url(#r2-silver)" stroke-width="7"/>
+<path d="M512 1431A27 27 0 1 0 531 1478A23 23 0 0 1 512 1431Z" fill="url(#r2-gold)"/>
+<path d="M494 1490L512 1508L530 1490" stroke="#cbbb91" stroke-width="5"/>
+</svg>

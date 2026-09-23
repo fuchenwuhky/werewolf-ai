@@ -1,0 +1,94 @@
+/**
+ * card-frame-kit.css — 角色卡牌 V3「月蚀圣龛」生产渲染层的样式（SKIN-02）
+ *
+ * 与 `design/card-frames/v3/frame-kit.css` 的关系：**同一套几何与状态机**（类名同为 `r3-*`），
+ * 但生产版只服务 `web/card-frame.js` 的 `CardFrame.mount()`，并额外承担三件设计预览不需要的事：
+ *
+ *   ① **按需挂载**：小卡（≤112px）在 CSS 里根本不隐藏什么大材质 —— 大材质与完整 SVG 兜底
+ *      （`reliquary-metal.png` 约 1.94MiB）在小卡路径上**压根不会被创建**，因此也不会被请求。
+ *      下面的 `[data-detail='compact']` 规则是给"挂载后从大卡缩到小卡"的边界情况兜底的，
+ *      以及给容器查询（宽度未知时的响应式路径）切换用。
+ *   ② **最后一级降级**：金属 PNG → 完整 SVG → **CSS 细边框**。前两级靠 `data-*-error`
+ *      在 `::after` 上画一条 2:3 的细金属边，保证破图时不出现空白遮罩、更不会挡操作。
+ *   ③ **不碰旧框**：不复用 `.card-frame` / `.fr-*`（那是 `card-frame.js` 里仍在服役的手绘 SVG 框），
+ *      也不写全局 token、字号、按钮触区 —— 换肤不重做色板。
+ *
+ * 点击与键盘语义：**所有框层都是装饰**，一律 `pointer-events:none`；卡的点击、焦点、键盘返回
+ * 仍归调用方的宿主元素（本文件不为任何装饰层建立 tabindex 或 role）。
+ */
+
+/* 卡牌外壳：宽度由 JS 显式给（52/62/132/210/230/320），未给时吃容器宽度并靠容器查询切档 */
+.r3-shell { display: block; width: 100%; max-width: 100%; container-type: inline-size; }
+.r3-card { position: relative; width: 100%; aspect-ratio: 2 / 3; isolation: isolate; filter: drop-shadow(0 14px 14px #0009); }
+
+/* 全部图层严格重合：同一套 1024×1536 坐标系整体缩放，不做第二遍 object-fit 裁切 */
+.r3-card > svg, .r3-card > img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; }
+.r3-shell .r3-card > img[hidden] { display: none !important; }
+.r3-art { z-index: 1; }
+.r3-cut-compact { display: none; }
+.r3-material, .r3-vector { z-index: 2; }
+.r3-vector, .r3-compact { display: none !important; }
+.r3-accent { z-index: 3; }
+
+/* 名称铭牌：大卡显示、小卡藏起来（52px 塞不下四字角色名，完整名称留在外部文本或 aria-label 里） */
+.r3-title {
+  position: absolute; z-index: 4; left: 21%; right: 21%; top: 86.5%; height: 6%;
+  display: flex; align-items: center; justify-content: center; margin: 0;
+  color: #efe5cc; font: 600 16px/1.05 "Noto Serif SC", "Songti SC", "SimSun", serif;
+  font-size: clamp(12px, 7cqw, 28px); letter-spacing: .13em; padding-left: .13em;
+  white-space: nowrap; overflow: hidden; text-shadow: 0 2px 3px #000, 0 0 12px #000; pointer-events: none;
+}
+
+/* 立绘失败：暗色底衬 + 名称仍可读（名称节点始终在 DOM 里，不因立绘缺失而消失） */
+.r3-card[data-art-error]::before {
+  content: ''; position: absolute; inset: 15% 10% 14%; z-index: 0;
+  background: radial-gradient(ellipse at 50% 40%, #354456, #0e1420 65%);
+}
+
+/* 降级链第 1→2 级：金属 PNG 不可用（或显式 vector 渲染）→ 完整 SVG 顶上，装饰层让位 */
+.r3-shell[data-render='vector'] .r3-material, .r3-shell[data-render='vector'] .r3-accent,
+.r3-card[data-material-error] .r3-material, .r3-card[data-material-error] .r3-accent { display: none; }
+.r3-shell[data-render='vector'] .r3-vector, .r3-card[data-material-error] .r3-vector { display: block !important; }
+
+/* 降级链第 3 级：完整 SVG / 小框 SVG 都读不到 → 一条细金属边框（不遮内容、不接点击） */
+.r3-card::after {
+  content: ''; position: absolute; inset: 1%; border: 1px solid #c2b38e;
+  box-shadow: inset 0 0 0 2px #182331, 0 0 0 1px #040710; z-index: 5; pointer-events: none; display: none;
+}
+.r3-shell[data-render='vector'] .r3-card[data-vector-error]::after,
+.r3-card[data-material-error][data-vector-error]::after,
+.r3-shell[data-detail='compact'] .r3-card[data-compact-error]::after { display: block; }
+
+/* 选中 / 不可用：只做视觉，禁用与 aria-pressed 仍由业务层维护 */
+.r3-shell[data-state='selected'] .r3-card { filter: drop-shadow(0 12px 14px #0009) drop-shadow(0 0 5px #d7b77a99); }
+.r3-shell[data-state='unavailable'] .r3-card { filter: grayscale(.8) brightness(.66); }
+
+/* 显式小卡档：旧 WebView 没有容器查询时，靠 JS 传 width / compact:true 落到这一档 */
+.r3-shell[data-detail='compact'] .r3-card { filter: drop-shadow(0 3px 4px #0008); }
+.r3-shell[data-detail='compact'] .r3-card .r3-material,
+.r3-shell[data-detail='compact'] .r3-card .r3-vector,
+.r3-shell[data-detail='compact'] .r3-card .r3-accent,
+.r3-shell[data-detail='compact'] .r3-card .r3-title { display: none !important; }
+.r3-shell[data-detail='compact'] .r3-card .r3-compact { display: block !important; z-index: 2; }
+.r3-shell[data-detail='compact'] .r3-cut-full { display: none; }
+.r3-shell[data-detail='compact'] .r3-cut-compact { display: block; }
+/* 小卡上立绘也没了（缺图）：名称必须仍读得出来 —— 这是"底衬 + 可读名称"的落点 */
+.r3-shell[data-detail='compact'] .r3-card[data-art-error] .r3-title {
+  display: flex !important; left: 4%; right: 4%; top: 84%; height: 9%;
+  font-size: 9px; letter-spacing: 0; padding-left: 0;
+}
+
+/* 宽度未知时的响应式切档（容器查询量的是 .r3-shell 的内容盒宽，无 padding，等于卡宽） */
+@container (max-width: 112px) {
+  .r3-card .r3-material, .r3-card .r3-vector, .r3-card .r3-accent, .r3-card .r3-title,
+  .r3-shell[data-render='vector'] .r3-card .r3-vector, .r3-card[data-material-error] .r3-vector { display: none !important; }
+  .r3-card .r3-compact { display: block !important; z-index: 2; }
+  .r3-cut-full { display: none; }
+  .r3-cut-compact { display: block; }
+  .r3-card { filter: drop-shadow(0 3px 4px #0008); }
+  .r3-card[data-compact-error]::after { display: block; }
+  .r3-card > img[hidden] { display: none !important; }
+}
+
+/* 减少动态效果：沿用系统偏好，不新增设置项（组件本身没有动画，这里是给接入方的翻牌过渡留的） */
+@media (prefers-reduced-motion: reduce) { .r3-shell, .r3-card { animation: none !important; transition: none !important; } }

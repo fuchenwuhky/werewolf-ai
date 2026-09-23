@@ -37,7 +37,7 @@ const fingerprint = (list) => crypto.createHash('sha256').update(list.join('\n')
  * 改 SHELL 清单时必须：升 VERSION，并在此登记新指纹（测试会告诉你新指纹是多少）。
  * 这样"改了清单忘了升档"这种静默失效不会再发生。
  */
-const SHELL_LEDGER = { 'ww-v14-note': '3f8ab596ee6fc328', 'ww-v15-tokens': '14aee7099e97a45c', 'ww-v16-shared': '29fcc29c61b83495', 'ww-v17-avatar': '0edae0c5a149f59a', 'ww-v18-icons': '1fc75ac43c20e49f', 'ww-v19-phase': '317f7881241de0bc', 'ww-v20-m2d': 'a0d44db1e9641ba9', 'ww-v21-m2e': '2d505a2f25fb87a9', 'ww-v22-m3': 'ba97c8baa33c6236' };
+const SHELL_LEDGER = { 'ww-v14-note': '3f8ab596ee6fc328', 'ww-v15-tokens': '14aee7099e97a45c', 'ww-v16-shared': '29fcc29c61b83495', 'ww-v17-avatar': '0edae0c5a149f59a', 'ww-v18-icons': '1fc75ac43c20e49f', 'ww-v19-phase': '317f7881241de0bc', 'ww-v20-m2d': 'a0d44db1e9641ba9', 'ww-v21-m2e': '2d505a2f25fb87a9', 'ww-v22-m3': 'ba97c8baa33c6236', 'ww-v23-m3': '6e07c9159f0203f9' };
 
 /** 有意不进预缓存的文件（必须显式登记并写明原因，防止无声遗漏） */
 const ALLOW_MISSING = new Map([]);

@@ -19,9 +19,22 @@
  */
 'use strict';
 
-// 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
-// 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
-const VERSION = 'ww-v22-m3'; // 预缓存加入 /shared/setup-wizard.js（M3 三步开局的纯状态机；前代 ww-v21-m2e 加的是 /shared/export-status.js）
+/**
+ * 缓存版本：仅表示**结构代次**（预缓存清单/策略变更时手动升档）。
+ * 资源内容的新鲜度由"网络优先"策略保证，不再依赖版本号记忆 —— 忘记升版也不会跑旧脚本。
+ * **改动 SHELL 清单必须同时升这里**（否则老 Worker 的缓存里没有新文件）。
+ *
+ * SKIN-01/02 这一代加的是：V3 卡框素材 17 件（web/assets/card-frames/v3/）与共享渲染层样式
+ * /shared/card-frame-kit.css。版本号沿用共享模块代的 `ww-vNN-m3` 形状 —— 这是 test/m3-home.test.js
+ * 的守卫在核的形状，不是 M3 那一步的专属动作；test/m2e-export-browser.test.js 还要求正文里
+ * 仍能看到更早的代名（见"沿革"一行）。
+ * 沿革：ww-v22-m3 加 /shared/setup-wizard.js + /shared/draft-store.js；
+ *       ww-v21-m2e 加 /shared/export-status.js；本代 = ww-v23-m3 加 V3 卡框素材 + card-frame-kit.css。
+ *
+ * ⚠ 这段注释里**不要**出现"版本号赋值语句"的原样字面量：test/sw-shell.test.js 用
+ * `match` 取**第一处**形如 `const VERSION` 的赋值，写在这里会被它当成真的版本号（实测踩过）。
+ */
+const VERSION = 'ww-v23-m3';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -31,6 +44,7 @@ const SHELL = [
   '/index.html',
   '/style.css',
   '/shared/tokens.css',
+  '/shared/card-frame-kit.css',
   '/i18n.js',
   '/card-frame.js',
   '/codex.js',
@@ -67,6 +81,27 @@ const SHELL = [
   '/assets/icon-192.png',
   '/assets/icon-512.png',
   '/assets/apple-touch-icon.png',
+  // 角色卡牌 V3 素材（SKIN-01：17 件，源 design/card-frames/v3/assets 逐字节副本）。
+  // 这里刻意把 1.94MiB 的 reliquary-metal.png 也放进预缓存：断网时大卡不能变成一张破图。
+  // 这是**一次性的离线预缓存**，不是卡牌组件自身的流量 —— 52/62px 小卡路径不会请求它
+  // （见 web/card-frame.js 的 buildLayers：小卡根本不创建金属层）。
+  '/assets/card-frames/v3/frame-wolf.svg',
+  '/assets/card-frames/v3/frame-oracle.svg',
+  '/assets/card-frames/v3/frame-village.svg',
+  '/assets/card-frames/v3/frame-fate.svg',
+  '/assets/card-frames/v3/frame-neutral.svg',
+  '/assets/card-frames/v3/accent-wolf.svg',
+  '/assets/card-frames/v3/accent-oracle.svg',
+  '/assets/card-frames/v3/accent-village.svg',
+  '/assets/card-frames/v3/accent-fate.svg',
+  '/assets/card-frames/v3/accent-neutral.svg',
+  '/assets/card-frames/v3/compact-wolf.svg',
+  '/assets/card-frames/v3/compact-oracle.svg',
+  '/assets/card-frames/v3/compact-village.svg',
+  '/assets/card-frames/v3/compact-fate.svg',
+  '/assets/card-frames/v3/compact-neutral.svg',
+  '/assets/card-frames/v3/card-back-field.svg',
+  '/assets/card-frames/v3/reliquary-metal.png',
 ];
 
 self.addEventListener('install', (event) => {

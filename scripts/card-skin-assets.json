@@ -1,0 +1,132 @@
+{
+  "note": "角色卡牌皮肤 V3 素材台账（源 design/card-frames/v3/assets → 生产 web/assets/card-frames/v3）。由 node scripts/card-skin-manifest.js --sync 生成；sha256 为原始字节，lfSha256 为 CRLF→LF 归一化后的内容哈希（二进制为 null）。",
+  "source": "design/card-frames/v3/assets",
+  "production": "web/assets/card-frames/v3",
+  "archive": "design/card-frames/v3/archive/compact-v1",
+  "fileCount": 17,
+  "files": [
+    {
+      "name": "frame-wolf.svg",
+      "bytes": 7740,
+      "sha256": "1c262acecaac05f368db64edfb7cb08e30e9baacc5bcf045f3fc450600ce4b5a",
+      "lfSha256": "1c262acecaac05f368db64edfb7cb08e30e9baacc5bcf045f3fc450600ce4b5a",
+      "binary": false
+    },
+    {
+      "name": "frame-oracle.svg",
+      "bytes": 7754,
+      "sha256": "0c9b1a11b6d8701fc31386aae8a459f8d2207f4137017a543a53c437a54cb9a9",
+      "lfSha256": "0c9b1a11b6d8701fc31386aae8a459f8d2207f4137017a543a53c437a54cb9a9",
+      "binary": false
+    },
+    {
+      "name": "frame-village.svg",
+      "bytes": 7830,
+      "sha256": "1ebd49c4f81e23df26962fd7fe1039f0c6d46546f9e55d1904fc4ba11351bffe",
+      "lfSha256": "1ebd49c4f81e23df26962fd7fe1039f0c6d46546f9e55d1904fc4ba11351bffe",
+      "binary": false
+    },
+    {
+      "name": "frame-fate.svg",
+      "bytes": 7845,
+      "sha256": "42bbf3f61d49cf69519a0fea429de44b9c3e69010686fb58b0606014c8a4a2f2",
+      "lfSha256": "42bbf3f61d49cf69519a0fea429de44b9c3e69010686fb58b0606014c8a4a2f2",
+      "binary": false
+    },
+    {
+      "name": "frame-neutral.svg",
+      "bytes": 7744,
+      "sha256": "463739b9166be0999bde1be63d59c382ca4aacaf5bd6517a7f17b791cfca2d18",
+      "lfSha256": "463739b9166be0999bde1be63d59c382ca4aacaf5bd6517a7f17b791cfca2d18",
+      "binary": false
+    },
+    {
+      "name": "accent-wolf.svg",
+      "bytes": 3052,
+      "sha256": "9bc15e45e10337420556682e306b23f4fab065e4609d21a5c2935c862d7b27cd",
+      "lfSha256": "9bc15e45e10337420556682e306b23f4fab065e4609d21a5c2935c862d7b27cd",
+      "binary": false
+    },
+    {
+      "name": "accent-oracle.svg",
+      "bytes": 3066,
+      "sha256": "ba456ff021a2c901b1832bf0601024bce9d4e7ef322000799767c8d8cb8683e9",
+      "lfSha256": "ba456ff021a2c901b1832bf0601024bce9d4e7ef322000799767c8d8cb8683e9",
+      "binary": false
+    },
+    {
+      "name": "accent-village.svg",
+      "bytes": 3142,
+      "sha256": "6659c6f135b6b7bc8a4fd87f23e907fef76ae6f25475e5986eb8f105e59b5514",
+      "lfSha256": "6659c6f135b6b7bc8a4fd87f23e907fef76ae6f25475e5986eb8f105e59b5514",
+      "binary": false
+    },
+    {
+      "name": "accent-fate.svg",
+      "bytes": 3157,
+      "sha256": "eda6878ef949d1ea6e2c5ff71f4a8dbb2b07607a1a8f9234cc0805a1e97baf48",
+      "lfSha256": "eda6878ef949d1ea6e2c5ff71f4a8dbb2b07607a1a8f9234cc0805a1e97baf48",
+      "binary": false
+    },
+    {
+      "name": "accent-neutral.svg",
+      "bytes": 3056,
+      "sha256": "218710ba608fdcbd5106357488743cba47a8b8024bfef098c301066790093196",
+      "lfSha256": "218710ba608fdcbd5106357488743cba47a8b8024bfef098c301066790093196",
+      "binary": false
+    },
+    {
+      "name": "compact-wolf.svg",
+      "bytes": 5922,
+      "sha256": "246e40faa06cb0f87f48fd22a3f3f80b640a32091f3eb4ace816ee7277cc7f0b",
+      "lfSha256": "246e40faa06cb0f87f48fd22a3f3f80b640a32091f3eb4ace816ee7277cc7f0b",
+      "binary": false
+    },
+    {
+      "name": "compact-oracle.svg",
+      "bytes": 5922,
+      "sha256": "bcf258e1979eabd9fe17310441174026998947a382d22880f3db795028627fa6",
+      "lfSha256": "bcf258e1979eabd9fe17310441174026998947a382d22880f3db795028627fa6",
+      "binary": false
+    },
+    {
+      "name": "compact-village.svg",
+      "bytes": 5922,
+      "sha256": "e03662c35ba1e3a8af065504388003e5e4f6413ac11f3268eb65dfe4817b80bb",
+      "lfSha256": "e03662c35ba1e3a8af065504388003e5e4f6413ac11f3268eb65dfe4817b80bb",
+      "binary": false
+    },
+    {
+      "name": "compact-fate.svg",
+      "bytes": 5922,
+      "sha256": "c222b6875240abc195bfd8d39491f0439972881997d8e819a2e1e22058cd6a4f",
+      "lfSha256": "c222b6875240abc195bfd8d39491f0439972881997d8e819a2e1e22058cd6a4f",
+      "binary": false
+    },
+    {
+      "name": "compact-neutral.svg",
+      "bytes": 5922,
+      "sha256": "421b8e4e7c21308994e79e641c304085af50be5c7a57efbcb2f7e550ab0c1881",
+      "lfSha256": "421b8e4e7c21308994e79e641c304085af50be5c7a57efbcb2f7e550ab0c1881",
+      "binary": false
+    },
+    {
+      "name": "card-back-field.svg",
+      "bytes": 12078,
+      "sha256": "58f082b565b87dd623f27199ce374faeae7dcaa7a27672f76a8d01374d9dfe37",
+      "lfSha256": "58f082b565b87dd623f27199ce374faeae7dcaa7a27672f76a8d01374d9dfe37",
+      "binary": false
+    },
+    {
+      "name": "reliquary-metal.png",
+      "bytes": 2033769,
+      "sha256": "a230c9ba214ee2dfb3f20ca2f089ee625be6fb2d07ca1888205280914f0e4c4b",
+      "lfSha256": null,
+      "binary": true,
+      "png": {
+        "width": 1024,
+        "height": 1536
+      }
+    }
+  ]
+}

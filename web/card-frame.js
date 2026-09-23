@@ -461,6 +461,15 @@
   }
 
   /**
+   * 角色 id 的统一清理：只放行 `[\w-]`（属性值要写进 DOM，非法字符一律剔除）。
+   * `roleAttrs()`、新主题映射、素材路径三处共用同一个原语 —— 免得三处各自清理、
+   * 各自忘记处理空值，最后出现"主题是 neutral、data-role 却还是原文"这类不一致。
+   * @param {string} [rid]
+   * @returns {string} 清理后的 id（空值 → 空串）
+   */
+  const sanitizeRole = (rid) => String(rid == null ? '' : rid).replace(/[^\w-]/g, '');
+
+  /**
    * 取角色对应的数据集属性（单一原语，`roleAttr()` 与调用方 `dataset` 赋值都走这里，
    * 免得两处各自清理字符、各自忘记带阵营）。
    * @param {string} [rid] 角色 id
@@ -468,7 +477,7 @@
    */
   function roleAttrs(rid) {
     if (!rid) return {};
-    const id = String(rid).replace(/[^\w-]/g, '');
+    const id = sanitizeRole(rid);
     if (!id) return {};
     return FACTION[id] ? { role: id, faction: FACTION[id] } : { role: id };
   }
@@ -488,7 +497,458 @@
     return out;
   }
 
-  const api = { html, ensureDefs, roleAttr, roleAttrs, DEFS, FRAME, DEFS_ID, FACTION, THIRD_PARTY, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R };
+  /* ==========================================================================
+   * SKIN-02：统一挂载接口（V3「月蚀圣龛」素材，源自 design/card-frames/v3/）
+   * --------------------------------------------------------------------------
+   * 为什么必须有共享挂载层，而不是让桌面 / 手机 / 图鉴各自拼一张卡：
+   *   · **主题映射**只要抄错一处，就会出现"预言家牌上印狼爪"这种不报错的错；三份映射必然漂移。
+   *   · **画窗裁切与 1024×1536 坐标系**同理：抄第二份就会出现"两端立绘裁得不一样"。
+   *   · **素材路径**在桌面 `/`、手机 `/m/`、两种原生壳下各不相同，逐调用点打补丁必然漏一个。
+   *   · **身份可见性**最危险：未知身份必须是同一张 neutral 牌背，DOM / URL / ARIA /
+   *     预加载请求都不得带出真实秘密角色 —— 只有共享层能守住"绝不先渲染正面"。
+   *
+   * 与旧接口的关系（**没有替换任何旧 API**）：
+   *   · `html()` 仍返回框层**字符串**（app.js / m.js / codex.js 仍在用），`roleAttr()` /
+   *     `roleAttrs()` 的 `wolf / god / villager / third` 分类原样保留（codex.js 的分区依赖它）。
+   *   · 新接口 `mount(host, options)` 返回**节点**并替换宿主子节点（沿用设计包 `ReliquaryCards.mount`
+   *     的契约）。两者返回类型不同，所以这里是**新增**而不是改写 `html()`。
+   *   · 新主题命名只在这里映射一次：wolf→wolf、god→oracle、villager→village、third→fate，
+   *     未知/不可见 → neutral。`fate` 只是暗恋者的外观，不是引擎新增阵营。
+   * ========================================================================== */
+
+  /** 素材坐标系：设计包 frame-kit.js 的 viewBox 与裁切路径**逐字迁移**，两端不手抄第二套 */
+  const R3_VIEW = { w: 1024, h: 1536 };
+  const R3_WINDOW = 'M104 372 Q122 278 218 222 C318 156 402 172 512 242 C622 172 706 156 806 222 Q902 278 920 372 V1209 Q908 1282 843 1316 H181 Q116 1282 104 1209Z';
+  /** 大卡画窗：立绘 <image> 的落位（968 裁切用 R3_WINDOW） */
+  const R3_ART = { x: 76, y: 108, w: 872, h: 1308 };
+  /** 小卡简化矩形裁切（大卡拱形画窗在小尺寸会糊成一团） */
+  const R3_COMPACT_CUT = { x: 66, y: 103, w: 892, h: 1313, rx: 8 };
+
+  /** 阵营外观 → 设计包主题名（唯一映射点；引擎 category / 旧外观键都不因此改变） */
+  const FACTION_THEME = { wolf: 'wolf', god: 'oracle', villager: 'village', third: 'fate' };
+  /** 所有不可见身份、未知/非法角色 id 的统一主题 */
+  const NEUTRAL_THEME = 'neutral';
+
+  /** 角色 → 主题（由 FACTION + FACTION_THEME 派生，杜绝两张表各写一遍） */
+  const THEME = {};
+  for (const id of Object.keys(FACTION)) THEME[id] = FACTION_THEME[FACTION[id]] || NEUTRAL_THEME;
+
+  /**
+   * 生产角色名（仅作**兜底**）：与 `src/engine/roles.js` 的 `name` 逐条一致，由
+   * test/card-frame-skin.test.js 钉住。真正的名称来源是调用方（服务端角色资料 / i18n），
+   * `mount({ name })` 传什么就用什么；这里绝不用设计演示页里那套固定中文替代生产文案。
+   */
+  const ROLE_NAMES = {
+    villager: '平民', wolf: '狼人', wolfking: '狼王', whitewolfking: '白狼王',
+    seer: '预言家', witch: '女巫', hunter: '猎人', guard: '守卫', idiot: '白痴',
+    knight: '骑士', dreamer: '摄梦人', wolfbeauty: '狼美人', crow: '乌鸦',
+    hiddenwolf: '隐狼', admirer: '暗恋者',
+  };
+  const NAME_UNKNOWN = '未揭示';
+  const ARIA_HIDDEN = '统一牌背，身份未揭示';
+
+  /** 组件外框 ≤112px 走 R2 精雕小框，>112px 走大卡材质（施工说明 §SKIN-02 的统一切换阈值） */
+  const COMPACT_MAX = 112;
+  /** 全卡严格 2:3（230×345，不是旧的 230×330） */
+  const RATIO = 3 / 2;
+  /** 施工说明钉住的六个场景宽度（测试与调用方都读这一份，不各写一套魔数） */
+  const SIZES = { phone: 52, desktop: 62, codex: 132, codexBig: 210, flip: 230, inspect: 320 };
+
+  const ASSET_DIR = 'assets/card-frames/v3/';
+  const ART_DIR = 'assets/roles/';
+  const KIT_CSS = 'shared/card-frame-kit.css';
+  const KIT_CSS_ID = 'ww-card-kit-css';
+  const BACK_FIELD = 'card-back-field.svg';
+
+  let assetBaseOverride = null;
+  let artBaseOverride = null;
+
+  /**
+   * 共享脚本自身的 URL，**在脚本执行的那一刻**取一次。
+   *
+   * 为什么必须现在取：`document.currentScript` 只在脚本执行期间有值；等调用方在若干毫秒后
+   * 调 `mount()` 时它已经是 `null` 了。那时再走"按页面 URL 兜底"虽然也能算对（桌面 `/`、
+   * 手机 `/m/` 退一级），但页面一旦被放在更深的子路径（或换个壳的入口页），就会算错 ——
+   * 而路径算错的表现是"图全裂"，不是报错。这里把它钉在第一手来源上。
+   */
+  const SELF_SRC = (() => {
+    try {
+      const cs = typeof document !== 'undefined' && document.currentScript;
+      return cs && cs.src ? String(cs.src) : '';
+    } catch (_) { return ''; }
+  })();
+
+  const withSlash = (u) => {
+    const s = String(u == null ? '' : u);
+    if (!s) return '';
+    return s.endsWith('/') ? s : `${s}/`;
+  };
+
+  /**
+   * 站点公开资源根（**共享层唯一路径来源**）。
+   *
+   * 为什么不能在每个调用点写相对路径：桌面页在 `/`、手机页在 `/m/`，同一个 `card-frame.js`
+   * 却被两页分别以 `/card-frame.js` 与 `../card-frame.js` 引入 —— 相对路径在两端解析结果不同。
+   * 这里以**共享脚本自身的 URL**（脚本加载时捕获的 SELF_SRC）为基准，因此：
+   *   · 桌面 `http(s)://host/`            → `/assets/card-frames/v3/`
+   *   · 手机 `http(s)://host/m/`          → 同样是 `/assets/…`（脚本 URL 不在 /m/ 下，天然正确）
+   *   · Capacitor 安卓壳（`http://localhost` / `https://localhost`）与 Electron（`file://`）同理，
+   *     因为 `new URL(相对路径, 脚本URL)` 在每种 scheme 下都按该 scheme 的规则解析。
+   * 兜底顺序：显式 override → 脚本 URL → 页面 URL 目录（并把结尾的 `m/` 退回一级）→ `'/'`。
+   * @returns {string} 以 `/` 结尾的绝对（或根相对）URL
+   */
+  function publicRoot() {
+    const stripM = (dir) => (/\/m\/$/.test(dir) ? dir.replace(/\/m\/$/, '/') : dir);
+    if (SELF_SRC) {
+      try { return stripM(new URL('.', SELF_SRC).href); } catch (_) { /* 非绝对 URL：走下一档 */ }
+    }
+    try {
+      const href = typeof location !== 'undefined' && location.href ? String(location.href) : '';
+      if (href) return stripM(new URL('.', href).href);
+    } catch (_) { /* 无 DOM / 非法 URL：走根相对兜底 */ }
+    return '/';
+  }
+
+  /** 卡框素材目录（桌面 `/assets/card-frames/v3/`；原生壳按各自 scheme 解析） */
+  function assetBase() {
+    const forced = (() => {
+      try { return root.__WW_CARD_ASSET_BASE__; } catch (_) { return null; }
+    })();
+    if (typeof forced === 'string' && forced) return withSlash(forced);
+    if (assetBaseOverride) return withSlash(assetBaseOverride);
+    try { return new URL(ASSET_DIR, publicRoot()).href; } catch (_) { return `/${ASSET_DIR}`; }
+  }
+
+  /** 角色立绘目录（沿用既有 web/assets/roles/，本次不重绘角色图） */
+  function artBase() {
+    if (artBaseOverride) return withSlash(artBaseOverride);
+    try { return new URL(ART_DIR, publicRoot()).href; } catch (_) { return `/${ART_DIR}`; }
+  }
+
+  /** 把一个**清单内**的素材名字解析成可加载 URL（不接受任意路径，防注入/防越权引用） */
+  function assetUrl(name) {
+    const base = assetBase();
+    try { return new URL(String(name), base).href; } catch (_) { return base + String(name); }
+  }
+
+  function artUrl(rid) {
+    const base = artBase();
+    try { return new URL(`${sanitizeRole(rid)}.png`, base).href; } catch (_) { return `${base}${sanitizeRole(rid)}.png`; }
+  }
+
+  /** 共享渲染层样式的 URL（SKIN-03 也可以改为页面静态 <link>，本函数与 ensureStyles 都幂等） */
+  function stylesheetUrl() {
+    try { return new URL(KIT_CSS, publicRoot()).href; } catch (_) { return `/${KIT_CSS}`; }
+  }
+
+  /**
+   * 注入共享卡牌样式（只注一次，共用同一份缓存）。
+   * 为什么由 JS 注入而不是改 index.html：本工作包（SKIN-00/01/02）不得改页面文件；
+   * SKIN-03 若改成静态 `<link>`，这里会自动识别已有引用并只补 id，不重复加载。
+   */
+  function ensureStyles(doc) {
+    const d = doc || (typeof document !== 'undefined' ? document : null);
+    if (!d || !d.head) return null;
+    const existing = d.getElementById(KIT_CSS_ID);
+    if (existing) return existing;
+    const href = stylesheetUrl();
+    let found = null;
+    try {
+      for (const link of d.querySelectorAll('link[rel="stylesheet"]')) {
+        const raw = String(link.getAttribute('href') || '');
+        if (link.href === href || raw.endsWith(KIT_CSS)) { found = link; break; }
+      }
+    } catch (_) { /* 极老 WebView 的 querySelectorAll 差异：忽略，直接插一条 */ }
+    if (found) { found.id = KIT_CSS_ID; return found; }
+    const link = d.createElement('link');
+    link.id = KIT_CSS_ID;
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.setAttribute('data-ww-card-kit', '1');
+    d.head.appendChild(link);
+    return link;
+  }
+
+  /** 显式覆盖素材/立绘目录（原生壳从应用公开资源根构造绝对 URL 时用；传空恢复自动解析） */
+  function setAssetBase(u) { assetBaseOverride = u ? String(u) : null; }
+  function setArtBase(u) { artBaseOverride = u ? String(u) : null; }
+
+  /**
+   * 主题：`revealed` **严格等于 true** 才使用角色 id，否则一律 neutral。
+   *
+   * 这里比 `roleAttrs()` **更严**：含非法字符（`wo"lf`）或非字符串的输入直接当作"未知"，
+   * 不做"剔掉非法字符再试试看"。理由：属性清理是为了"不破坏 DOM"，而主题与素材路径是
+   * **信任边界** —— 把 `wo"lf` 折叠成 `wolf` 等于让一份畸形输入命中一张真实角色的牌面。
+   * 旧接口 `roleAttr()` 的宽松行为原样保留（已有调用方与既有测试依赖）。
+   * @param {string} [roleId]
+   * @param {boolean} [revealed] "当前视角允许知道该身份"（不是照搬公开翻牌字段）
+   * @returns {'wolf'|'oracle'|'village'|'fate'|'neutral'}
+   */
+  function themeOf(roleId, revealed) {
+    if (revealed !== true) return NEUTRAL_THEME;
+    const id = roleKey(roleId);
+    return (id && THEME[id]) || NEUTRAL_THEME; // 未知/非法 id 中性回退
+  }
+
+  /** 严格角色 id：必须是字符串、非空、且清理前后完全相同（否则算未知 → neutral） */
+  function roleKey(roleId) {
+    if (typeof roleId !== 'string' || !roleId) return '';
+    return sanitizeRole(roleId) === roleId ? roleId : '';
+  }
+
+  /** 角色名（仅在 revealed 时使用；未知角色同样回退成中性文案，不泄露也不瞎猜） */
+  function nameOf(roleId, revealed) {
+    if (themeOf(roleId, revealed) === NEUTRAL_THEME) return NAME_UNKNOWN;
+    return ROLE_NAMES[roleKey(roleId)] || NAME_UNKNOWN;
+  }
+
+  /**
+   * 已知宽度 → 固定几何（严格 2:3；取整后的比例误差 ≤1 CSS px）。
+   * @param {number} width CSS px
+   * @returns {{width:number,height:number,compact:boolean}|null}
+   */
+  function sizeOf(width) {
+    const w = Number(width);
+    if (!Number.isFinite(w) || w <= 0) return null;
+    const px = Math.max(1, Math.round(w));
+    return { width: px, height: Math.round(px * RATIO), compact: px <= COMPACT_MAX };
+  }
+
+  /**
+   * 空间不足时**等比缩小**（检视卡最高参考 320×480、翻牌 230×345 都走这里）。
+   * @param {number} width 期望宽度
+   * @param {{width?:number,height?:number,maxWidth?:number,maxHeight?:number}} [avail] 可用宽高
+   */
+  function fitSize(width, avail) {
+    const base = sizeOf(width);
+    if (!base) return null;
+    const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+    const maxW = num(avail && (avail.width || avail.maxWidth));
+    const maxH = num(avail && (avail.height || avail.maxHeight));
+    let scale = 1;
+    if (maxW) scale = Math.min(scale, maxW / base.width);
+    if (maxH) scale = Math.min(scale, maxH / base.height);
+    if (scale >= 1) return { ...base, scaled: false };
+    const w = Math.max(1, Math.floor(base.width * scale));
+    return { width: w, height: Math.round(w * RATIO), compact: w <= COMPACT_MAX, scaled: true };
+  }
+
+  // ------------------------------------------------------------------ DOM 渲染
+
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const XLINK_NS = 'http://www.w3.org/1999/xlink';
+  let clipSeq = 0;
+
+  /** 一次性创建 + 属性写入（`xlink:href` 与 `href` 同写：老 WebView 只认前者） */
+  function svgNode(d, tag, attrs) {
+    const node = d.createElementNS(SVG_NS, tag);
+    for (const key of Object.keys(attrs || {})) {
+      node.setAttribute(key, String(attrs[key]));
+      if (key === 'href') { try { node.setAttributeNS(XLINK_NS, 'xlink:href', String(attrs[key])); } catch (_) { /* 忽略 */ } }
+    }
+    return node;
+  }
+
+  /** 纯装饰图：不参与点击、不进读屏、不拖拽 */
+  function decorationNode(d, cls, src) {
+    const img = d.createElement('img');
+    img.className = cls;
+    img.src = src;
+    img.alt = '';
+    img.setAttribute('aria-hidden', 'true');
+    img.draggable = false;
+    img.decoding = 'async';
+    return img;
+  }
+
+  /**
+   * 按当前档位**按需创建**材质层。
+   *
+   * ⚠ 这是 SKIN-02 最硬的一条：小卡（≤112px）**根本不创建** `reliquary-metal.png`（约 1.94MiB）
+   *   与完整 SVG 兜底 —— 不创建就不请求。设计包的展示组件是把所有层都插进去再用 CSS 隐藏，
+   *   那条路在 52px 常驻牌上会白下载约 1.94MiB；生产适配不照搬演示 DOM。
+   *   （SW 安装时的一次性离线预缓存不在此限，那是离线能力的代价，不是组件流量。）
+   */
+  function buildLayers(st) {
+    if (!st.compact) {
+      if (st.compactImg) { st.compactImg.remove(); st.compactImg = null; }
+      if (!st.metal) {
+        st.metal = decorationNode(st.d, 'r3-material', st.url('reliquary-metal.png'));
+        st.metal.addEventListener('error', () => { st.card.dataset.materialError = 'true'; });
+        st.card.appendChild(st.metal);
+      }
+      if (!st.vector) {
+        st.vector = decorationNode(st.d, 'r3-vector', st.url(`frame-${st.theme}.svg`));
+        st.vector.addEventListener('error', () => { st.vector.hidden = true; st.card.dataset.vectorError = 'true'; });
+        st.card.appendChild(st.vector);
+      }
+      if (!st.accent) {
+        st.accent = decorationNode(st.d, 'r3-accent', st.url(`accent-${st.theme}.svg`));
+        st.accent.addEventListener('error', () => { st.accent.hidden = true; st.card.dataset.accentError = 'true'; });
+        st.card.appendChild(st.accent);
+      }
+    } else {
+      if (st.metal) { st.metal.remove(); st.metal = null; }
+      if (st.vector) { st.vector.remove(); st.vector = null; }
+      if (st.accent) { st.accent.remove(); st.accent = null; }
+      if (!st.compactImg) {
+        st.compactImg = decorationNode(st.d, 'r3-compact', st.url(`compact-${st.theme}.svg`));
+        st.compactImg.addEventListener('error', () => { st.compactImg.hidden = true; st.card.dataset.compactError = 'true'; });
+        st.card.appendChild(st.compactImg);
+      }
+    }
+  }
+
+  /** 宽度未知（未传 width）的卡：用**一个共享** ResizeObserver 跨过 112px 时切档；断开的卡自动摘掉 */
+  const autoWatch = new Set();
+  let autoRO = null;
+
+  function watchAuto(st, RO) {
+    if (!autoRO) {
+      autoRO = new RO(() => {
+        for (const entry of [...autoWatch]) {
+          const shell = entry.shell;
+          if (!shell.isConnected) { autoRO.unobserve(shell); autoWatch.delete(entry); continue; }
+          const w = shell.getBoundingClientRect ? shell.getBoundingClientRect().width : shell.offsetWidth;
+          if (!w) continue;
+          const want = w <= COMPACT_MAX;
+          if (want === entry.compact) continue;
+          entry.compact = want;
+          shell.dataset.detail = want ? 'compact' : 'big';
+          buildLayers(entry);
+        }
+      });
+    }
+    autoWatch.add(st);
+    autoRO.observe(st.shell);
+  }
+
+  /** 摘掉某张卡的监听（宿主被移除时调用；不调用也会在下一次回调里自愈） */
+  function unmount(host) {
+    if (host && typeof host.replaceChildren === 'function') host.replaceChildren();
+    for (const entry of [...autoWatch]) {
+      if (!host || entry.host === host || !entry.shell.isConnected) {
+        if (autoRO) autoRO.unobserve(entry.shell);
+        autoWatch.delete(entry);
+      }
+    }
+    return null;
+  }
+
+  /**
+   * **产品唯一卡牌挂载入口**（桌面 / 手机 / 图鉴 / 检视都走这里）。
+   *
+   * @param {Element} host 只装牌面的宿主元素（**不要**传整个弹层/含按钮的容器：会替换其全部子节点）
+   * @param {object} [options]
+   * @param {string} [options.roleId] 角色 id（只在 `revealed === true` 时才会被使用）
+   * @param {boolean} [options.revealed] "当前视角允许知道该身份"；缺省/非 true ⇒ 统一 neutral 牌背
+   * @param {string} [options.name] 名称（来自服务端角色资料/i18n）；缺省用 ROLE_NAMES 兜底
+   * @param {number} [options.width] 显式宽度（52/62/132/210/230/320…）；缺省吃容器宽度
+   * @param {boolean} [options.compact] 强制小卡（旧 WebView 没有容器查询时由调用方显式指定）
+   * @param {'hybrid'|'vector'} [options.render] `vector` = 只用完整 SVG（跳过金属 PNG）
+   * @param {string} [options.assetBase] 覆盖卡框素材目录（原生壳用）
+   * @param {string} [options.artBase] 覆盖立绘目录（原生壳用）
+   * @returns {Element} 新建的 `.r3-shell`
+   */
+  function mount(host, options) {
+    if (!host || typeof host.replaceChildren !== 'function') {
+      throw new TypeError('CardFrame.mount(host, options)：host 必须是只装牌面的容器元素');
+    }
+    const d = host.ownerDocument || (typeof document !== 'undefined' ? document : null);
+    if (!d) throw new Error('CardFrame.mount 需要 DOM 环境');
+    const opts = options || {};
+
+    // ① 可见性先于一切：未获知身份 ⇒ 后半段代码拿不到任何角色线索（DOM/URL/ARIA 都不会带）
+    const revealed = opts.revealed === true;
+    const roleId = revealed ? roleKey(opts.roleId) : '';
+    const known = !!(roleId && THEME[roleId]);
+    const theme = themeOf(opts.roleId, revealed);
+    const name = known ? String(opts.name || ROLE_NAMES[roleId] || NAME_UNKNOWN) : NAME_UNKNOWN;
+
+    // ② 路径统一由共享层给出（可用 options 覆盖；调用点不写相对路径补丁）
+    const base = withSlash(opts.assetBase || assetBase());
+    const art = withSlash(opts.artBase || artBase());
+    const url = (n) => { try { return new URL(String(n), base).href; } catch (_) { return base + String(n); } };
+
+    // ③ 几何：给了宽度就**显式选档**（老 WebView 不依赖容器查询）；没给才交给响应式
+    const size = sizeOf(opts.width);
+    const compact = opts.compact === true || !!(size && size.compact);
+
+    ensureStyles(d);
+
+    const shell = d.createElement('div');
+    shell.className = 'r3-shell';
+    shell.dataset.theme = theme;
+    shell.dataset.render = opts.render === 'vector' ? 'vector' : 'hybrid';
+    shell.dataset.detail = compact ? 'compact' : 'big';
+    if (size) {
+      shell.style.width = `${size.width}px`;
+      shell.style.height = `${size.height}px`;
+    }
+
+    const card = d.createElement('div');
+    card.className = 'r3-card';
+    card.setAttribute('role', 'img');
+    card.setAttribute('aria-label', known ? `${name}角色牌` : ARIA_HIDDEN);
+    if (known) card.dataset.role = roleId; // 未知/不可见都不写 data-role
+
+    // 画窗：立绘通过 SVG <image> + clipPath 覆盖，原始角色 PNG 不改、不裁成贴图
+    const artSvg = svgNode(d, 'svg', { viewBox: `0 0 ${R3_VIEW.w} ${R3_VIEW.h}`, class: 'r3-art', 'aria-hidden': 'true', focusable: 'false' });
+    const defs = svgNode(d, 'defs', {});
+    const clipId = `r3-window-${++clipSeq}`;
+    const clip = svgNode(d, 'clipPath', { id: clipId });
+    clip.appendChild(svgNode(d, 'path', { d: R3_WINDOW, class: 'r3-cut-full' }));
+    clip.appendChild(svgNode(d, 'rect', {
+      x: R3_COMPACT_CUT.x, y: R3_COMPACT_CUT.y, width: R3_COMPACT_CUT.w, height: R3_COMPACT_CUT.h,
+      rx: R3_COMPACT_CUT.rx, class: 'r3-cut-compact',
+    }));
+    defs.appendChild(clip);
+    // 未获知身份 ⇒ 统一中性牌背内衬；这里**不会**出现 `${roleId}.png` 这个 URL
+    const picture = svgNode(d, 'image', {
+      x: R3_ART.x, y: R3_ART.y, width: R3_ART.w, height: R3_ART.h,
+      preserveAspectRatio: 'xMidYMid slice',
+      'clip-path': `url(#${clipId})`,
+      href: known ? `${art}${roleId}.png` : url(BACK_FIELD),
+    });
+    picture.addEventListener('error', () => { card.dataset.artError = 'true'; });
+    artSvg.appendChild(defs);
+    artSvg.appendChild(picture);
+    card.appendChild(artSvg);
+
+    const state = { d, card, shell, host, theme, compact, url, metal: null, vector: null, accent: null, compactImg: null };
+    buildLayers(state);
+
+    const title = d.createElement('span');
+    title.className = 'r3-title';
+    title.textContent = name; // 只用文本节点写入：玩家/角色文案绝不拼成 SVG/HTML
+    title.setAttribute('aria-hidden', 'true');
+    card.appendChild(title);
+
+    shell.appendChild(card);
+    host.replaceChildren(shell);
+
+    // ④ 宽度未知时才需要响应式切档（显式宽度的卡不留任何尺寸监听器）
+    if (!size) {
+      const view = d.defaultView || null;
+      const RO = (view && view.ResizeObserver) || (typeof ResizeObserver !== 'undefined' ? ResizeObserver : null);
+      if (RO) watchAuto(state, RO);
+    }
+    return shell;
+  }
+
+  // 共享样式在**脚本加载时**就注入，而不是等第一次 mount()：
+  // 卡牌往往首屏就出现，晚一步注入会让第一张卡先以"没有框"的状态画一帧（表现为闪一下）。
+  // 无 DOM 的环境（Node 单测）由 ensureStyles 自己静默返回 null；注入失败也绝不阻断脚本。
+  try { ensureStyles(); } catch (_) { /* 样式问题不该让卡牌脚本本身挂掉 */ }
+
+  const api = {
+    html, ensureDefs, roleAttr, roleAttrs, DEFS, FRAME, DEFS_ID, FACTION, THIRD_PARTY, VIEW, BX, BYT, BYB, CH, WINDOW_RX, OUTER, INNER, RING, QUAD, bandPaths, R,
+    // SKIN-02：统一挂载层（唯一卡牌入口）
+    mount, unmount, themeOf, nameOf, sizeOf, fitSize, assetBase, artBase, assetUrl, artUrl,
+    setAssetBase, setArtBase, stylesheetUrl, ensureStyles, sanitizeRole,
+    THEME, FACTION_THEME, NEUTRAL_THEME, ROLE_NAMES, NAME_UNKNOWN, COMPACT_MAX, RATIO, SIZES,
+    R3_VIEW, R3_WINDOW, R3_ART, R3_COMPACT_CUT, ASSET_DIR, ART_DIR, KIT_CSS,
+  };
   root.CardFrame = api;
   // 用 typeof 守卫而不是 root.module：被 require 的模块里 globalThis.module 是 undefined，
   // root.module 那条路永远不会执行（require 只会拿到空对象）。浏览器里没有 module，

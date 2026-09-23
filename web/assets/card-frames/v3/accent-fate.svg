@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536" fill="none"><title>月蚀圣龛 · 命线 · 暗恋者外观 · accent</title>
+<defs>
+<linearGradient id="metal" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e7dfc7"/><stop offset=".1" stop-color="#899393"/><stop offset=".22" stop-color="#292f33"/><stop offset=".39" stop-color="#ad9d7a"/><stop offset=".44" stop-color="#e6dbc0"/><stop offset=".50" stop-color="#444942"/><stop offset=".69" stop-color="#121923"/><stop offset=".84" stop-color="#8c8981"/><stop offset="1" stop-color="#252b32"/></linearGradient>
+<linearGradient id="edge" x1="0" x2="1" y1="0" y2="1"><stop stop-color="#fff2ca"/><stop offset=".24" stop-color="#a9956f"/><stop offset=".52" stop-color="#3c3d3c"/><stop offset=".74" stop-color="#c5bfa9"/><stop offset="1" stop-color="#6b726e"/></linearGradient>
+<linearGradient id="iron" x1="0" x2="1"><stop stop-color="#050b13"/><stop offset=".2" stop-color="#3b4143"/><stop offset=".35" stop-color="#777568"/><stop offset=".42" stop-color="#252d31"/><stop offset=".72" stop-color="#111820"/><stop offset=".87" stop-color="#62686a"/><stop offset="1" stop-color="#0a1018"/></linearGradient>
+<radialGradient id="jewel" cx=".34" cy=".25" r=".85"><stop stop-color="#f2c2e4"/><stop offset=".18" stop-color="#694778"/><stop offset=".58" stop-color="#20152f"/><stop offset=".86" stop-color="#694778"/><stop offset="1" stop-color="#060b12"/></radialGradient>
+<linearGradient id="plaque" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#202733"/><stop offset=".5" stop-color="#0b111c"/><stop offset="1" stop-color="#03070c"/></linearGradient>
+<pattern id="etch" width="13" height="13" patternUnits="userSpaceOnUse" patternTransform="rotate(28)"><path d="M0 0V13" stroke="#ffffff" stroke-opacity=".055" stroke-width="1"/><path d="M5 0V13" stroke="#000000" stroke-opacity=".18" stroke-width="2"/></pattern>
+<path id="ornament" d="M100 132Q69 169 87 205Q109 229 136 202Q149 183 134 167Q118 155 107 168Q97 184 113 191M82 240Q101 222 119 233Q142 254 109 282M106 134Q119 105 102 80Q85 109 106 134M101 280Q78 299 89 326L116 348Q104 317 121 300"/>
+</defs><path d="M104 372 Q122 278 218 222 C318 156 402 172 512 242 C622 172 706 156 806 222 Q902 278 920 372 V1209 Q908 1282 843 1316 H181 Q116 1282 104 1209Z" fill="none" stroke="#b49ac3" stroke-width="2.5" opacity=".45"/><g transform="translate(512 114)">
+<circle r="53" fill="#0b1017" stroke="url(#edge)" stroke-width="6"/>
+<circle r="46" fill="url(#jewel)" stroke="#10131a" stroke-width="4"/>
+<path d="M0 -44L31 -31L44 0L31 31L0 44L-31 31L-44 0L-31 -31Z" fill="none" stroke="#f2c2e4" stroke-opacity=".35" stroke-width="1.5"/>
+<path d="M-31 -31L0 -44L-7 -5L-44 0Z" fill="#fffdf5" opacity=".15"/>
+<path d="M31 31L0 44L9 13L44 0Z" fill="#694778" opacity=".36"/>
+<path d="M0 22C-36 3 -24 -25 -8 -19C-4 -18 -1 -14 0 -10C1 -14 4 -18 8 -19C24 -25 36 3 0 22Z" fill="none" stroke="#f4d7e8" stroke-width="4"/><path d="M-20 21L21 -22M-24 24L-14 22M24 -25L22 -15" stroke="#eec88e" stroke-width="2.5" fill="none"/><path d="M-33 -19A37 37 0 0 1-12 -35" fill="none" stroke="#fff4de" stroke-opacity=".8" stroke-width="2"/>
+</g>
+</svg>
+

@@ -91,6 +91,12 @@ const PIN_TESTS = [
     why: 'SHELL_LEDGER：web/sw.js 的 SHELL 清单指纹台账（改清单必须升 VERSION 并登记新指纹）',
     markers: [/SHELL_LEDGER/, /fingerprint\(list\)/],
   },
+  {
+    file: 'test/card-frame-skin.test.js',
+    why: 'SKIN-00/01/02：卡框素材 17 件的 SHA-256 与字节数（scripts/card-skin-assets.json 台账 + 源/生产双向复核），'
+      + '外加 web/sw.js 的 SHELL_LEDGER/VERSION 登记 —— 改素材或改 sw.js 清单都会让它红',
+    markers: [/card-skin-manifest/, /SHELL_LEDGER/],
+  },
 ];
 
 /**
