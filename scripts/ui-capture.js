@@ -95,6 +95,11 @@ const PREFIX = [
   ['M4-960x900-midgame-drawer-open', { route: '/', page: 'desktop-game-960-drawer-open' }],
   ['M4-960x900-', { route: '/', page: 'desktop-game-960-drawer' }],
   ['M4-long-', { route: '/', page: 'desktop-game-long-note' }],
+  // E 批（M5/M6）Android 真机档：MuMu 上启动已装包后由 adb screencap 取的真机截图。
+  // 它不属于 1440x900 / 390x844 这两档，实测为 1920x1080（当时设备是横屏）——
+  // 硬档判据按区间（桌面宽 ≥1280、手机宽 ≤430）计算，这一张自然落在桌面档，不需要特例。
+  ['EMU-', { route: '/', page: 'device-mumu-android12-app' }],
+  ['emu-', { route: '/', page: 'device-mumu-android12-app' }],
 ];
 const metaOf = (f) => { const hit = PREFIX.find(([p]) => f.startsWith(p)); return hit ? hit[1] : {}; };
 
