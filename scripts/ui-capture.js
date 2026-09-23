@@ -49,7 +49,10 @@ const PREFIX = [
   ['19b-', { route: '/', page: 'desktop-avatar-after-delete' }],
   ['R03-', { route: '/m/', page: 'mobile-profile-center-controls' }],
   ['R04-', { route: '/', page: 'desktop-history-paging' }],
-  ['R05-', { route: '/', page: 'desktop-archive-blocked' }],
+  // R05 这张拍的是「玩家档案」列表（其中有一局未结束），不是"归档被拦"的现场：
+  // 拦截提示走的是 alert，而 ui-check 把 alert 打了桩，页面上没有可见弹窗。
+  // 页面名跟着改成画面真实内容，避免登记表里再出现一处名不副实。
+  ['R05-', { route: '/', page: 'desktop-profiles-with-running-game' }],
   ['14-', { route: '/m/', page: 'mobile-game-320x568' }],
   ['15-', { route: '/m/', page: 'mobile-home-320x568' }],
   ['16-', { route: '/m/', page: 'mobile-profile-320x568' }],

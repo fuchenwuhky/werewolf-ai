@@ -2300,6 +2300,12 @@ log('\n=== R03 手机玩家中心控件触区（真实几何）===');
         log(`${tag}：· 该 label 内没有可量的文字元素，挤占一项如实记为"量不到"（不计通过）`);
       }
       check(`${tag}：无横向溢出（scrollWidth ≤ 视口宽 +1）`, m.scrollW <= m.vw + 1, `scrollWidth=${m.scrollW} vw=${m.vw}`);
+      // 取景修正：先滚到玩家中心底部再拍。否则「④ 数据管理」最后那行「待清理恢复记录（导入中断后留下的中间文件）」
+      // 会被裁在画面外，截图看不出这一屏到底有哪些控件。
+      // 说明：这不是版式缺陷 —— 底部主入口是 flex:none 的兄弟节点、不是 overlay（见 web/m/m.css:757 的注释），
+      // 滚动区本来就在它上方；只是按快门时停在滚动中途。放在两个视口的截图之前，320 与 390 都能覆盖。
+      await b.eval(`(() => { const n = document.getElementById('m-pc-pref-motion-label'); let el = n; while (el && el !== document.body && el.scrollHeight <= el.clientHeight + 1) el = el.parentElement; if (el && el !== document.body) el.scrollTop = el.scrollHeight; return true; })()`);
+      await sleep(200);
       if (vp[0] === 390 && mode === R03_MODES[0]) {
         check(`${tag}：焦点可见（聚焦后描边/阴影确有变化，且焦点确实落在该控件上）`,
           !!(m.focus && m.focus.active && m.focus.before !== m.focus.after), JSON.stringify(m.focus));
@@ -2333,7 +2339,10 @@ log('\n=== R04 完整历史分页（真页面）===');
   const priv = [];
   let seq = 1;
   for (let i = 0; i < 251; i++) {
-    pub.push({ seq, day: 1 + (i % 3), phase: 'day', type: 'speech', actor: 2, text: `R04 公开事件 #${i + 1}`, ts: 1000 + i, visibleTo: 'all' });
+    // phase 必须是**真实存在**的阶段值：阶段表只有 setup/night/dawn/sheriff/speech/vote/pk/over，
+    // 我原来这里编了个 'day'，于是历史列表按 `PHASE_LABEL[e.phase] || e.phase` 兜底把英文原样画了出来，
+    // 截图里出现「第 3 天 · day」。那不是产品漏本地化，是夹具编了服务端不产出的值 —— 修夹具，不给产品加映射。
+    pub.push({ seq, day: 1 + (i % 3), phase: 'speech', type: 'speech', actor: 2, text: `R04 公开事件 #${i + 1}`, ts: 1000 + i, visibleTo: 'all' });
     if (i % 10 === 3) {
       priv.push({ seq: seq + 1, day: 1, phase: 'night', type: 'wolf_talk', actor: 2, text: `R04 私密狼队密谈 #${i}`, ts: 2000 + i, visibleTo: 'seat:2' });
       priv.push({ seq: seq + 2, day: 1, phase: 'night', type: 'god_note', actor: 1, text: `R04 私密上帝笔记 #${i}`, ts: 3000 + i, visibleTo: 'god' });
@@ -2409,6 +2418,13 @@ log('\n=== R04 完整历史分页（真页面）===');
   check('R04：能真的看到最后一项（末条即第 251 条公开事件）', h2.last.includes('#251'), h2.last);
   check('R04：读完后按钮换成"已到末尾"（不再要求用户点）', /已到末尾/.test(h2.more) && !/加载更多/.test(h2.more), h2.more);
   check('R04：私密事件（狼队密谈 / 上帝笔记）一条都没出现', h2.priv === 0, `命中 ${h2.priv} 条`);
+  // 名字叫「读到底」就得真的拍到末尾：上一版拍的时候列表还停在顶部，#201 那行被列表底边裁掉，
+  // 画面里根本看不出"已到末尾"，等于名不副实（guidance :195 要求截图名称与当前页面一致）。
+  // 这里把列表的滚动容器（就近找可滚祖先，不锁死具体类名）滚到底，再等末尾提示进入视口后拍。
+  await b.eval(`(() => { const box = document.getElementById('pc-history-more-box'); let el = box; while (el && el !== document.body && el.scrollHeight <= el.clientHeight + 1) el = el.parentElement; if (el && el !== document.body) el.scrollTop = el.scrollHeight; return true; })()`);
+  await waitExpr('R04：已滚到列表末尾（末尾提示进入视口，截图才有资格叫"读到底"）',
+    `(() => { const box = document.getElementById('pc-history-more-box'); if (!box) return false; const r = box.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight + 1; })()`,
+    { timeout: 8000 });
   await b.shot(path.join(SHOTS, 'R04-历史分页-读到底.png'));
 
   // 切档后迟到请求不得串数据：拦在**产品自己的** api() 这一层造 1.2s 延迟，
@@ -2535,7 +2551,11 @@ log('\n=== R05 归档契约（真页面 + 服务端最终判定）===');
   log('  · 直连接口：' + JSON.stringify(direct));
   check('R05：绕过前端直接打接口，服务端同样拒绝归档（400 + 未结束局数）',
     direct.status === 400 && /未结束的对局/.test(String(direct.err)), JSON.stringify(direct));
-  await b.shot(path.join(SHOTS, 'R05-归档被拦-真页面.png'));
+  // 命名按**画面实际内容**：这一屏拍到的是「玩家档案」列表 + 里面有一局未结束的对局。
+  // 「归档被拦」这件事由上面的断言证明（提示文案、未进二次确认、档案未归档、绕过前端也 400），
+  // 且提示原文会打进日志；但它**进不了截图** —— ui-check 把 alert 打了桩（记录进 window.__alerts），
+  // 页面上不会出现可见弹窗。所以旧名字「R05-归档被拦-真页面」是名不副实，按 guidance :195 改掉。
+  await b.shot(path.join(SHOTS, 'R05-档案列表-有未结束局.png'));
 
   // ③ 清理夹具并自证"拦的就是它"：移走那局后，未结束列表回到 0
   fs.rmSync(fix, { force: true });

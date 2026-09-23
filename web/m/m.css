@@ -643,7 +643,10 @@ html, body { height: 100%; overscroll-behavior: none; }
    控件允许收缩（min-width: 0），长昵称 / 长选项不会把整行撑出视口（R03 要求无横向溢出）；
    文字侧同样允许收缩换行，不挤占控件。 */
 #m-app .pc-field { min-height: 48px; }
-#m-app .pc-field > span { flex: 0 1 auto; min-width: 0; }
+/* 文字侧不再允许收缩换行：390×844 实测「界面字号」被挤成「界面字 / 号」、「阅读布局」被挤成「阅读布 / 局」，
+   一个词被劈成两行，看着像排版事故。这里的标签都是短词，改成不收缩、不换行，让控件让它；
+   控件仍然 flex:1 1 auto + min-width:0，长昵称/长选项不会撑出视口（R03 无横向溢出依旧成立）。 */
+#m-app .pc-field > span { flex: 0 0 auto; min-width: 0; white-space: nowrap; }
 #m-app .pc-field > select,
 #m-app .pc-field > input:not([type=checkbox]) { flex: 1 1 auto; min-width: 0; }
 
