@@ -9,7 +9,7 @@
 | Electron | `window.wwExport.exportProfile(profileId)` | 原生保存框返回字面量 `saved` 且带真实路径才报“已保存” |
 | Android WebView | `window.WWExport.exportProfile(profileId)` → SAF `ACTION_CREATE_DOCUMENT` → `window.__wwExportResult` | 同步 `{pending:true}` 只是受理；选定位置且原生流式写完后，回调 `saved` + `content://` 路径才报成功；取消与失败分别显示 |
 
-两端页面只把白名单档案 ID 交给原生桥，包体不通过 JS 桥传输；Android 原生侧仍独立限制本机服务来源和 20MiB，且将 `WebView.getUrl()` 移到 UI 线程。桌面/手机各有运行态单测覆盖保存、取消、失败、非法路径与普通浏览器回退。`npm run gate`（含 1154 项全量测试与临时目录零残留）及 `npm run ui:check -- --full --strict` 已通过。
+两端页面只把白名单档案 ID 交给原生桥，包体不通过 JS 桥传输；Android 原生侧仍独立限制本机服务来源和 20MiB，且将 `WebView.getUrl()` 移到 UI 线程。桌面/手机各有运行态单测覆盖保存、取消、失败、非法路径与普通浏览器回退。`npm run gate`（含 1155 项全量测试与临时目录零残留）及 `npm run ui:check -- --full --strict` 已通过。
 
 ## 仍需设备上的真实闭环
 

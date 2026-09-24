@@ -1,12 +1,12 @@
 # 月蚀圣龛卡牌皮肤：专项交付与剩余验收
 
-日期：2026-09-24。范围仅为 `docs/card-skin-replacement-construction-plan.md` 的 SKIN-00—05；不把账号、玩法或整机发布混进本单。代码基线为 `6295e6d`，本轮接线与验收改动见工作区后续提交。
+日期：2026-09-24。范围仅为 `docs/card-skin-replacement-construction-plan.md` 的 SKIN-00—05；不把账号、玩法或整机发布混进本单。代码基线为 `6295e6d`，本轮接线与验收改动已进入 `e071a75`。
 
 ## 已落地
 
 | 项 | 实际接入/证据 | 状态 |
 | --- | --- | --- |
-| SKIN-00—02 | 17 件 V3/R2 素材、`CardFrame.mount()`、共享样式、SW 预缓存；`node scripts/card-skin-manifest.js --quiet` 源/生产/台账三方哈希一致；设计包 `verify-kit.cjs` 2116 条断言 | 通过 |
+| SKIN-00—02 | 17 件 V3/R2 素材、`CardFrame.mount()`、共享样式、SW 预缓存；`node scripts/card-skin-manifest.js --quiet` 源/生产/台账三方哈希一致；新 SVG 源/副本固定 LF 行尾；设计包 `verify-kit.cjs` 2116 条断言 | 通过 |
 | SKIN-03 | 双端图鉴列表/详情、角色检视、本人翻牌、桌面 62px/手机 52px 常驻小牌、统一 neutral 牌背都走 `CardFrame.mount`。原图鉴筛选/分页/选择、Esc/返回与对局流程保持；桌面图鉴 15/15 新框、四主题齐、旧框叠套 0；真实翻牌正反均 230×345，手机小牌 52×78 | 通过；见下方交互未测边界 |
 | SKIN-04 | 浏览器探针 52/52：52/62/112/113/132/210/230/320px 切档与比例、未揭示 DOM/ARIA/请求同形、PNG/SVG/立绘失效降级、小卡不增量请求 1.94MiB 材质、五张大卡共用一个材质 URL；SW 控制下真断网请求牌背/大框/小框/金属图均 200 且有字节 | 核心通过；旧 Worker 升级场景未单列实测 |
 | 双端产品流程 | `npm run ui:check -- --full --strict` 退出码 0；含桌面/手机图鉴、详情、开局翻牌、手机常驻小牌、320×568/390×844 小屏与浏览器控制台检查。截图在本机 `logs/ui-shots/02c-codex.png`、`06b-mobile-codex.png`、`06c-mobile-codex-detail.png`、`07b-flip.png`、`07c-flip-open.png`、`13-mobile-game.png` | 通过；截图为可复跑本机证据，不随源码包分发 |
