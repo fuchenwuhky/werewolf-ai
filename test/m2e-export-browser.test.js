@@ -329,7 +329,7 @@ for (const [label, rel] of [['桌面端', 'web/app.js'], ['手机端', 'web/m/m.
   });
 }
 
-test('M2-e 浏览器：两端**玩家中心**的导出按钮也都走 browserExportProfile（m.js 曾漏改过一处）', () => {
+test('M2-e 浏览器：双端玩家中心都走按环境分流的导出入口', () => {
   // 档案行之外还有玩家中心那一处：桌面 #pc-export、手机 #m-pc-export。
   // 上一轮只改了两端的档案行与桌面玩家中心，手机玩家中心（m.js:1279）仍是 window.open，
   // 被本文件的断言抓出来后补修 —— 这条把它永久钉住，防止再漏。
@@ -337,12 +337,16 @@ test('M2-e 浏览器：两端**玩家中心**的导出按钮也都走 browserExp
   const mjs = read('web/m/m.js');
   const iApp = app.indexOf("id = 'pc-export'");
   assert.ok(iApp > 0, 'app.js 找不到 #pc-export');
-  assert.match(app.slice(iApp, iApp + 900), /browserExportProfile/,
-    '桌面端玩家中心的导出按钮没有走 browserExportProfile');
+  assert.match(app.slice(iApp, iApp + 900), /exportProfile\(/,
+    '桌面端玩家中心的导出按钮没有走按环境分流的导出入口');
   const iM = mjs.indexOf("id = 'm-pc-export'");
   assert.ok(iM > 0, 'm.js 找不到 #m-pc-export');
-  assert.match(mjs.slice(iM, iM + 900), /browserExportProfile/,
-    '手机端玩家中心的导出按钮没有走 browserExportProfile（m.js 曾在此漏改）');
+  assert.match(mjs.slice(iM, iM + 900), /exportProfile\(/,
+    '手机端玩家中心的导出按钮没有走按环境分流的导出入口');
+  assert.match(mjs, /function exportProfile\(url\)[\s\S]*window\.WWExport[\s\S]*androidExportProfile\(match\[1\]\)[\s\S]*browserExportProfile\(url\)/,
+    '手机端必须仅在原生桥存在时走 SAF，否则回退同源浏览器下载');
+  assert.match(app, /function exportProfile\(url, statusEl\)[\s\S]*window\.wwExport[\s\S]*desktopExportProfile\(match\[1\], statusEl\)[\s\S]*browserExportProfile\(url, statusEl\)/,
+    '桌面端必须仅在 Electron 桥存在时走原生保存，否则回退同源浏览器下载');
 });
 
 test('M2-e 浏览器：双端页面都在入口脚本之前加载 export-status.js', () => {

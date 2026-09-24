@@ -918,13 +918,23 @@ class Browser {
       cards: document.querySelectorAll('#cdx-grid .cdx-card').length,
       secs: document.querySelectorAll('#cdx-grid .cdx-sec').length,
       filters: document.querySelectorAll('#cdx-filters button').length,
-      art: document.querySelectorAll('#cdx-grid img.role-art').length,
+      art: document.querySelectorAll('#cdx-grid .cdx-card .r3-art image[href*="/assets/roles/"]').length,
+      frames: document.querySelectorAll('#cdx-grid .cdx-card .r3-shell').length,
+      themes: [...new Set([...document.querySelectorAll('#cdx-grid .cdx-card .r3-shell')].map((s) => s.dataset.theme))],
+      legacy: document.querySelectorAll('#cdx-grid .cdx-card .card-frame, #cdx-grid .cdx-card .fr-svg').length,
+      back: document.querySelector('#flip-card .flip-back .r3-shell')?.dataset.theme,
+      backRole: document.querySelector('#flip-card .flip-back .r3-shell')?.dataset.role || '',
       detail: (document.querySelector('#cdx-detail .cdx-dname')?.textContent || '').trim(),
       chips: document.querySelectorAll('#cdx-detail .cdx-chips span').length,
       strat: document.querySelectorAll('#cdx-detail .cdx-strat div').length,
     })`);
     check('图鉴：独立成屏并列出全部身份', cdx.screen === 'screen-codex' && cdx.cards >= 15 && cdx.secs === 4, JSON.stringify(cdx));
     check('图鉴：每张牌都用真实立绘', cdx.art === cdx.cards, `${cdx.art}/${cdx.cards}`);
+    check('新卡框：图鉴全角色使用四主题且无旧框叠套',
+      cdx.frames === cdx.cards && cdx.legacy === 0 && ['wolf', 'oracle', 'village', 'fate'].every((t) => cdx.themes.includes(t)),
+      JSON.stringify({ frames: cdx.frames, cards: cdx.cards, themes: cdx.themes, legacy: cdx.legacy }));
+    check('新卡框：身份牌背是中性主题且没有角色字段', cdx.back === 'neutral' && cdx.backRole === '',
+      JSON.stringify({ theme: cdx.back, role: cdx.backRole }));
     check('图鉴：默认选中一张并显示细节与徽记', cdx.detail.length > 0 && cdx.chips >= 3, `${cdx.detail} / ${cdx.chips} 徽记`);
     check('图鉴：带 AI 打法模板', cdx.strat >= 2, `${cdx.strat} 条`);
     await b.shot(path.join(SHOTS, '02c-codex.png'));
@@ -1899,14 +1909,16 @@ class Browser {
     await b.click('#m-codex-btn');
     // FIX-18：原来是固定 sleep(900)，改成等到图鉴屏与牌面渲染出来
     await waitExpr('手机版图鉴：独立成屏且牌面已渲染',
-      `[...document.querySelectorAll('.m-screen:not(.hidden)')].some((s) => s.id === 'm-codex') && document.querySelectorAll('#cdx-grid .cdx-card').length > 0 && !!document.querySelector('#cdx-grid img.role-art')`,
+      `[...document.querySelectorAll('.m-screen:not(.hidden)')].some((s) => s.id === 'm-codex') && document.querySelectorAll('#cdx-grid .cdx-card').length > 0 && !!document.querySelector('#cdx-grid .cdx-card .r3-art image[href*="/assets/roles/"]')`,
       { timeout: 6000 });
     const mc = await b.eval(`(() => {
       const info = window.Codex.pageInfo();
       const cards = [...document.querySelectorAll('#cdx-grid .cdx-card')];
       return {
         shown: [...document.querySelectorAll('.m-screen:not(.hidden)')].map((s) => s.id),
-        cards: cards.length, art: document.querySelectorAll('#cdx-grid img.role-art').length,
+        cards: cards.length, art: document.querySelectorAll('#cdx-grid .cdx-card .r3-art image[href*="/assets/roles/"]').length,
+        frames: document.querySelectorAll('#cdx-grid .cdx-card .r3-shell').length,
+        legacy: document.querySelectorAll('#cdx-grid .cdx-card .card-frame, #cdx-grid .cdx-card .fr-svg').length,
         factions: cards.map((c) => c.dataset.faction),
         detail: !!document.querySelector('#m-codex #cdx-detail'),
         total: info.total, cap: info.cap, sizes: info.sizes, pageFactions: info.factions,
@@ -1916,6 +1928,8 @@ class Browser {
       };
     })()`);
     check('手机版图鉴：独立成屏并渲染牌面', mc.shown.includes('m-codex') && mc.cards > 0 && mc.art === mc.cards, JSON.stringify({ shown: mc.shown, cards: mc.cards, art: mc.art }));
+    check('手机版图鉴：整页用新牌框且没有双层旧框', mc.frames === mc.cards && mc.legacy === 0,
+      JSON.stringify({ frames: mc.frames, cards: mc.cards, legacy: mc.legacy }));
     check('手机版图鉴：一页只放一个阵营', mc.factions.length > 0 && new Set(mc.factions).size === 1, JSON.stringify(mc.factions));
     check('手机版图鉴：每页不超容量、整本可按页翻完', mc.sizes.every((n) => n <= mc.cap) && mc.total >= 4, JSON.stringify({ cap: mc.cap, sizes: mc.sizes, total: mc.total }));
     check('手机版图鉴：一页至少 4 张牌', mc.cap >= 4, `cap=${mc.cap}`);
@@ -1980,11 +1994,12 @@ class Browser {
         // 高度必须量：曾经因为 ".modal 套 .modal" 把弹层压成一条 4px 的线，内容在、就是看不见
         h: box ? Math.round(box.getBoundingClientRect().height) : 0,
         name: (document.querySelector('#m-modal .cdx-dname') || {}).textContent || '',
+        card: !!document.querySelector('#m-modal .cdx-big .r3-shell[data-detail="big"]'),
         chips: document.querySelectorAll('#m-modal .cdx-chips span').length,
         strat: document.querySelectorAll('#m-modal .cdx-strat div').length,
       };
     })()`);
-    check('手机版图鉴：点牌弹出细节层（含徽记与 AI 打法）', ms.sheet && ms.h > 200 && ms.name.length > 0 && ms.chips >= 3 && ms.strat >= 2, JSON.stringify(ms));
+    check('手机版图鉴：点牌弹出新框大卡、徽记与 AI 打法', ms.sheet && ms.card && ms.h > 200 && ms.name.length > 0 && ms.chips >= 3 && ms.strat >= 2, JSON.stringify(ms));
     await b.shot(path.join(SHOTS, '06c-mobile-codex-detail.png'));
     // 细节层现在有多个 ghost 按钮（检视/规则书/关闭）：按文本找"关闭"，不能盲点第一个
     await b.eval(`[...document.querySelectorAll('#m-modal .modal .btn')].find((b) => b.textContent.includes('关闭'))?.click()`);
@@ -2992,11 +3007,22 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         `(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`, { timeout: 10000 });
       const flip = await b.eval(`(() => { const o=document.getElementById('role-overlay'); return { shown: !!o && !o.classList.contains('hidden'), caption: (document.getElementById('flip-caption')?.textContent||'').slice(0,20) }; })()`);
       check('玩家视角出现翻牌遮罩且给了提示', flip.shown && flip.caption.length > 0, JSON.stringify(flip));
+      const flipFrames = await b.eval(`(() => {
+        const back = document.querySelector('#flip-card .flip-back .r3-shell');
+        const front = document.querySelector('#flip-card .flip-front .r3-shell');
+        const rect = (el) => { const r = el?.getBoundingClientRect(); return r ? [Math.round(r.width), Math.round(r.height)] : []; };
+        return { back: back?.dataset.theme, front: front?.dataset.theme, backRole: back?.dataset.role || '',
+          backSize: rect(back), frontSize: rect(front), legacy: document.querySelectorAll('#flip-card .card-frame, #flip-card .fr-svg, #flip-card .cb-img').length };
+      })()`);
+      check('新卡框：翻牌正反同尺寸、牌背中性且不叠旧素材',
+        flipFrames.back === 'neutral' && !!flipFrames.front && flipFrames.backRole === ''
+        && JSON.stringify(flipFrames.backSize) === JSON.stringify(flipFrames.frontSize) && flipFrames.legacy === 0,
+        JSON.stringify(flipFrames));
       await b.shot(path.join(SHOTS, '07b-flip.png'));
       await b.click('#flip-card');
       // FIX-18：原来是固定 sleep(700)，改成等到牌真的翻开（截图前置条件）
       await waitExpr('--full 7b：身份牌已翻开（截图前置条件）',
-        `(() => { const c = document.getElementById('flip-card'); return !!c && (c.classList.contains('open') || c.classList.contains('flipped') || !!c.querySelector('.card-frame')); })()`,
+        `(() => { const c = document.getElementById('flip-card'); return !!c && c.classList.contains('flipped') && !!c.querySelector('.flip-front .r3-shell'); })()`,
         { timeout: 4000 });
       await b.shot(path.join(SHOTS, '07c-flip-open.png'));
       await b.click('#btn-flip-done');
@@ -3784,6 +3810,20 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       check('手机端进入对局页', mobGame.shown.includes('m-game'), `入口=${resumed || '直接进局'} 可见=${mobGame.shown}`);
       check('手机端渲染座位与流程', mobGame.seats >= 8 && mobGame.flow >= 1, `座位=${mobGame.seats} 流程=${mobGame.flow} ${mobGame.day}/${mobGame.phase}`);
       check('手机端有待办面板或明确提示', mobGame.dialogBtns >= 1 || mobGame.hint.length > 0, `按钮=${mobGame.dialogBtns} 提示="${mobGame.hint.slice(0, 40)}"`);
+      const mSkin = await b.eval(`(() => {
+        const small = document.querySelector('#m-mycard .r3-shell');
+        const back = document.querySelector('#m-flip-card .flip-back .r3-shell');
+        const front = document.querySelector('#m-flip-card .flip-front .r3-shell');
+        const rect = (el) => { const r = el?.getBoundingClientRect(); return r ? [Math.round(r.width), Math.round(r.height)] : []; };
+        return { small: rect(small), detail: small?.dataset.detail, back: back?.dataset.theme,
+          backRole: back?.dataset.role || '', front: front?.dataset.theme, backSize: rect(back), frontSize: rect(front),
+          legacy: document.querySelectorAll('#m-mycard .card-frame, #m-flip-card .card-frame, #m-flip-card .fr-svg').length };
+      })()`);
+      check('新卡框：手机常驻小牌实寸 52×78 且翻牌使用中性背面',
+        JSON.stringify(mSkin.small) === '[52,78]' && mSkin.detail === 'compact'
+        && mSkin.back === 'neutral' && mSkin.backRole === '' && !!mSkin.front
+        && JSON.stringify(mSkin.backSize) === JSON.stringify(mSkin.frontSize) && mSkin.legacy === 0,
+        JSON.stringify(mSkin));
       // 前置：把身份牌翻过来，并等阶段横幅播完。不这么做的话，局中截图拍到的是「身份牌 / 点击翻开」遮罩
       // （.m-flip，z-index 80）+「警长竞选」横幅（.m-flash，95），根本拍不到对局界面本身。
       // 真机 390×844 实测过：13-mobile-game 与 13e-mobile-annotation-cleared 都被这层遮罩盖着，

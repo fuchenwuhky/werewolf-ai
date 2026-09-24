@@ -34,7 +34,7 @@ import java.util.regex.Pattern;
  * window.Capacitor ⇒ 插件在该页面必然不可用。故用 webView.addJavascriptInterface + @JavascriptInterface。
  *
  * 注入面**只有** window.WWExport.exportProfile(profileId)（名称由计划书 §7 冻结，
- * 与 scripts/build-app.js 无关；当前 web/ 里还没有调用方，接线属下一批）。
+ * 与 scripts/build-app.js 无关；web/m/m.js 在 Android 内走此桥，浏览器仍走下载臂）。
  *   · 只导出**本机服务**的档案路径：URL 由本类自己拼（LOCAL_ORIGIN + 白名单 profileId），
  *     不接受任意 URL / 任意文件路径；调用时还要求当前页面就是本机服务的页面；
  *   · 20MiB 包体**不进 JS bridge**：原生直接 HTTP 流式读本机服务的导出接口，
@@ -128,19 +128,21 @@ public class MainActivity extends BridgeActivity {
         if (profileId == null || !PROFILE_ID.matcher(profileId).matches()) {
             return reject("profileId 形态不合法（只允许 1-64 位 A-Za-z0-9_-）");
         }
-        WebView wv = bridge != null ? bridge.getWebView() : null;
-        if (wv == null) return reject("WebView 未就绪");
-        String current = wv.getUrl();
-        // 只允许本机服务的页面发起导出：跳转前还是 Capacitor 页（http://localhost）时直接拒。
-        if (current == null || !current.startsWith(LOCAL_ORIGIN + "/")) {
-            return reject("当前页面不是本机服务的页面，拒绝导出");
-        }
         if (!claimExportSlot(profileId)) return reject("已有一次导出正在进行中");
 
         mainHandler.post(new Runnable() {
             @Override
             public void run() {
                 try {
+                    // JS 桥方法运行在 WebView 私有线程；getUrl() 必须留在 UI 线程。
+                    WebView wv = bridge != null ? bridge.getWebView() : null;
+                    String current = wv != null ? wv.getUrl() : null;
+                    // 只允许本机服务的页面发起导出：跳转前的 Capacitor 页直接拒绝。
+                    if (current == null || !current.startsWith(LOCAL_ORIGIN + "/")) {
+                        releaseExportSlot();
+                        emitResult(failedJson("当前页面不是本机服务的页面，拒绝导出"));
+                        return;
+                    }
                     Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
                     intent.setType("application/json");

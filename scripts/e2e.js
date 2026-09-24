@@ -103,9 +103,11 @@ async function main() {
     const cfg = await api('GET', '/api/config');
     check('config 保存/掩码', cfg.model === 'mock-model' && typeof cfg.hasKey === 'boolean');
 
-    // 创建 12 人局：座位 5 是人类
+    // 创建 12 人局：座位 5 是人类。固定 seed=2 令该座位拿狼牌，
+    // 首夜必有需要文本的狼队提议，可稳定测「非法输入不消耗待办」。
+    // 不固定身份时人类可能首夜死亡、全程没有 speech，原断言会随机假红。
     const players = Array.from({ length: 12 }, (_, i) => ({ name: `玩家${i + 1}`, isHuman: i === 4 }));
-    const g = await api('POST', '/api/games', { boardId: 'adv12', players, mock: true, rules: {} });
+    const g = await api('POST', '/api/games', { boardId: 'adv12', players, mock: true, rules: {}, seed: 2 });
     check('创建对局', !!g.gameId && !!g.playerToken && !!g.godToken);
 
     await api('POST', `/api/games/${g.gameId}/start`, { token: g.godToken });
@@ -125,10 +127,10 @@ async function main() {
       if (view.pending) {
         sawPending = true;
         const p = view.pending;
-        // 对发言任务先试一次非法提交（空白文本），验证服务端校验拒绝且不消耗回合。
+        // 对首个文本任务先试一次非法提交（空白文本），验证服务端校验拒绝且不消耗回合。
         // ⚠ 必须带上**正确的** pendingId：否则会先被 409 PENDING_ID_REQUIRED 挡下，
         //   这条探针就变成在测"缺 id"而不是在测"载荷校验"，覆盖被悄悄换掉但仍会绿。
-        if (!badSubmitRejected && p.task === 'speech') {
+        if (!badSubmitRejected && ['wolf_propose', 'speech', 'pk_speech', 'sheriff_speech', 'lastwords'].includes(p.task)) {
           try {
             await api('POST', `/api/games/${g.gameId}/action`, { token: g.playerToken, pendingId: p.pendingId, payload: { text: '   ' } });
           } catch (e) {

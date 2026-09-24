@@ -184,6 +184,20 @@ const imgSrcs = (node) => {
 
 // ---------------------------------------------------------------- ① 素材
 
+test('素材：设计源、生产副本和旧版归档 SVG 在 Windows 干净检出时均固定 LF', () => {
+  const paths = [
+    ...manifest.ASSET_NAMES.filter((name) => name.endsWith('.svg')).flatMap((name) => [
+      `${manifest.SOURCE_REL}/${name}`,
+      `${manifest.PROD_REL}/${name}`,
+    ]),
+    ...manifest.THEMES.map((theme) => `${manifest.ARCHIVE_REL}/compact-${theme}.svg`),
+  ];
+  for (const rel of paths) {
+    const pin = manifest.eolPinOf(rel);
+    assert.strictEqual(pin.status, 'pinned', `${rel} 未固定 LF：${pin.status} ${pin.kind || ''}`);
+  }
+});
+
 test('素材：17 个文件的源/生产/台账三方哈希一致（实算，不比文档字符串）', () => {
   const { failures, rows } = manifest.verify({ quiet: true });
   assert.deepStrictEqual(failures, [], `素材核验失败：\n${failures.join('\n')}`);

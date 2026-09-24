@@ -65,6 +65,11 @@ const main = () => {
     if (!pass || res.status !== 0 || (fail && Number(fail[1]) > 0)) {
       console.error('✖ 子进程没有正常跑完全量测试 ⇒ 本次残留度量无效，不能当成通过');
       console.error('  （残留本身为 0，但"没跑完"和"跑干净"不是一回事，所以这里也必须红。）');
+      // 全量测试偶发红灯时，只报汇总会把失败用例藏在 spawnSync 的缓冲里；
+      // 摘出失败段，下一轮可以直接定位，而不必碰用户数据或盲目重跑。
+      const lines = out.split(/\r?\n/);
+      const failures = lines.flatMap((line, i) => /^\s*(?:✖|not ok\b)/.test(line) ? lines.slice(i, i + 16) : []);
+      if (failures.length) console.error(`  · 子进程失败片段：\n${failures.slice(0, 80).join('\n')}`);
       process.exit(1);
     }
     console.log('✓ 临时目录残留门禁通过（除已实证的 npm 自带 node-compile-cache 外，零残留）');

@@ -214,13 +214,16 @@ test('saveActive：只处理进行中的对局，且无变化时一次盘都不�
     const el = entryFor(live);
     api.games.set(ids[0], el);
     api.games.set(ids[1], entryFor(done));
-    api.saveActive();
-    await new Promise((r) => setTimeout(r, 30));
+    assert.ok((await api.saveActive()) >= 1, '定时存盘应等到写盘任务真正完成');
     assert.ok(fs.existsSync(saveFile(api, ids[0])), '进行中的对局应被定时落盘');
     assert.ok(!fs.existsSync(saveFile(api, ids[1])), '已结束的对局不再参与定时落盘');
     assert.strictEqual(el.savedStamp !== undefined, true, '应记录脏标记');
-    api.saveActive(); // 无变化
-    await new Promise((r) => setTimeout(r, 20));
+    // saveActive 的返回值还会计入已兑现的 savePromise；用旧时间戳直接检查
+    // 第二次调用是否真正碰了磁盘，不用固定 sleep 猜异步写何时结束。
+    const baseline = new Date('2000-01-01T00:00:00.000Z');
+    fs.utimesSync(saveFile(api, ids[0]), baseline, baseline);
+    await api.saveActive();
+    assert.strictEqual(fs.statSync(saveFile(api, ids[0])).mtimeMs, baseline.getTime(), '无变化时一次盘都不该碰');
     assert.strictEqual(el.saving, false);
   } finally { cleanup(api, ids); }
 });

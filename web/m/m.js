@@ -891,7 +891,8 @@ function renderMyCard(v) {
   if (box.dataset.sig === sig) return;
   box.dataset.sig = sig;
   const r = roleInfo(me.role);
-  box.innerHTML = roleArtHtml(me.role);
+  box.innerHTML = roleArtHtml();
+  mountRoleArt(box, me.role, window.CardFrame.SIZES.phone);
   box.title = `我的身份牌：${me.seat}号 ${r.name}（点击查看）`;
 }
 
@@ -1312,7 +1313,7 @@ function renderPcData() {
   exp.id = 'm-pc-export';
   exp.disabled = !p;
   exp.title = p ? `导出「${p.nickname}」为档案包（含战绩/笔记）` : '先选一个档案';
-  exp.addEventListener('click', () => { if (p) browserExportProfile(`/api/profiles/${p.id}/export`); });
+  exp.addEventListener('click', () => { if (p) exportProfile(`/api/profiles/${p.id}/export`); });
   ops.appendChild(exp);
   const imp = el('button', 'btn ghost', icoLabel('import', '导入档案包'));
   imp.id = 'm-pc-import';
@@ -1414,6 +1415,7 @@ function showCodexDetail(rid) {
   const rb = body.querySelector('.cdx-act-rule');
   if (rb) rb.addEventListener('click', openRulebook);
   openModal(wrap);
+  window.Codex.mountDetail(body, rid);
 }
 
 // ---------------- 屏3：规则确认 ----------------
@@ -1818,7 +1820,7 @@ function openProfileManager() {
         } catch (e) { alert(`删除失败：${e.message}`); }
       }, 'btn small danger');
     }
-    op('导出', (pp) => browserExportProfile(`/api/profiles/${pp.id}/export`));
+    op('导出', (pp) => exportProfile(`/api/profiles/${pp.id}/export`));
     row.appendChild(ops);
     list.appendChild(row);
   }
@@ -2201,6 +2203,57 @@ function openAvatarCrop(cfg) {
 }
 
 /** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
+/** 手机浏览器沿用同源下载；Android WebView 则走原生 SAF 保存桥。 */
+function exportProfile(url) {
+  const match = /^\/api\/profiles\/([A-Za-z0-9_-]{1,64})\/export$/.exec(String(url || ''));
+  if (!match) {
+    const outcome = window.WWTransferStatus.failedResult(new Error('导出地址不合法（只允许本机档案导出端点）'));
+    flash(window.WWTransferStatus.formatOutcome(outcome), 'warn');
+    return outcome;
+  }
+  if (window.WWExport && typeof window.WWExport.exportProfile === 'function') {
+    return androidExportProfile(match[1]);
+  }
+  return browserExportProfile(url);
+}
+
+let androidExportPending = null;
+function androidExportProfile(profileId) {
+  const S = window.WWTransferStatus;
+  if (androidExportPending) {
+    const busy = S.failedResult(new Error('已有一次导出正在进行，请先完成系统保存界面'));
+    flash(S.formatOutcome(busy), 'warn');
+    return Promise.resolve(busy);
+  }
+  // Java 的同步返回只能是 {pending:true} 或受理失败；真正的 saved/cancelled/failed
+  // 由 ACTION_CREATE_DOCUMENT 结束后经 __wwExportResult 回来，绝不把「受理」报成「已保存」。
+  return new Promise((resolve) => {
+    const finish = (raw) => {
+      if (!androidExportPending) return;
+      androidExportPending = null;
+      delete window.__wwExportResult;
+      let parsed = raw;
+      try { if (typeof raw === 'string') parsed = JSON.parse(raw); }
+      catch (e) { parsed = S.failedResult(new Error(`无法解析系统导出结果：${e.message}`)); }
+      const outcome = S.normalizeResult(parsed);
+      flash(S.formatOutcome(outcome), outcome.status === 'failed' ? 'warn' : '', 5000);
+      resolve(outcome);
+    };
+    androidExportPending = { profileId, finish };
+    window.__wwExportResult = (raw) => {
+      if (androidExportPending && androidExportPending.profileId === profileId) finish(raw);
+    };
+    try {
+      const accepted = JSON.parse(window.WWExport.exportProfile(profileId));
+      if (accepted && accepted.pending === true) {
+        flash('已打开系统保存界面；选择位置后会显示保存结果。', '', 2500);
+      } else {
+        finish(accepted);
+      }
+    } catch (e) { finish(S.failedResult(e)); }
+  });
+}
+
 /**
  * 浏览器导出臂（M2-e）：同源下载 + 三态归一化，行为与桌面端 web/app.js 的同名函数一致。
  * 文案只到「已发起下载」—— 浏览器无法确认用户是否保存（计划书 :237）。
@@ -3244,7 +3297,7 @@ function updateLive(v) {
 }
 
 let flashTimer = null;
-function flash(text, cls) {
+function flash(text, cls, durationMs = 1450) {
   const f = $('#m-flash');
   f.className = 'm-flash' + (cls ? ' ' + cls : '');
   f.innerHTML = `<div class="flash-txt">${escapeHtml(text)}</div>`;
@@ -3252,7 +3305,7 @@ function flash(text, cls) {
   flashTimer = setTimeout(() => {
     f.classList.add('fadeout');
     setTimeout(() => f.classList.add('hidden'), 520);
-  }, 1450);
+  }, durationMs);
 }
 
 function possibleRolesFor(v, seat) {
@@ -4176,32 +4229,23 @@ function refreshCanvas(v) {
 }
 
 // ---------------- 翻牌 / 检视 / 规则书 ----------------
-function roleArtHtml(rid) {
-  const r = roleInfo(rid);
-  const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  // 注意：这里原来只在"有插画"的分支外面包 .card-frame，缺图时返回的是一张**没有卡框**的裸卡；
-  // 桌面版两个分支都包了。现在两支统一走同一套手绘 SVG 框（card-frame.js）。
-  const face = ext
-    ? `<img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}">`
-    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
-  return `<div class="card-frame"${window.CardFrame.roleAttr(rid)}>${window.CardFrame.html()}${face}</div>`;
+function roleArtHtml() { return '<div class="role-frame-host"></div>'; }
+function mountRoleArt(root, rid, width) {
+  const host = root.querySelector('.role-frame-host');
+  if (!host) return null;
+  return window.CardFrame.mount(host, { roleId: rid, revealed: true, name: roleInfo(rid).name, width });
 }
 function openInspect(rid, replace) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
-  const card = el('div', 'inspect-card card-frame');
-  // 与桌面端同理：走 roleAttrs 原语，必须同时带上 data-faction，否则徽记永远是狼爪
-  Object.assign(card.dataset, window.CardFrame.roleAttrs(rid));
-  const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const frame = window.CardFrame.html();
-  if (ext) {
-    // 插画与信息板都放进 .inner：绝对定位的包含块是 padding box，
-    // 直接挂在卡上会让底部信息板压住金框下沿（桌面版一直有 .inner 包着）
-    card.innerHTML = `${frame}<div class="inner"><img class="role-art" src="../assets/roles/${rid}${ext}" alt="${r.name}"><div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div></div>`;
-  } else {
-    card.innerHTML = `${frame}<div class="in-body"><div class="in-emoji">${r.emoji}</div><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div>`;
-  }
+  const card = el('div', 'inspect-card');
+  const fit = window.CardFrame.fitSize(window.CardFrame.SIZES.inspect, {
+    width: window.innerWidth - 48, height: window.innerHeight - 110,
+  });
+  card.style.width = `${fit.width}px`;
+  window.CardFrame.mount(card, { roleId: rid, revealed: true, name: r.name, width: fit.width });
   stage.appendChild(card);
+  stage.appendChild(el('div', 'inspect-desc', escapeHtml(r.short)));
   stage.appendChild(el('div', 'inspect-hint', '移动指针检视 · 点击关闭'));
   stage.addEventListener('mousemove', (e) => {
     const rect = card.getBoundingClientRect();
@@ -4224,8 +4268,8 @@ function maybeShowRole(v) {
   state.roleShown = true;
   const r = roleInfo(v.me.role);
   $('#m-flip-front').innerHTML = `
-    ${roleArtHtml(v.me.role)}
-    <div class="r-name gilt-name">${r.name}</div>`;
+    ${roleArtHtml()}`;
+  mountRoleArt($('#m-flip-front'), v.me.role);
   $('#m-flip-caption').innerHTML = `
     <div class="r-desc">${r.short}</div>
     ${v.me.teammates && v.me.teammates.length ? `<div class="r-desc tm">狼队：${v.me.teammates.join('、')} 号</div>` : ''}`;
@@ -4279,10 +4323,13 @@ async function terminateGame() {
   } catch (e) { hint(`✗ ${e.message}`); }
 }
 
-/** 牌背（#m-flip 里的 .flip-back）是静态 HTML，框层在这里注入 —— 保持"卡框只有一份实现" */
+/** 未揭示牌背：所有真实角色共用同一中性素材和朗读名称。 */
 function ensureCardBacks() {
   for (const node of document.querySelectorAll('.flip-back')) {
-    if (!node.querySelector('.fr-svg')) node.insertAdjacentHTML('afterbegin', window.CardFrame.html());
+    if (node.querySelector('.flip-back-frame')) continue;
+    const host = el('div', 'flip-back-frame');
+    node.insertBefore(host, node.firstChild);
+    window.CardFrame.mount(host, { revealed: false });
   }
 }
 ensureCardBacks();

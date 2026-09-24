@@ -50,14 +50,16 @@ function copyRecursive(src, dest) {
 
 function main() {
   console.log(`── 打包电脑版 ${VERSION} ──`);
-  // 上次踩过：直接把 release 目录删干净，会把用户自己填的 config.json 和存档一起删掉
-  const keep = {};
-  for (const name of ['config.json', 'saves', 'logs']) {
-    const p = path.join(OUT, name);
-    if (fs.existsSync(p)) keep[name] = p;
-  }
-  fs.rmSync(OUT, { recursive: true, force: true });
-  fs.mkdirSync(OUT, { recursive: true });
+  // 旧实现只记住了 OUT 内用户数据的路径，然后先 rmSync(OUT)：恢复时源路径已经被删。
+  // 整个旧包先原子移到 release 下的独占暂存目录。只有新包构建完成才清掉旧包；
+  // 中途失败则撤掉半成品、把旧包原位移回，config/saves/logs 都不会凭空消失。
+  fs.mkdirSync(RELEASE, { recursive: true });
+  const stage = fs.mkdtempSync(path.join(RELEASE, '.ww-win-previous-'));
+  const previous = path.join(stage, NAME);
+  const hadPrevious = fs.existsSync(OUT);
+  try {
+    if (hadPrevious) fs.renameSync(OUT, previous);
+    fs.mkdirSync(OUT, { recursive: true });
 
   // 1) 源码与网页
   for (const rel of INCLUDE) {
@@ -89,10 +91,13 @@ function main() {
   // 说明书写 UTF-8 **带 BOM**：中文 Windows 的记事本对无 BOM 的 UTF-8 会当 ANSI 打开而乱码
   fs.writeFileSync(path.join(OUT, '使用说明.txt'), '\uFEFF' + readme(), 'utf8');
 
-  // 还原被保留的用户数据
-  for (const [name, p] of Object.entries(keep)) {
-    copyRecursive(p, path.join(OUT, name));
-    console.log(`  保留原有的 ${name}`);
+  // 从仍完整保留的旧包复制用户数据；复制失败会进入 catch，把整个旧包原位移回。
+  for (const name of ['config.json', 'saves', 'logs']) {
+    const source = path.join(previous, name);
+    if (hadPrevious && fs.existsSync(source)) {
+      copyRecursive(source, path.join(OUT, name));
+      console.log(`  保留原有的 ${name}`);
+    }
   }
 
   // 5) 压缩（用 PowerShell 的 Compress-Archive，避免引入 zip 依赖）
@@ -106,6 +111,25 @@ function main() {
   console.log(`✓ 文件夹：${path.relative(ROOT, OUT)}  ${(dirSize / 1048576).toFixed(1)} MB`);
   console.log(`✓ 压缩包：${path.relative(ROOT, zip)}  ${(zipSize / 1048576).toFixed(1)} MB`);
   console.log('  分发这个 zip：解压到任意可写目录（桌面 / D 盘都行），双击"启动 AI 狼人杀.cmd"');
+  // 新包与 zip 都已落地；旧包暂存现在才可删除。
+  if (hadPrevious) {
+    try { fs.rmSync(previous, { recursive: true, force: true }); }
+    catch (e) { console.warn(`  旧包暂存清理失败（新包不受影响）：${previous} — ${e.message}`); }
+  }
+  } catch (e) {
+    if (hadPrevious && fs.existsSync(previous)) {
+      try {
+        if (fs.existsSync(OUT)) fs.rmSync(OUT, { recursive: true, force: true });
+        fs.renameSync(previous, OUT);
+        console.error('  已将构建前的 Windows 包（含原档案/存档）原位恢复。');
+      } catch (restoreError) {
+        console.error(`  自动恢复失败；旧包仍在 ${previous}，请勿删除：${restoreError.message}`);
+      }
+    }
+    throw e;
+  } finally {
+    if (fs.existsSync(stage) && !fs.existsSync(previous)) fs.rmSync(stage, { recursive: true, force: true });
+  }
 }
 
 /** 启动器必须是**纯 ASCII**，并且构建时断言这一点。
@@ -146,7 +170,7 @@ title AI Werewolf
 cd /d "%~dp0"
 if not exist "%~dp0node.exe" goto nonode
 echo.
-echo   AI Werewolf 1.4  -  starting the local server ...
+echo   AI Werewolf ${VERSION}  -  starting the local server ...
 echo   Browser opens http://localhost:3210 automatically.
 echo   Keep this window open while playing; close it to stop the server.
 echo   Saves are in .\\saves\\ , config and logs are in this folder.
@@ -207,7 +231,7 @@ function readme() {
       node.exe server.js
 
 【这个版本是什么】
-  与安卓版 1.4 同源：同一份服务端与网页。电脑版不带安卓壳，直接跑 Node 服务端 + 浏览器。
+  与安卓版 ${VERSION} 同源：同一份服务端与网页。电脑版不带安卓壳，直接跑 Node 服务端 + 浏览器。
 
 【为什么窗口是英文】
   批处理文件（.cmd）的编码必须与控制台代码页一致，而中文 Windows 默认是 GBK(936)、

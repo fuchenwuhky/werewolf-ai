@@ -256,6 +256,40 @@ async function main() {
       if (st.rs === 'complete' && st.cf) break;
       await sleep(200);
     }
+    // 先验真正的离线资源可用性，再注销 SW 做纯组件流量测量。
+    // 两个阶段相互隔离：前者查离线包，后者查小卡增量流量。
+    const swControlled = await b.eval(`(async () => {
+      if (!navigator.serviceWorker) return false;
+      await navigator.serviceWorker.ready;
+      if (navigator.serviceWorker.controller) return true;
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(false), 5000);
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          clearTimeout(timer); resolve(!!navigator.serviceWorker.controller);
+        }, { once: true });
+      });
+    })()`);
+    check('离线验收前页面已由新 Worker 控制', swControlled);
+    let offlineAssets = [];
+    try {
+      await b.send('Network.emulateNetworkConditions',
+        { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }, b.sessionId);
+      offlineAssets = await b.eval(`(async () => {
+        const names = ['frame-neutral.svg', 'compact-village.svg', 'card-back-field.svg', 'reliquary-metal.png'];
+        return Promise.all(names.map(async (name) => {
+          try {
+            const r = await fetch('/assets/card-frames/v3/' + name);
+            return { name, status: r.status, bytes: (await r.arrayBuffer()).byteLength };
+          } catch (e) { return { name, error: String(e && e.message || e) }; }
+        }));
+      })()`);
+    } finally {
+      await b.send('Network.emulateNetworkConditions',
+        { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }, b.sessionId);
+    }
+    check('断网后牌背、大框、小框和金属材质均由预缓存成功返回',
+      swControlled && offlineAssets.length === 4 && offlineAssets.every((a) => a.status === 200 && a.bytes > 0),
+      JSON.stringify(offlineAssets));
     // 把 SW 预缓存流量**显式清掉并单独记账**：
     //   · Cache Storage 里的条目 = SW 安装期的一次性预缓存（离线能力的代价，不算卡牌组件流量）；
     //   · 清掉之后再开始量卡牌流量，两类数字不会互相冒充。
@@ -282,6 +316,7 @@ async function main() {
       source: `(() => { try { if (navigator.serviceWorker && navigator.serviceWorker.register) { navigator.serviceWorker.register = () => Promise.reject(new Error('ww-card-skin-probe: SW disabled')); } } catch (_) {} })();`,
     }, b.sessionId);
     await b.setBlocked(['*sw.js*']);
+    b.mark(); // 清掉第一次含 SW 的页面请求，只统计无 SW 的第二次首绘。
     await b.send('Page.navigate', { url: `${base}/index.html` }, b.sessionId);
     for (let i = 0; i < 60; i++) {
       const st = await b.eval('({ rs: document.readyState, cf: !!window.CardFrame })');
@@ -297,6 +332,9 @@ async function main() {
       swOff.regs === 0 && swOff.caches === 0 && swOff.controller === false, JSON.stringify(swOff));
     await b.eval(INSTALL_HELPERS);
     await sleep(300);
+    // 生产页面现在会在首绘挂载 neutral 牌背；它请求的金属材质也是
+    // 后续大卡复用的同一 URL。把首绘请求单独留存，再量小卡增量。
+    const pageMetalReq = b.assetRequests().filter((r) => /reliquary-metal\.png/.test(r.url));
 
     // ---------- 1. 小卡：只挂 52/62/112，先看请求集合（此时还从没挂过大卡） ----------
     log('\n=== 1. 小卡路径的请求集合（52/62/112px，未挂过任何大卡）===');
@@ -336,9 +374,10 @@ async function main() {
     });
     check('112px 走 R2 小框', sizes.find((s) => s.w === 112).detail === 'compact');
     check('113px 走大卡材质', sizes.find((s) => s.w === 113).detail === 'big');
-    const bigReq = b.assetRequests().filter((r) => /reliquary-metal\.png/.test(r.url));
+    const bigReq = pageMetalReq.concat(b.assetRequests().filter((r) => /reliquary-metal\.png/.test(r.url)));
     check('大卡（113/132/210/230/320 共 5 张）只请求了 1 次金属 PNG（同一 URL 共享缓存，不是 base64 复制）',
-      bigReq.length >= 1 && new Set(bigReq.map((r) => r.url)).size === 1, `次数=${bigReq.length}`);
+      bigReq.length === 1 && bigReq[0].status === 200 && new Set(bigReq.map((r) => r.url)).size === 1,
+      `次数=${bigReq.length}，首绘=${pageMetalReq.length}`);
 
     // ---------- 3. 图片真实加载结果 + 装饰层不接点击 ----------
     log('\n=== 3. 图片真实加载结果与点击穿透 ===');
@@ -460,6 +499,10 @@ async function main() {
       mMeta.hrefPath === '/shared/card-frame-kit.css' && mMeta.assetPath === '/assets/card-frames/v3/' && mMeta.artPath === '/assets/roles/',
       JSON.stringify(mMeta));
     await b.eval(INSTALL_HELPERS);
+    // 手机生产页的 neutral 牌背也会在首绘加载大材质；这里仅统计
+    // 额外挂载 62px 小卡之后的增量请求。
+    await sleep(300);
+    b.mark();
     const mSmall = await b.eval(`(async () => {
       const s = await window.__wwProbe.mount({ roleId: 'villager', revealed: true, width: 62, name: '平民' });
       return { w: s.width, h: s.height, detail: s.detail, theme: s.theme, layers: s.layers.map((l) => l.src) };

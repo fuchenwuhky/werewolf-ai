@@ -11,11 +11,11 @@ const events = require('node:events');
 
 const Api = require('../src/api').Api || require('../src/api');
 const transfer = require('../src/profiles/transfer');
+const { makeDataDir, terminateApi, dispose } = require('./helpers-tmpdir');
 
 const silentLogger = { info() {}, warn() {}, error() {} };
-function tmpDir(tag) { return fs.mkdtempSync(path.join(os.tmpdir(), `ww-fin02-${tag}-`)); }
 function makeIsolatedApi(tag) {
-  const dataDir = tmpDir(tag);
+  const dataDir = makeDataDir(`fin02-${tag}`);
   const savesDir = path.join(dataDir, 'saves');
   const api = new Api({ config: { get: () => ({ apiKey: '', journal: false }), save() {} }, logger: silentLogger, saveDir: savesDir });
   return { api, dataDir, savesDir };
@@ -89,7 +89,7 @@ test('R03 回滚未完成 + 恢复记录也写失败：rolledBack:false、recove
   } finally {
     fs.promises.writeFile = realWrite;
     fs.unlinkSync = realUnlink;
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await terminateApi(api, dataDir);
   }
 });
 
@@ -106,7 +106,7 @@ test('R06a 损坏恢复记录：保留并上报 pendingRecoveries，不得静默
     assert.ok(Array.isArray(out.body.pendingRecoveries) && out.body.pendingRecoveries.length === 1, '成功导入也必须上报未处理的损坏记录');
     assert.strictEqual(out.body.pendingRecoveries[0].reason, 'corrupt');
     assert.ok(fs.existsSync(path.join(savesDir, '.import-recovery-broken.json')), '损坏记录必须保留');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await terminateApi(api, dataDir); }
 });
 
 test('R06b 目标已不存在：视为已清理，记录被消化（幂等）', async () => {
@@ -119,7 +119,7 @@ test('R06b 目标已不存在：视为已清理，记录被消化（幂等）', 
     await api._retryImportRecoveries();
     assert.strictEqual(fs.existsSync(path.join(savesDir, '.import-recovery-gone.json')), false, '已消化的记录必须从磁盘删除');
     assert.strictEqual(fs.readdirSync(savesDir).filter((f) => f.startsWith('.import-recovery-')).length, 0, '目标全不存在 → 记录应被消化');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await terminateApi(api, dataDir); }
 });
 
 test('R06c 清理目标越界（绝对路径逃逸数据根）：拒绝删除并保留记录', async () => {
@@ -136,8 +136,8 @@ test('R06c 清理目标越界（绝对路径逃逸数据根）：拒绝删除并
     assert.ok(fs.existsSync(outside), '数据根之外的路径绝不能被恢复逻辑删除');
     assert.ok(fs.existsSync(path.join(savesDir, '.import-recovery-escape.json')), '含越界目标的记录必须保留（dirty）');
   } finally {
-    fs.rmSync(outsideDir, { recursive: true, force: true });
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await dispose(outsideDir);
+    await terminateApi(api, dataDir);
   }
 });
 
@@ -166,7 +166,7 @@ test('R05 幂等复验：正常重试清理后记录消化，再次重试零副�
       '重试必须真实清理残留存档');
   } finally {
     fs.unlinkSync = realUnlink;
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await terminateApi(api, dataDir);
   }
 });
 
@@ -197,7 +197,7 @@ test('R07a 未来主版本 / notes 类型错误 / 笔记 seats 非法 / 笔记�
     assert.strictEqual(list.body.profiles.filter((p) => p.nickname.includes('版本客')).length, 0, '校验失败不得创建档案');
     const leftovers = fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') || f.startsWith('.tmp-'));
     assert.strictEqual(leftovers.length, 0, `不得留下任何存档（实际 ${leftovers}）`);
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await terminateApi(api, dataDir); }
 });
 
 test('R07b 超限包（>20MiB）：读取阶段 413 拒绝，导入与预览同一上限，零落盘（两侧同一 MAX_BYTES 契约）', async () => {
@@ -213,5 +213,5 @@ test('R07b 超限包（>20MiB）：读取阶段 413 拒绝，导入与预览同�
     assert.strictEqual(pv.status, 413, '预览与导入必须同一上限（不得双重标准）');
     const leftovers = fs.readdirSync(savesDir).filter((f) => f.endsWith('.json') || f.startsWith('.tmp-') || f.startsWith('.import-recovery-'));
     assert.strictEqual(leftovers.length, 0, '超限拒绝不得留下任何文件');
-  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+  } finally { await terminateApi(api, dataDir); }
 });

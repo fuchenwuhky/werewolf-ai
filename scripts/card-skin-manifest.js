@@ -16,14 +16,13 @@
  *
  * 行尾的坑（本仓库 2026-09-21 踩过一次）：SVG 是文本，Windows 上 `core.autocrlf=true` 的全新检出
  * 会把 LF 变成 CRLF，于是"字节哈希路径"在主仓库绿、干净 clone 红。本项目既有的解法是在
- * `.gitattributes` 里逐条钉 `text eol=lf`（判定逻辑复用 `scripts/brand-eol-pin-lib.js`）。新增的这 16 份
- * SVG **目前还没有钉版**，所以本文件做三件事：
+ * `.gitattributes` 里钉 `text eol=lf`（判定逻辑复用 `scripts/brand-eol-pin-lib.js`）。新增的这 16 份
+ * SVG 已用目录通配规则钉版，所以本文件做三件事：
  *   · 硬失败：工作区里 **源文件与生产副本必须逐字节相等**（这条与行尾配置无关，两边一起被转换）；
  *   · 硬失败：内容哈希（LF 归一化后）必须等于台账；
- *   · 显式警告：逐条列出尚未钉版的文本路径，并给出可直接粘贴进 `.gitattributes` 的那**一行**修复；
- *     此时如果"原始字节哈希"与台账不符、但"LF 归一化哈希"相符，判定为**纯行尾差异**并只告警，
+ *   · 硬失败：设计源与生产副本若缺行尾钉版，列出缺失路径；
+ *     此时如果"原始字节哈希"与台账不符、但"LF 归一化哈希"相符，判定为**纯行尾差异**并单独告警，
  *     不误报成素材被改（台账里同时存 raw 与 lf 两个哈希就是为了能区分这两种情况）。
- *   `.gitattributes` 不在本工作包（SKIN-00/01/02）允许改动的文件范围内，故这里只告警 + 给出修复行。
  *
  * 用法：
  *   node scripts/card-skin-manifest.js            核验（默认；退出码 0/1）
@@ -281,11 +280,13 @@ function verify(opts) {
       }
     }
 
-    // ③ 文本路径的行尾钉版：未钉版 ⇒ 干净 clone 上哈希会漂（本工作包不改 .gitattributes，只告警）
+    // ③ 文本路径的行尾钉版：源和生产任一缺失 ⇒ 干净 clone 上哈希会漂
     if (!isBinaryBuf(prodBuf)) {
-      const pin = eolPinOf(prodRel);
-      if (pin.status === 'fail' || pin.status === 'unknown') unpinned.push(prodRel);
-      row.pin = pin.status;
+      const srcPin = eolPinOf(srcRel);
+      const prodPin = eolPinOf(prodRel);
+      if (srcPin.status !== 'pinned') unpinned.push(srcRel);
+      if (prodPin.status !== 'pinned') unpinned.push(prodRel);
+      row.pin = prodPin.status;
     }
 
     // ④ PNG：尺寸与文档哈希（文档值是独立常量，实算后交叉印证）
@@ -318,11 +319,7 @@ function verify(opts) {
   }
 
   if (unpinned.length) {
-    warnings.push(
-      `以下 ${unpinned.length} 条文本路径尚未在 .gitattributes 里钉行尾（Windows 全新检出会把 LF 转成 CRLF ⇒ 原始字节哈希会漂；`
-        + '内容判定已用 LF 归一化哈希兜住）。修复（每行一条，交给主控在合并时追加，本工作包不改 .gitattributes）：\n    '
-        + unpinned.map((p) => `${p} text eol=lf`).join('\n    '),
-    );
+    failures.push(`以下 ${unpinned.length} 条文本路径未被 .gitattributes 钉为 text eol=lf，Windows 干净检出会改变字节哈希：\n    ${unpinned.join('\n    ')}`);
   }
 
   if (!quiet) {

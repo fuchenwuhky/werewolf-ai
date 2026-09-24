@@ -1251,6 +1251,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   transition: transform var(--dur) var(--ease);
 }
 .cdx-card:hover { transform: translateY(-4px); }
+.cdx-frame-host { width: 100%; }
+.cdx-card:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.cdx-card.on .cdx-frame-host .r3-shell { filter: drop-shadow(0 0 5px rgba(var(--sem-gold-rgb), .7)); }
 .cdx-card .cdx-plate {
   position: absolute; left: var(--band); right: var(--band); bottom: var(--band-y); z-index: 5;
   padding: 14px var(--sp-1) var(--sp-1); text-align: center;
@@ -1260,7 +1263,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   background: linear-gradient(180deg, transparent 0%, rgba(6, 4, 10, .68) 42%, rgba(6, 4, 10, .94) 100%);
 }
 .cdx-card .cdx-name { font-family: var(--font-cn-title); font-size: var(--fs-md); letter-spacing: 1px; line-height: 1.3; }
-.cdx-card .cdx-cat { font-size: var(--fs-xs); color: var(--muted); letter-spacing: 1px; }
+.cdx-card .cdx-cat { display: block; margin-top: 4px; font-size: var(--fs-xs); color: var(--muted); letter-spacing: 1px; text-align: center; }
 .cdx-card.on .card-frame { box-shadow: 0 0 0 2px var(--gold), 0 10px 28px rgba(0, 0, 0, .7); }
 .cdx-card .cdx-ingame {
   position: absolute; right: -4px; top: -6px; z-index: 6;
@@ -1649,7 +1652,8 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   display: flex; align-items: center; justify-content: center;
 }
 .flip-wrap { display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); }
-.flip-card { width: 230px; height: 330px; perspective: 1100px; cursor: pointer; }
+.flip-card { width: min(230px, 76vw); aspect-ratio: 2/3; perspective: 1100px; cursor: pointer; }
+@media (max-height: 600px) { .flip-card { width: min(230px, 42vh, 76vw); } }
 .flip-inner { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform .8s cubic-bezier(.2,.7,.3,1); }
 .flip-card.flipped .flip-inner { transform: rotateY(180deg); }
 .flip-back, .flip-front {
@@ -1680,7 +1684,9 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
 }
 .flip-back .cb-txt { position: relative; z-index: 1; }
-.flip-back::before { content: '✠'; font-size: 30px; color: var(--accent); text-shadow: 0 0 16px rgba(var(--sem-danger-rgb),.7); }
+.flip-back::before { content: none; }
+.flip-back-frame { position: absolute; inset: 0; z-index: 0; width: 100%; }
+.flip-back-frame .r3-shell { width: 100%; }
 .flip-front {
   transform: rotateY(180deg);
   background: radial-gradient(ellipse at center, var(--sem-panel) 0%, #060a14 80%);
@@ -1692,6 +1698,8 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
      名字的 bottom 若还用 4.667%，最后一行字会压到底部铭牌上（框带加厚时踩过）。 */
   position: relative; --band: 7%; --band-y: 6.667%;
 }
+.role-frame-host { width: 100%; aspect-ratio: 2/3; }
+.flip-front > .role-frame-host { width: 100%; height: 100%; }
 /* 卡框必须严格等于卡片尺寸：不能让它按插画的自然比例长高（实测会高出 2~4px 顶出卡外） */
 .flip-front .card-frame { flex: none; width: 100%; height: 100%; aspect-ratio: auto; }
 .flip-front .role-art-fallback { flex: 1; aspect-ratio: auto; }
@@ -1757,6 +1765,11 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
   transform-style: preserve-3d; transition: transform .12s ease-out;
   box-shadow: 0 32px 90px rgba(0,0,0,.85);
   cursor: pointer;
+}
+.inspect-desc {
+  position: relative; max-width: min(360px, calc(100vw - 36px));
+  padding: 8px 12px; color: var(--text-dim); font-size: var(--fs-md);
+  line-height: 1.55; text-align: center; text-shadow: 0 1px 3px #000;
 }
 /* 绝对定位的插画容器必须与 SVG 画窗**完全重合**：top/bottom 用 y 方向百分比，
    否则插画会整体上移几像素（被框带压掉一条）—— 这也是"两边各写一半"的坑之一。 */

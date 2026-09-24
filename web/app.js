@@ -1691,7 +1691,7 @@ function fillPcProfile(box, usableCount) {
         } catch (e) { alert(`删除失败：${e.message}`); }
       }, 'btn small danger');
     }
-    op('导出', (pp) => browserExportProfile(`/api/profiles/${pp.id}/export`, exportStatus));
+    op('导出', (pp) => exportProfile(`/api/profiles/${pp.id}/export`, exportStatus));
     row.appendChild(ops);
     list.appendChild(row);
   }
@@ -1899,7 +1899,7 @@ function fillPcData(box, res) {
   exp.id = 'pc-export';
   exp.disabled = !cur;
   exp.title = cur ? `导出「${cur.nickname}」为档案包（含战绩 / 笔记）` : '先选一个档案';
-  exp.addEventListener('click', () => { if (cur) browserExportProfile(`/api/profiles/${cur.id}/export`, pcExportStatus); });
+  exp.addEventListener('click', () => { if (cur) exportProfile(`/api/profiles/${cur.id}/export`, pcExportStatus); });
   const pcExportStatus = makeExportStatusLine();
   pcExportStatus.id = 'pc-export-status';
   row.appendChild(pcExportStatus);
@@ -2328,6 +2328,34 @@ function openAvatarCrop(cfg) {
   paint();
   // 点遮罩 / Esc 也要释放位图：onDismiss 与 ✕ 走同一条出口
   openModal(wrap, { onDismiss: () => leave(cfg.onCancel) });
+}
+
+/** Electron 桌面壳走原生保存对话框；普通浏览器仍走同源下载。 */
+function exportProfile(url, statusEl) {
+  const match = /^\/api\/profiles\/([A-Za-z0-9_-]{1,64})\/export$/.exec(String(url || ''));
+  if (!match) {
+    const outcome = window.WWTransferStatus.failedResult(new Error('导出地址不合法（只允许本机档案导出端点）'));
+    const msg = window.WWTransferStatus.formatOutcome(outcome);
+    if (statusEl) { statusEl.textContent = msg; statusEl.dataset.exportStatus = outcome.status; }
+    alert(msg);
+    return outcome;
+  }
+  if (window.wwExport && typeof window.wwExport.exportProfile === 'function') {
+    return desktopExportProfile(match[1], statusEl);
+  }
+  return browserExportProfile(url, statusEl);
+}
+
+async function desktopExportProfile(profileId, statusEl) {
+  const S = window.WWTransferStatus;
+  if (statusEl) { statusEl.textContent = '请选择保存位置…'; statusEl.dataset.exportStatus = 'pending'; }
+  let outcome;
+  try { outcome = S.normalizeResult(await window.wwExport.exportProfile(profileId)); }
+  catch (e) { outcome = S.failedResult(e); }
+  const msg = S.formatOutcome(outcome);
+  if (statusEl) { statusEl.textContent = msg; statusEl.dataset.exportStatus = outcome.status; }
+  if (outcome.status === 'failed') alert(msg);
+  return outcome;
 }
 
 /** 导入档案包（PROF-04）：文件 → 预览（不写盘）→ 确认 → 落地为新档案（ID 重映射，绝不覆盖现有局） */
@@ -3616,36 +3644,26 @@ function seatLabel(seat) {
 
 function roleInfo(rid) { return state.meta.roles[rid]; }
 
-/** 角色卡图：assets/roles/<id>.<ext> 存在则用图，否则回退内置哥特占位卡。
- *  两种都套同一套手绘 SVG 金属框（card-frame.js）—— 缺图时也不该是一张没有装饰的裸框。 */
-function roleArtHtml(rid) {
-  const r = roleInfo(rid);
-  const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const face = ext
-    ? `<img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">`
-    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div><div class="fa-name">${r.name}</div></div>`;
-  return `<div class="card-frame"${window.CardFrame.roleAttr(rid)}>${window.CardFrame.html()}${face}</div>`;
+/** 牌面位置只存宿主；角色图、裁切和主题由 CardFrame.mount 一次生成。 */
+function roleArtHtml() { return '<div class="role-frame-host"></div>'; }
+function mountRoleArt(root, rid, width) {
+  const host = root.querySelector('.role-frame-host');
+  if (!host) return null;
+  return window.CardFrame.mount(host, { roleId: rid, revealed: true, name: roleInfo(rid).name, width });
 }
 
-/** 检视模式：大卡 + 指针 3D 倾斜（复用 .card-frame，不再单独维护一份金属框 CSS） */
+/** 检视模式：保留现有点击/指针行为，牌面由共享渲染器绘制。 */
 function openInspect(rid) {
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
-  const card = el('div', 'inspect-card card-frame');
-  // 走 roleAttrs 原语而不是手写 data-role：它同时给出阵营（徽记按阵营换图形），
-  // 只写 data-role 的话检视大卡会一直露狼爪
-  Object.assign(card.dataset, window.CardFrame.roleAttrs(rid));
-  const ext = state.meta.roleArt && state.meta.roleArt[rid];
-  const frame = window.CardFrame.html();
-  if (ext) {
-    card.innerHTML = `${frame}<div class="inner"><img class="role-art" src="assets/roles/${rid}${ext}" alt="${r.name}">
-      <div class="in-overlay"><div class="in-name gilt-name">${r.name}</div><div class="in-desc">${escapeHtml(r.short)}</div></div></div>`;
-  } else {
-    card.innerHTML = `${frame}<div class="in-body"><div class="in-emoji">${r.emoji}</div>
-      <div class="in-name gilt-name">${r.name}</div>
-      <div class="in-desc">${escapeHtml(r.short)}</div></div>`;
-  }
+  const card = el('div', 'inspect-card');
+  const fit = window.CardFrame.fitSize(window.CardFrame.SIZES.inspect, {
+    width: window.innerWidth - 48, height: window.innerHeight - 110,
+  });
+  card.style.width = `${fit.width}px`;
+  window.CardFrame.mount(card, { roleId: rid, revealed: true, name: r.name, width: fit.width });
   stage.appendChild(card);
+  stage.appendChild(el('div', 'inspect-desc', escapeHtml(r.short)));
   stage.appendChild(el('div', 'inspect-hint', '移动指针检视 · 点击任意处关闭'));
   stage.addEventListener('mousemove', (e) => {
     const rect = card.getBoundingClientRect();
@@ -4441,14 +4459,8 @@ function renderMyRoleCard(v) {
   box.dataset.sig = sig;
   const r = roleInfo(v.me.role);
   box.classList.remove('hidden');
-  const ext = state.meta.roleArt && state.meta.roleArt[v.me.role];
-  // 与翻牌 / 检视 / 图鉴共用同一套手绘 SVG 框。
-  // 这里原来直接塞一张裸 <img>（全站唯一没有卡框的角色卡），同一个"角色卡"有两套视觉。
-  const face = ext
-    ? `<img class="role-art" src="assets/roles/${v.me.role}${ext}" alt="">`
-    : `<div class="role-art-fallback"><div class="fa-emoji">${r.emoji}</div></div>`;
   box.innerHTML = `
-    <div class="mrc-art"><div class="card-frame"${window.CardFrame.roleAttr(v.me.role)}>${window.CardFrame.html()}${face}</div></div>
+    <div class="mrc-art">${roleArtHtml()}</div>
     <div class="mrc-info">
       <div class="mrc-role" style="color:${r.color}">${r.emoji} ${r.name}</div>
       <div class="mrc-sub">${v.me.seat}号 · ${v.me.alive ? '存活' : '出局'}${v.me.isSheriff ? ' · 👑警长' : ''}</div>
@@ -4458,6 +4470,7 @@ function renderMyRoleCard(v) {
         <button class="btn small ghost" id="mrc-strategy" title="查看策略卡">${ico('strategy')}</button>
       </div>
     </div>`;
+  mountRoleArt(box, v.me.role, window.CardFrame.SIZES.desktop);
   $('#mrc-inspect').addEventListener('click', () => openInspect(v.me.role));
   $('#mrc-task').addEventListener('click', () => openMyTask(v));
   $('#mrc-strategy').addEventListener('click', () => openStrategy(v.me.role));
@@ -4971,8 +4984,8 @@ function maybeShowRole(v) {
   state.roleShown = true;
   const r = roleInfo(v.me.role);
   $('#flip-front').innerHTML = `
-    ${roleArtHtml(v.me.role)}
-    <div class="r-name gilt-name">${r.name}</div>`;
+    ${roleArtHtml()}`;
+  mountRoleArt($('#flip-front'), v.me.role);
   $('#flip-caption').innerHTML = `
     <div class="r-desc">${r.short}</div>
     ${v.me.teammates && v.me.teammates.length ? `<div class="r-desc tm">狼队：${v.me.teammates.join('、')} 号</div>` : ''}`;
@@ -5150,10 +5163,11 @@ function renderCodexTab(box) {
   const grid = el('div', 'codex');
   for (const r of Object.values(state.meta.roles)) {
     const c = el('div', 'r-card');
-    c.innerHTML = `${roleArtHtml(r.id)}
+    c.innerHTML = `${roleArtHtml()}
       <h4>${r.emoji} ${r.name} <small style="color:${r.color}">${{ wolf: '狼人阵营', god: '神职', villager: '平民' }[r.category]}</small></h4>
       <p>${r.short}</p>
       <button class="btn small ghost">${icoLabel('inspect', '检视')}</button>`;
+    mountRoleArt(c, r.id);
     c.querySelector('.btn').addEventListener('click', (e) => { e.stopPropagation(); openInspect(r.id); });
     grid.appendChild(c);
   }
@@ -5424,10 +5438,14 @@ async function pollAgent() {
 }
 
 // ---------------- 启动 ----------------
-/** 牌背（.flip-back）是静态 HTML，框层在这里注入 —— 保持"卡框只有一份实现" */
+/** 未揭示牌背：所有真实角色共用同一中性素材和朗读名称。 */
 function ensureCardBacks() {
   for (const node of document.querySelectorAll('.flip-back')) {
-    if (!node.querySelector('.fr-svg')) node.insertAdjacentHTML('afterbegin', window.CardFrame.html());
+    if (node.querySelector('.flip-back-frame')) continue;
+    const host = el('div', 'flip-back-frame');
+    node.querySelector('.cb-img')?.remove();
+    node.insertBefore(host, node.firstChild);
+    window.CardFrame.mount(host, { revealed: false });
   }
 }
 ensureCardBacks();

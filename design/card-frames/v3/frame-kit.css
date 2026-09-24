@@ -1,0 +1,41 @@
+/* Standalone card component. No selectors target the live game's card-frame. */
+.r3-shell { width: 100%; max-width: 100%; container-type: inline-size; }
+.r3-card { position: relative; width: 100%; aspect-ratio: 2 / 3; isolation: isolate; filter: drop-shadow(0 14px 14px #0009); }
+.r3-card > svg, .r3-card > img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; pointer-events: none; user-select: none; }
+.r3-shell .r3-card > img[hidden] { display: none !important; }
+.r3-art { z-index: 1; }
+.r3-cut-compact { display: none; }
+.r3-material, .r3-vector { z-index: 2; }
+.r3-vector, .r3-compact { display: none !important; }
+.r3-accent { z-index: 3; }
+.r3-title { position: absolute; z-index: 4; left: 21%; right: 21%; top: 86.5%; height: 6%; display: flex; align-items: center; justify-content: center; margin: 0; color: #efe5cc; font: 600 16px/1.05 "Noto Serif SC", "Songti SC", "SimSun", serif; font-size: clamp(12px, 7cqw, 28px); letter-spacing: .13em; padding-left: .13em; white-space: nowrap; text-shadow: 0 2px 3px #000, 0 0 12px #000; pointer-events: none; }
+.r3-card[data-art-error]::before { content: ''; position: absolute; inset: 15% 10% 14%; background: radial-gradient(ellipse at 50% 40%, #354456, #0e1420 65%); z-index: 0; }
+.r3-shell[data-render='vector'] .r3-material, .r3-shell[data-render='vector'] .r3-accent,
+.r3-card[data-material-error] .r3-material, .r3-card[data-material-error] .r3-accent { display: none; }
+.r3-shell[data-render='vector'] .r3-vector, .r3-card[data-material-error] .r3-vector { display: block !important; }
+.r3-shell[data-state='selected'] .r3-card { filter: drop-shadow(0 12px 14px #0009) drop-shadow(0 0 5px #d7b77a99); }
+.r3-shell[data-state='unavailable'] .r3-card { filter: grayscale(.8) brightness(.66); }
+.r3-card::after { content:''; position:absolute; inset:1% 1%; border:1px solid #c2b38e; box-shadow:inset 0 0 0 2px #182331,0 0 0 1px #040710; z-index:5; pointer-events:none; display:none; }
+.r3-shell[data-render='vector'] .r3-card[data-vector-error]::after,
+.r3-card[data-material-error][data-vector-error]::after { display:block; }
+/* Explicit compact is the fallback for WebViews without container queries. */
+.r3-shell[data-detail='compact'] .r3-card .r3-material,
+.r3-shell[data-detail='compact'] .r3-card .r3-vector,
+.r3-shell[data-detail='compact'] .r3-card .r3-accent,
+.r3-shell[data-detail='compact'] .r3-card .r3-title { display:none !important; }
+.r3-shell[data-detail='compact'] .r3-card .r3-compact { display:block !important; z-index:2; }
+.r3-shell[data-detail='compact'] .r3-cut-full { display:none; }
+.r3-shell[data-detail='compact'] .r3-cut-compact { display:block; }
+.r3-shell[data-detail='compact'] .r3-card[data-compact-error]::after { display:block; }
+.r3-shell[data-detail='compact'] .r3-card > img[hidden] { display:none !important; }
+@container (max-width: 112px) {
+  .r3-card .r3-material, .r3-card .r3-vector, .r3-card .r3-accent, .r3-card .r3-title,
+  .r3-shell[data-render='vector'] .r3-card .r3-vector, .r3-card[data-material-error] .r3-vector { display: none !important; }
+  .r3-card .r3-compact { display: block !important; z-index: 2; }
+  .r3-cut-full { display: none; }
+  .r3-cut-compact { display: block; }
+  .r3-card { filter: drop-shadow(0 3px 4px #0008); }
+  .r3-card[data-compact-error]::after { display:block; }
+  .r3-card > img[hidden] { display:none !important; }
+}
+@media (prefers-reduced-motion: reduce) { .r3-shell, .r3-card { animation: none !important; transition: none !important; } }

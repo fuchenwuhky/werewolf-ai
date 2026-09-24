@@ -285,7 +285,7 @@ html, body { height: 100%; overscroll-behavior: none; }
   flex: none; width: 52px; align-self: center; padding: 0; cursor: pointer; overflow: hidden;
   border-radius: var(--r-sm); border: none; background: none;
 }
-.m-mycard .card-frame { width: 100%; }
+.m-mycard .role-frame-host { width: 100%; }
 .m-mycard:active { transform: scale(.97); }
 .m-dialog-wrap { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .pending-hint {

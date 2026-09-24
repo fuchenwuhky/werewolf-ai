@@ -345,6 +345,9 @@ test('M2-e Android：只导出本机服务的档案路径（自己拼 URL + prof
   assert.match(JAVA, /private static final Pattern PROFILE_ID = Pattern\.compile\("\^\[A-Za-z0-9_-\]\{1,64\}\$"\);/);
   assert.match(JAVA, /!PROFILE_ID\.matcher\(profileId\)\.matches\(\)/, '白名单先行');
   assert.match(JAVA, /!current\.startsWith\(LOCAL_ORIGIN \+ "\/"\)/, '当前页面不是本机服务就拒绝');
+  const startExport = section(JAVA, 'private String startExport(String profileId)', 'protected void onActivityResult', 'startExport');
+  assert.ok(startExport.indexOf('mainHandler.post(') < startExport.indexOf('wv.getUrl()'),
+    'WebView.getUrl 必须在 UI 线程运行，不能从 @JavascriptInterface 线程直接调用');
   assert.ok(!/intent\.setData|setDataAndType|Uri\.parse\(profileId\)|EXTRA_INITIAL_URI/.test(JAVA),
     '不得把调用方给的字符串当 URI/路径用');
   assert.match(JAVA, /conn\.setInstanceFollowRedirects\(false\)/, '不跟随重定向（避免被带离本机服务）');
@@ -361,9 +364,7 @@ test('M2-e Android：三态 JSON 的三个取值都在（终态经 __wwExportRes
 
 // ─────────────────────────────────────────────────────────── ⑦ 边界声明（诚实边界钉成用例）
 
-test('M2-e 边界：本批没有 web/** 的接线 —— Android 的 JS 调用方尚不存在（下一批）', () => {
-  // 注入名/方法名/回调名都只有原生一侧的定义，web/ 里还没有调用者；这条把"已接线"的假象钉死，
-  // 免得报告里把"原生桥可用"写成"端到端已验证"。
+test('M2-e Android 接线：只有手机端调用 WWExport，桌面端仍使用自己的导出臂', () => {
   const webFiles = [];
   const walk = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -374,5 +375,9 @@ test('M2-e 边界：本批没有 web/** 的接线 —— Android 的 JS 调用�
   };
   walk(path.join(ROOT, 'web'));
   const callers = webFiles.filter((f) => fs.readFileSync(f, 'utf8').includes('WWExport'));
-  assert.deepStrictEqual(callers, [], `本批不该有 web/** 调用方（实际：${callers.join(', ')}）`);
+  assert.deepStrictEqual(callers, [path.join(ROOT, 'web', 'm', 'm.js')],
+    `Android 桥调用方应只在手机入口（实际：${callers.join(', ')}）`);
+  const mobile = fs.readFileSync(callers[0], 'utf8');
+  assert.match(mobile, /window\.__wwExportResult\s*=\s*\(raw\)\s*=>/, '终态回调必须存在');
+  assert.match(mobile, /window\.WWExport\.exportProfile\(profileId\)/, '必须把白名单档案 ID 送到原生桥');
 });

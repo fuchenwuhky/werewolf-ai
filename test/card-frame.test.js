@@ -202,7 +202,7 @@ test('roleAttr：把角色 id 与阵营带到外层 div 上，且只放行安全
   assert.strictEqual(CF.roleAttr(undefined), '');
   assert.strictEqual(CF.roleAttr('wo"lf>x'), ' data-role="wolfx"', '非法字符必须被剔除，不能破坏属性');
   assert.strictEqual(CF.roleAttr('nobody'), ' data-role="nobody"', '不认识的 id 不带阵营（徽记回落成狼爪）');
-  // 检视大卡走的是 dataset 赋值，用的是同一个原语；手写 dataset.role 会漏掉阵营。
+  // 旧字符串接口仍供兼容；生产卡牌通过 mount 使用独立的主题映射。
   // 注意模块是在 vm 沙箱里加载的（另一个 realm），deepStrictEqual 会比原型而失败，所以按序列化比。
   const attrs = (rid) => JSON.stringify(CF.roleAttrs(rid));
   assert.strictEqual(attrs('seer'), '{"role":"seer","faction":"god"}');
@@ -211,10 +211,10 @@ test('roleAttr：把角色 id 与阵营带到外层 div 上，且只放行安全
   assert.strictEqual(attrs(''), '{}');
   for (const f of ['app.js', 'm/m.js']) {
     const src = read(f);
-    assert.match(src, /window\.CardFrame\.roleAttr\(/, `${f} 应把角色 id 交给 CardFrame.roleAttr()`);
-    assert.ok(!/data-role="\$\{/.test(src), `${f} 又自己拼 data-role 了（配色表靠这个属性命中）`);
-    assert.ok(!/dataset\.role\s*=/.test(src), `${f} 直接写 dataset.role 会漏掉 data-faction（检视大卡的徽记会永远是狼爪）`);
-    assert.match(src, /Object\.assign\(card\.dataset,\s*window\.CardFrame\.roleAttrs\(/, `${f} 的检视大卡没有走 roleAttrs 原语`);
+    assert.match(src, /window\.CardFrame\.mount\(host,\s*\{\s*roleId:\s*rid,\s*revealed:\s*true/, `${f} 应把可见角色交给统一挂载层`);
+    assert.match(src, /window\.CardFrame\.mount\(card,\s*\{\s*roleId:\s*rid,\s*revealed:\s*true/, `${f} 的检视大卡应使用统一挂载层`);
+    assert.ok(!/data-role="\$\{/.test(src), `${f} 又自己拼 data-role 了`);
+    assert.ok(!/dataset\.role\s*=/.test(src), `${f} 不应手写卡牌角色数据`);
   }
 });
 
@@ -311,10 +311,11 @@ test('阵营配色表：狼=血腥红 / 神=神圣金 / 民=绿 / 第三方=紫�
   assert.ok(!/class="fr-tint-under"[^>]*opacity=/.test(CF.FRAME), '染色浓度应由 CSS 决定，不要写死在标记里');
 });
 
-test('卡框只有一份实现：两处页面都调 window.CardFrame，不许各自内联 SVG', () => {
+test('卡框只有一份实现：双端共用 mount，页面不内联旧框', () => {
   for (const f of ['app.js', 'm/m.js']) {
     const src = read(f);
-    assert.match(src, /window\.CardFrame\.html\(\)/, `${f} 应调用共享的 CardFrame.html()`);
+    assert.match(src, /window\.CardFrame\.mount\(/, `${f} 应调用共享的 CardFrame.mount()`);
+    assert.ok(!/window\.CardFrame\.html\(\)/.test(src), `${f} 真实页面不应再挂载旧框`);
     assert.ok(!/class="fr-svg"/.test(src), `${f} 内联了一份框 SVG —— 必须共用 card-frame.js`);
     assert.ok(!/fr-corner|fr-gem|fr-orn/.test(src), `${f} 残留了旧版的框装饰标记`);
   }
@@ -322,23 +323,23 @@ test('卡框只有一份实现：两处页面都调 window.CardFrame，不许各
   const css = read('style.css');
   assert.ok(!/\.fr-corner\b/.test(css), 'style.css 残留 .fr-corner（旧版铆钉）');
   assert.ok(!/\.fr-orn\b/.test(css), 'style.css 残留 .fr-orn（旧版 ✠ 字符）');
-  // 检视大卡必须复用 .card-frame，而不是再维护一份金属框 CSS
+  // 检视大卡不能另拼一份金属框 CSS。
   assert.match(css, /\.inspect-card\s*\{[^}]*\}/, '缺少 .inspect-card 规则');
   const inspectBlock = css.match(/\.inspect-card\s*\{([^}]*)\}/)[1];
   assert.ok(!/linear-gradient\(168deg/.test(inspectBlock), '.inspect-card 又自己拼了一份金属渐变（应复用 .card-frame）');
-  // 牌背（静态 HTML）也要套同一套框：框层由脚本注入，绝不在 HTML 里内联一份 SVG
+  // 静态 HTML 只留牌背宿主，框层由共享挂载器生成。
   for (const f of ['index.html', 'm/index.html']) {
     const html = read(f);
-    assert.ok(!/class="fr-svg"/.test(html), `${f} 内联了框 SVG —— 牌背的框必须由脚本用 CardFrame.html() 注入`);
+    assert.ok(!/class="fr-svg"/.test(html), `${f} 不得内联旧框 SVG`);
     assert.match(html, /class="flip-back"/, `${f} 里找不到牌背 .flip-back`);
   }
   for (const f of ['app.js', 'm/m.js']) {
     const src = read(f);
-    assert.match(src, /function ensureCardBacks\(\)/, `${f} 缺少 ensureCardBacks（牌背框层注入）`);
+    assert.match(src, /function ensureCardBacks\(\)/, `${f} 缺少 ensureCardBacks（牌背挂载）`);
     assert.match(src, /^ensureCardBacks\(\);$/m, `${f} 没有在启动时调用 ensureCardBacks()`);
-    assert.match(src, /querySelectorAll\('\.flip-back'\)[\s\S]{0,160}CardFrame\.html\(\)/, `${f} 的牌背注入没用共享的 CardFrame.html()`);
+    assert.match(src, /window\.CardFrame\.mount\(host,\s*\{\s*revealed:\s*false\s*\}\)/, `${f} 的牌背必须挂统一 neutral 视图`);
   }
-  assert.match(css, /\.flip-back\s*>\s*\.fr-svg\s*\{[^}]*position:\s*absolute/, 'CSS 缺少牌背框层的定位规则');
+  assert.match(css, /\.flip-back-frame\s*\{[^}]*position:\s*absolute/, 'CSS 缺少新版牌背的定位规则');
   assert.ok(!/\.flip-back\s*\{[^}]*outline:\s*1px/.test(css), '.flip-back 还留着自己画的 outline（已由 SVG 框层接管）');
 });
 

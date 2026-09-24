@@ -36,3 +36,8 @@ web/m/index.html text eol=lf
 # 修复：在 .gitattributes 追加一行"）—— 也就是说这一行不是可选项：
 # 不钉，Windows 检出（core.autocrlf=true）会把内联脚本变成 CRLF ⇒ 哈希错位 ⇒ CSP 又静默拦掉它。
 web/offline.html text eol=lf
+
+# 角色卡牌 V3 的 SVG 按字节核对源与生产副本；Windows 干净检出也必须保持 LF。
+design/card-frames/v3/assets/*.svg text eol=lf
+design/card-frames/v3/archive/compact-v1/*.svg text eol=lf
+web/assets/card-frames/v3/*.svg text eol=lf

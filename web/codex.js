@@ -40,7 +40,6 @@ window.Codex = (function () {
   }
   const roles = () => (ctx.meta && ctx.meta.roles) || {};
   const roleOf = (rid) => roles()[rid] || {};
-  const artOf = (rid) => ctx.meta && ctx.meta.roleArt && ctx.meta.roleArt[rid];
   const counts = () => (typeof ctx.counts === 'function' ? ctx.counts() || {} : ctx.counts || {});
 
   /** 卡框阵营：与牌面颜色同源，保证分区与牌面永远不会互相矛盾 */
@@ -122,7 +121,7 @@ window.Codex = (function () {
     const w = grid.clientWidth || (grid.getBoundingClientRect().width) || 340;
     const avail = grid.clientHeight || Math.max(240, (window.innerHeight || 700) - grid.getBoundingClientRect().top - 16);
     const cardW = Math.max(80, (w - gap * (cols - 1)) / cols);
-    const cardH = cardW * 1.5; // 卡框是 2:3
+    const cardH = cardW * 1.5 + 20; // 2:3 牌面 + 框外阵营说明，不高估一页容量
     const rows = Math.max(1, Math.floor((avail + gap) / (cardH + gap)));
     // 下限 4 张/页：实测在 390×760 的手机上，2:3 卡框高度会让"按高度算"的容量掉到 1 行 = 2 张/页，
     // 于是翻页变成"一次翻两张"，用户明确要求"一页放 4 个角色"。这里给下限，
@@ -286,8 +285,15 @@ window.Codex = (function () {
 
   function cardNode(id, inGame) {
     const r = roleOf(id);
-    const card = el('div', 'cdx-card', cardHtml(id, inGame));
-    // data-role/data-faction 走 CardFrame 原语：手写 dataset.role 会漏掉阵营，徽记永远是狼爪
+    const card = el('div', 'cdx-card');
+    const frameHost = el('div', 'cdx-frame-host');
+    card.appendChild(frameHost);
+    const shell = window.CardFrame.mount(frameHost, { roleId: id, revealed: true, name: r.name });
+    if (st.pick === id) shell.dataset.state = 'selected';
+    const sec = sectionOf(id);
+    card.appendChild(el('span', 'cdx-cat', esc(r.emoji + ' ' + (sec ? T(sec.catKey) : ''))));
+    if (inGame) card.appendChild(el('span', 'cdx-ingame', esc(T('codex.inGame', { n: inGame }))));
+    // 图鉴分区继续使用旧业务分类；卡框的外观主题由共享渲染器单独决定。
     Object.assign(card.dataset, window.CardFrame.roleAttrs(id));
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
@@ -297,36 +303,13 @@ window.Codex = (function () {
     return card;
   }
 
-  /** 牌面：复用身份牌那套 .card-frame + 同一张立绘；铭牌挂在卡框**内部**（--band* 变量才继承得到） */
-  function cardHtml(rid, inGame) {
-    const r = roleOf(rid);
-    const sec = sectionOf(rid);
-    const badge = inGame ? `<span class="cdx-ingame">${esc(T('codex.inGame', { n: inGame }))}</span>` : '';
-    return `<div class="card-frame"${attrStr(window.CardFrame.roleAttrs(rid))}>`
-      + window.CardFrame.html()
-      + artOnly(rid)
-      + `<div class="cdx-plate"><div class="cdx-name gilt-name">${esc(r.name)}</div>`
-      + `<div class="cdx-cat">${esc(r.emoji + ' ' + (sec ? T(sec.catKey) : ''))}</div></div></div>${badge}`;
-  }
-
-  function attrStr(obj) {
-    return Object.entries(obj || {}).map(([k, v]) => ` ${k}="${esc(v)}"`).join('');
-  }
-
-  function artOnly(rid) {
-    const ext = artOf(rid);
-    const r = roleOf(rid);
-    if (ext) return `<img class="role-art" src="${esc(ctx.artBase)}${esc(rid)}${esc(ext)}" alt="${esc(r.name)}">`;
-    return `<div class="role-art-fallback"><div class="fa-emoji">${esc(r.emoji)}</div><div class="fa-name">${esc(r.name)}</div></div>`;
-  }
-
   /** 细节内容（桌面塞进右侧栏，手机塞进弹层 —— 同一份 HTML） */
   function detailHtml(rid) {
     const r = roleOf(rid);
     const cs = counts();
     const sec = sectionOf(rid);
     const out = [];
-    out.push(`<div class="cdx-big card-frame"${attrStr(window.CardFrame.roleAttrs(rid))}>${window.CardFrame.html()}${artOnly(rid)}</div>`);
+    out.push('<div class="cdx-big"></div>');
     out.push(`<div class="cdx-dname gilt-name">${esc(r.emoji)} ${esc(r.name)}</div>`);
     const chips = [];
     if (sec) chips.push([T(sec.titleKey), false]);
@@ -356,12 +339,20 @@ window.Codex = (function () {
     const box = $('#cdx-detail');
     if (!box) return;
     box.innerHTML = st.pick ? detailHtml(st.pick) : `<div class="cdx-empty">${esc(T('codex.pickHint'))}</div>`;
+    if (st.pick) mountDetail(box, st.pick);
+  }
+
+  function mountDetail(root, rid) {
+    const host = root && root.querySelector('.cdx-big');
+    if (!host) return;
+    window.CardFrame.mount(host, { roleId: rid, revealed: true, name: roleOf(rid).name });
   }
 
   return {
     mount,
     render,
     detailHtml,
+    mountDetail,
     renderDetail,
     counts,
     /** 分页信息（给测试与调试用）：当前页、总页数、每页容量、当前页的阵营与牌 */
