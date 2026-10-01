@@ -4,22 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#06090f">
-  <title>AI 来客名册 · 长夜集会</title>
+  <title>AI 来客名册 · 月夜议会</title>
   <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="shared/tokens.css">
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="ai-cast.css">
+  <link rel="stylesheet" href="shared/nocturne.css">
 </head>
 <body class="cast-page">
   <main class="cast-book">
-    <nav class="cast-nav"><a id="cast-back" href="/">← 返回游戏</a><span>长夜集会 · 来客名册</span></nav>
+    <nav class="cast-nav"><a id="cast-back" href="/">← 返回游戏</a><span>月夜议会 · 来客名册</span></nav>
     <header class="cast-intro">
-      <p class="cast-eyebrow">同一张圆桌，不同的声音</p>
-      <h1>今夜，谁与你同席？</h1>
-      <p>24 张面孔，24 种发言气质。有人追问证据，有人耐心听完，有人用三句话收拢整桌分歧。</p>
+      <p class="cast-eyebrow">月夜议会 / AI 来客名册</p>
+      <h1>二十四位来客</h1>
+      <p>他们拥有不同的声音，但没有预设的阵营。</p>
       <p class="cast-note">头像是玩家外观，不代表身份或阵营。把下方任一昵称填进桌面端 AI 昵称栏，即可邀请对应来客；自定义性格仍优先。</p>
     </header>
+    <label class="cast-search-label" for="cast-search">查找来客</label>
+    <input id="cast-search" class="cast-search" type="search" placeholder="名字 / 性格 / 发言风格" autocomplete="off">
+    <p id="cast-empty" class="cast-empty" hidden>没有找到匹配的来客，试试另一种说法。</p>
     <section id="cast-grid" class="cast-grid" aria-label="AI 肖像与昵称"></section>
+    <div id="cast-detail" class="cast-detail-root"></div>
     <p id="cast-status" class="cast-status" role="status" aria-live="polite"></p>
     <footer class="cast-footer">旧昵称和自定义昵称也会获得稳定头像；同局 24 位 AI 以内不重复，刷新与切换视角不换脸。</footer>
   </main>

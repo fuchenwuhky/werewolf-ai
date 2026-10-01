@@ -45,6 +45,23 @@ test('B1/B2：新草稿默认试玩；既有草稿/对局的模式原样保留�
     '把"试玩"塞进参与维度 ⇒ 回落成 play，而不是把它当成观战（两轴不许互相顶替）');
 });
 
+test('B2：玩家显式改为真实对局后，向导闭包、会话草稿与冻结提交一致', () => {
+  const ss = store();
+  const first = mk({ storage: ss });
+  first.set({ boardId: 'adv12' });
+  const resumed = mk({ storage: ss, mode: 'mock' });
+  const denied = resumed.setMode('real');
+  assert.strictEqual(denied.ok, false, '恢复草稿不允许静默改模式');
+  assert.strictEqual(resumed.modeOf(), 'mock');
+  const accepted = resumed.setMode('real', { explicit: true });
+  assert.strictEqual(accepted.ok, true);
+  assert.strictEqual(resumed.modeOf(), 'real', '显式选择必须改掉实际提交模式');
+  resumed.set({ mode: 'real', playerCount: 12 });
+  assert.strictEqual(JSON.parse(ss.getItem(W.draftKey('profile-A'))).mode, 'real', '刷新后也应恢复真实模式');
+  assert.strictEqual(resumed.freeze().mode, 'real', '冻结快照不可沿用旧的 Mock 模式');
+  assert.strictEqual(mk({ storage: ss, mode: 'real' }).modeOf(), 'real');
+});
+
 test('§0 陷阱防线：两轴取值域不许互相串（混用要响亮报错，不能静默回落）', () => {
   assert.throws(() => mk({ mode: 'play' }), /mode/i,
     'mode 收到 play/watch ⇒ 必须抛错：静默回落正是历史上"开局变试玩、身份遮罩不出现"的成因');

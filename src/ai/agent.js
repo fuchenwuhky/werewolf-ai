@@ -16,6 +16,7 @@ const effort = require('./effort');
 const schemas = require('./schemas');
 const journal = require('./journal');
 const { renderEvent } = require('../engine/render');
+const { withSignal, abortReason } = require('../request-scope');
 
 /** 从模型输出中提取 JSON（容忍代码围栏/前后缀文字） */
 function extractJson(text) {
@@ -48,7 +49,7 @@ function extractJson(text) {
 const DIGEST_MAX_CHARS = 700;
 
 /**
- * 轻量补救重试（E1）的输出上限：决策时间预算已经花光，这次重试必须几秒钟出结果。
+ * 轻量补救重试（E1）的输出上限：在总预算内预留补救时间，不允许耗尽后再追加等待。
  * 1200 tokens 对"给一句合法发言/一个座位号"绰绰有余，而 hardCap 封死意味着
  * 即使模型再想跑长思考，也绝不可能把等待重新拉回几分钟。
  */
@@ -64,7 +65,7 @@ const CHEAP_RETRY_HARD_CAP = 2000;
 const PUBLIC_LIVE_TASKS = new Set(['speech', 'sheriff_speech', 'pk_speech', 'lastwords']);
 
 /** 纪要生成时忽略的事件类型（与上下文组装保持一致的噪音口径） */
-const DIGEST_SKIP_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning']);
+const DIGEST_SKIP_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'ai_status']);
 
 class Agent {
   constructor(player, game, llmCfg, logger, experienceStore = null, journalStore = null) {
@@ -99,15 +100,15 @@ class Agent {
   }
 
   /**
-   * 日切边界：后台整理"上一天"的纪要（返回 Promise，但调用方不必 await → 不阻塞流程）。
+   * 日切边界：整理"上一天"的纪要（返回 Promise，引擎在边界等待以保证恢复确定性）。
    *
    * 为什么能在边界就生成：进入第 D 天时第 D-1 天已完整结束（含它自己的夜与投票），
-   * 而第 D-1 天的纪要要到第 D+1 天才被需要（L2 实录覆盖"昨天+今天"）——有一整天余量。
-   * 于是"反思"从"新一天首个决策的阻塞项"变成"夜里后台跑的一次低优先级调用"。
+   * 而第 D-1 天的纪要要到第 D+1 天才被需要（L2 实录覆盖"昨天+今天"）。
+   * 出局 AI 不再整理；遗言/离场技能仍直接读取已有记忆与当时可见事件。
    */
   scheduleReflection(day) {
     const g = this.game;
-    if (!g || g.finished || day < 1) return null;
+    if (!g || g.finished || !this.player.alive || this.player.isHuman || day < 1) return null;
     if (this.digests.has(day)) return null;
     if (this._reflecting.has(day)) return this._reflecting.get(day);
     const p = this._reflectDay(day)
@@ -126,11 +127,15 @@ class Agent {
    * 补齐"确实会进入上下文"的旧日纪要（窗口 = 最近 digestKeep 天中、昨天之前的部分）。
    * 边界批处理已经把绝大多数日子的纪要提前生成好了，这里通常一次 LLM 都不发。
    */
-  async ensureDigests() {
+  async ensureDigests(signal) {
+    // A dead player's last words/shot/badge decision is still allowed, but must not trigger
+    // extra retrospective LLM calls (or wait for old background reflection work).
+    if (!this.player.alive || this.player.isHuman || this.game.finished) return;
     const today = this.game.day || 0;
     const keep = this.digestKeep;
     const oldest = Math.max(1, today - 1 - keep); // 只有这个窗口内的纪要会进上下文
     for (let d = oldest; d <= today - 2; d++) {
+      if (signal?.aborted) throw abortReason(signal);
       if (this.digests.has(d)) continue;
       if (this._reflecting.has(d)) { await this._reflecting.get(d); continue; }
       const p = this.scheduleReflection(d);
@@ -183,6 +188,7 @@ class Agent {
             logger: this.logger,
             effort: this.llmCfg.fastEffort || 'low', // 反思是账本维护，轻度即可；high 曾出现 7 分钟思考失控
             maxTokens: 2000,
+            hardCap: 2000, timeoutMs: 30000, deadlineAt: Date.now() + 30000, retries:1,
             signal: g.abortSignal, // 终止对局时立即中断
             priority: PRIORITY.reflection, // 单并发通道内让位于玩家可见决策，但不许被无限饿死（调度器带老化）
             meta: { label: `${this.player.seat}号`, task: `第${day}天反思`, seat: this.player.seat },
@@ -258,6 +264,7 @@ class Agent {
           logger: this.logger,
           effort: this.llmCfg.fastEffort || 'low',
           maxTokens: 2000,
+          hardCap: 2000, timeoutMs: 30000, deadlineAt: Date.now() + 30000, retries:1,
           priority: PRIORITY.lesson, // 局终复盘：最低优先级，绝不与下一局的开局决策抢通道
           meta: { label: `${this.player.seat}号`, task: '局终复盘', seat: this.player.seat },
         });
@@ -277,7 +284,8 @@ class Agent {
     const g = this.game;
     const seat = this.player.seat;
     // 0. 跨天反思（新的一天的首次决策时最多补齐到昨天为止的纪要）
-    await this.ensureDigests();
+    if (request._decisionSignal?.aborted) throw abortReason(request._decisionSignal);
+    await withSignal(this.ensureDigests(request._decisionSignal), request._decisionSignal);
     // 1. 组装上下文（L1 + L2 + 快照 + 任务，带预算裁剪）
     const state = {
       digests: new Map(this.digests),
@@ -312,19 +320,17 @@ class Agent {
     // 2. 单发调用（思考预算按"信息含量"调度：常规决策降档、关键节点加档）
     const messages = [this.messages[0], { role: 'user', content: built.text }];
     const plan = effort.planEffort(g, this.player, request, { cfg: this.llmCfg, lastSeq: this.lastSeq });
-    // E1 轻量补救（配合 flow.js 的校验层重试）：决策时间预算已经花光时的重试必须**又便宜又有上限**，
-    // 否则等于再赌一次长思考（实测最坏 362s）——那正是 180s 总闸门当初要避免的事。
-    // 几分钟的等待换来的通常只是一句合法发言，几秒钟的降档重试是明显更好的交易。
+    // E1：失败后使用预留的补救预算，低/关闭思考与小输出上限共同限制等待。
     if (request._cheapRetry) {
-      plan.effort = this.llmCfg.fastEffort || 'low';
+      plan.effort = /deepseek/i.test(ctx.taskModel(request.task, this.llmCfg)) ? 'none' : this.llmCfg.fastEffort || 'low';
       plan.maxTokens = Math.min(plan.maxTokens, CHEAP_RETRY_MAX_TOKENS);
       plan.hardCap = Math.min(plan.hardCap, CHEAP_RETRY_HARD_CAP);
-      plan.reasons = ['轻量补救重试：决策时间预算已用尽 → 最低思考 + 极小预算'];
+      plan.reasons = ['轻量补救重试：总预算内预留补救 → 低/关闭思考 + 极小预算'];
       plan.cheap = true;
     }
     this.lastPlan = plan; // 上帝面板可见：这次为什么给了这个档位
     // 单局调用次数硬上限（P1 真实对局测试发现的护栏）。
-    // 为什么必须有：既有的预算保护是**按时间**算的（decisionTotalMs 180s），而成本是**按次数**算的。
+    // 为什么必须有：决策预算保护是按时间算的，而成本还需要按次数限制。
     // 实测（假 LLM 注入"狼队永远凑不出多数"这种僵持）时，秒回的模型在 25 秒内把单局调用刷到近 6000 次
     // —— 时间预算完全拦不住，真金白银的额度却按次烧掉了。这里放一道**次数**护栏：
     // 超限即按"致命"抛出，走既有的暂停路径（不判负、可恢复、留有排查现场），而不是让对局继续空转。
@@ -339,11 +345,13 @@ class Agent {
       try { g.terminate(msg); } catch (_) { /* terminate 会抛出以解栈，交给上层结算 */ }
       throw new Error(msg);
     }
-    // 直播缓冲在**请求真的开始跑**时才建（onStart）：扇出提交时不会出现"还没轮到就已经在打字"，
-    // 也不会几路增量混进同一个缓冲（多 Key 下确实会同时有好几路）。
+    // 先显示排队状态，真正开始请求时再显示思考；同座位的迟到增量不能污染新缓冲。
     let liveEntry = null;
     let out;
+    const attemptNumber = request._requestBudget ? 4 - request._requestBudget.remaining : request._cheapRetry ? 2 : 1;
     try {
+      liveEntry = g.beginLive({seat,task:request.task,public:PUBLIC_LIVE_TASKS.has(request.task)});
+      g.setLiveStatus(liveEntry, {status:request._cheapRetry ? 'retrying' : 'queued',attempt:attemptNumber});
       out = await llm.chatCompletion(this.llmCfg, messages, {
         logger: this.logger,
         effort: plan.effort,
@@ -356,14 +364,19 @@ class Agent {
         timeoutMs: request._cheapRetry
           ? Math.min(ctx.taskTimeoutMs(request.task, this.llmCfg), this.llmCfg.fastTimeoutMs || 30000)
           : ctx.taskTimeoutMs(request.task, this.llmCfg),
-        signal: g.abortSignal, // 终止对局时立即中断在途调用
+        signal: request._decisionSignal || g.abortSignal,
+        deadlineAt: request._decisionDeadline,
+        requestBudget: request._requestBudget,
+        retries: request._cheapRetry ? 0 : request._requestBudget ? 1 : undefined,
         priority: PRIORITY.decision, // 玩家可见决策：最高优先级
         meta: { label: `${seat}号`, task: request.task, seat },
-        onStart: () => { liveEntry = g.beginLive({ seat, task: request.task, public: PUBLIC_LIVE_TASKS.has(request.task) }); },
+        onStart: () => g.setLiveStatus(liveEntry, {status:request._cheapRetry ? 'retrying' : 'thinking',attempt:attemptNumber}),
+        onStatus: info => g.setLiveStatus(liveEntry, info),
         onDelta: (d) => g.updateLive(liveEntry, d),
         // 结构化输出：target 用候选座位枚举约束，模型在结构上无法吐出非法座位
         responseFormat: schemas.schemaFor(request.task, request, { aliveSeats: g.aliveSeats(), seat }),
       });
+      if (request._decisionSignal?.aborted) throw request._decisionSignal.reason;
     } finally {
       g.endLive(liveEntry); // 成功/失败/暂停都必须清掉缓冲，避免残留半成品被反复下发
     }

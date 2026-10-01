@@ -98,9 +98,9 @@ const REQUIRED_LITERALS = [
     // ⚠ M3 C2 + 卡框批次并行施工后再锚（**同样只动锚点行号**）：
     //   ① web/app.js 前部新增三步开局的向导机器（+约 190 行）；② 同一窗口内另一批把 boardTotal()
     //   的 null 兜底写进了 web/app.js（+10 行）。两条字面量逐字未动、整文件仍恰好各命中 1 次。
-    file: 'web/app.js', line: 587, window: 25,
-    literal: '👤 ${escapeHtml(profile.nickname)}',
-    note: '顶栏档案信息里的**玩家姓名**前缀（"不许误删玩家姓名 emoji"的直接落点）',
+    file: 'web/app.js', line: 748, window: 25,
+    literal: "$('#home-nick').title = profile.nickname",
+    note: '大厅归属标签必须保留玩家姓名；Nocturne 用统一图标取代旧 emoji',
   },
   // ⚠ 这两条 line 是 M2-c 施工后的**位置重锚**：字面量、window（25）、note 全都没动，只有记录的行号跟着
   //   新增的玩家中心代码下移（app.js +70：openPlayerCenter/pcFetch/fillPc* 的"先取数再一次画完"；
@@ -123,14 +123,14 @@ const REQUIRED_LITERALS = [
   //   startGame() 之前），两条字面量一起下移；同一窗口里另一批又把 boardTotal() 的 null 兜底
   //   写进 web/app.js（+10 行）。最终：顶栏档案姓名 558→587、档案弹层标题 1361→1590。
   //   两条字面量逐字未动、整文件恰好各命中 1 次，判据强度（±25 行内逐字命中）不变。
-  { file: 'web/app.js', line: 1590, window: 25, literal: '<h2>👤 玩家档案</h2>', note: '档案弹层标题（M3 C2：向导机器插入后 1361→1547；同窗口 boardTotal 兜底 +10 行后再锚到 1590）' },
-  { file: 'web/index.html', line: 199, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签' },
-  { file: 'web/index.html', line: 291, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮' },
-  { file: 'web/m/index.html', line: 278, window: 25, literal: '👤 我的', note: '手机端"我的"页签（M3 C1b：随底栏移到全部屏之后，109→278）' },
-  { file: 'web/m/m.js', line: 1848, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案弹层标题（M3 C1b：新增对局页代码后下移，1788→1848）' },
+  { file: 'web/index.html', line: 370, window: 25, literal: 'id="player-page-title">玩家中心', note: '精修：档案弹层升级为独立页，系统标题不再混用 emoji' },
+  { file: 'web/index.html', line: 238, window: 25, literal: '👤 我的档案', note: '桌面档案选择器标签（Nocturne 首页结构新增后下移）' },
+  { file: 'web/index.html', line: 330, window: 25, literal: '👤 档案管理', note: '桌面档案管理按钮（Nocturne 首页结构新增后下移）' },
+  { file: 'web/m/index.html', line: 311, window: 25, literal: 'id="m-tab-me" data-ww-icon="players"', note: '精修：系统导航统一 SVG，玩家输入的 emoji 保留' },
+  { file: 'web/m/m.js', line: 1953, window: 25, literal: "openSheet('👤 我的档案'", note: '手机端档案子流程标题保留' },
 ];
 
-test('非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {
+test('档案姓名与非头像 👤 文案：6 处必须仍在（逐条点名文件 / 大致位置 / 字面量）', () => {
   const misses = [];
   for (const item of REQUIRED_LITERALS) {
     const lines = linesOf(item.file);
@@ -265,8 +265,7 @@ const REQUIRED_CHAT_LITERALS = [
     note: '手机端同一张标签表（pk 一项两端字形略有差异，故只钉前三个公共项）',
   },
   { file: 'web/app.js', category: '发言模板', literal: `'⚔️ PK'`, note: '桌面端 PK 发言标签（FE0F 变体选择符别丢）' },
-  { file: 'web/app.js', category: '发言模板', literal: `'✍ 正在发言'`, note: '桌面端"谁正在发言"的实时提示' },
-  { file: 'web/m/m.js', category: '发言模板', literal: `'✍ 正在发言'`, note: '手机端"谁正在发言"的实时提示' },
+  { file: 'web/shared/connection-state.js', category: '发言模板', literal: `'✍ 正在发言'`, note: '双端共享的实时发言提示，避免两份文案漂移' },
   { file: 'web/app.js', category: '发言模板', literal: `'💬 白天发言进行中…'`, note: '桌面端阶段状态文案（发言阶段）' },
   { file: 'web/m/m.js', category: '发言模板', literal: `'💬 白天发言进行中…'`, note: '手机端阶段状态文案（发言阶段）' },
   // ---- 系统消息：两端 appendSys + 服务端渲染 ----
@@ -302,6 +301,11 @@ test('缺口 A：聊天/发言/系统消息/姓名 的必含 emoji 文案逐条�
     [],
     `${misses.length} 处聊天/发言/系统消息/姓名文案里的 emoji 被删掉或改写了：\n${misses.join('\n')}`
   );
+});
+
+test('双端实时提示必须使用共享文案，不能仅在未使用的共享文件保留 emoji', () => {
+  assert.ok(read('web/app.js').includes('window.WWConnectionState.liveStatus(l, canSeeText)'), '桌面实时提示必须使用共享状态文案');
+  assert.ok(read('web/m/m.js').includes('window.WWConnectionState.liveStatus(live, live.public)'), '手机实时提示必须使用共享状态文案');
 });
 
 test('缺口 A 自检：清单本身有效（文件都在、每条字面量真的含 emoji、四个类别都非空）', () => {

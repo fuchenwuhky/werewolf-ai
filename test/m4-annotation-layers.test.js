@@ -28,29 +28,18 @@ test('布局①：右栏笔记宽度约 320px（不是 300px）', () => {
   assert.ok(notes >= 300 && notes <= 340, `右栏笔记宽度应约 320px（允许 300-340），实测 ${notes}px`);
 });
 
-test('布局②：把三栏收成两栏/单栏的那个断点必须是 960（不许更宽的断点提前收栏）', () => {
-  // 上一版这条钉的是"第一个窄屏断点"，结果抓到 :1308 的 1080px（那是别的组件的断点）——瞄错了对象。
-  // 正确靶子：凡是**改 .game-layout 列定义**的断点，其宽度都不得大于 960；且必须存在 960 的断点。
-  const mediaRe = /@media \(max-width:\s*(\d+)px\)\s*\{/g;
-  const offenders = [];
-  let m;
-  while ((m = mediaRe.exec(css))) {
-    const w = Number(m[1]);
-    // 取该断点的块体（到下一个 @media 或文件末尾），看里面有没有改 .game-layout 的列定义
-    const next = css.indexOf('@media', m.index + m[0].length);
-    const body = css.slice(m.index, next === -1 ? css.length : next);
-    if (/\.game-layout[^{]*\{[^}]*grid-template-columns:/.test(body) && w > 960) {
-      offenders.push(w);
-    }
-  }
-  assert.deepStrictEqual(offenders, [],
-    `这些断点比 960 更早就收掉了三栏（违反"低于 960px 才改抽屉"）：${offenders.join('、')}px`);
-  assert.ok(/@media \(max-width:\s*960px\)/.test(css), 'style.css 里应有 960px 的断点作为唯一收栏阈值');
+test('布局②：精修计划的两级断点：1440 笔记右栏、1024 玩家左栏，JS/CSS 对齐', () => {
+  const skin = fs.readFileSync(path.join(ROOT, 'web/shared/nocturne.css'), 'utf8');
+  assert.match(app, /function notesDocked\(\)[^\n]+min-width: 1440px/);
+  assert.match(app, /matchMedia\('\(min-width: 1024px\)'\)\.matches/);
+  assert.match(css, /@media \(max-width:\s*1023px\)/);
+  assert.match(skin, /@media \(max-width: 1439px\) and \(min-width: 1024px\)/);
+  assert.match(skin, /@media \(max-width: 1023px\)/);
 });
 
-test('布局③：<960px 时"玩家与笔记"都改抽屉，不能只有笔记', () => {
+test('布局③：<1024px 时"玩家与笔记"都改抽屉，不能只有笔记', () => {
   // 抽屉化的判定必须同时覆盖左栏（玩家）与右栏（笔记）。
-  const drawerHint = /低于\s*960|max-width:\s*960px/.test(css);
+  const drawerHint = /max-width:\s*1023px/.test(css);
   assert.ok(drawerHint, 'style.css 里应有 960px 的抽屉断点');
   const playersDrawer = /(left-col|seats)[^{]*\{[^}]*(position:\s*fixed|position:\s*absolute|transform:\s*translate)/.test(css)
     || /players-drawer|left-drawer|#seats-drawer/.test(css);

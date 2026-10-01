@@ -21,6 +21,40 @@
   /** 降级后恢复推送的重试间隔（桌面端每 30s 试一次；手机端没有这条定时器，不传即不启用） */
   const PUSH_RETRY_MS = 30000;
 
+  /** Local UI clock: SSE deliberately emits nothing while a model has no new output. */
+  function syncLiveClock(state, active, tick) {
+    if (!active) { stopLiveClock(state); return; }
+    if (!state.liveClockTimer) state.liveClockTimer = setInterval(tick, 1000);
+  }
+
+  function stopLiveClock(state) {
+    if (state.liveClockTimer) clearInterval(state.liveClockTimer);
+    state.liveClockTimer = null;
+  }
+
+  /** Prefer the server's request start, including on reload; legacy frames use first observation. */
+  function liveSeconds(state, live, fallbackAt, now = Date.now()) {
+    if (!live) {
+      state.liveSince = null;
+      return Math.max(0, Math.floor((now - (Number(fallbackAt) || now)) / 1000));
+    }
+    const started = Number(live.startedAt);
+    const stamp = Number.isFinite(started) && started > 0 ? started : 0;
+    const key = `${state.game?.gameId || ''}|${live.seat}|${live.task || ''}|${stamp}`;
+    if (!state.liveSince || state.liveSince.key !== key) {
+      // A client's clock may lag the server's; never freeze until a future timestamp arrives.
+      state.liveSince = { key, at: stamp ? Math.min(stamp, now) : now };
+    }
+    return Math.max(0, Math.floor((now - state.liveSince.at) / 1000));
+  }
+
+  function liveStatus(live, canSeeText) {
+    if (live?.status === 'queued') return '等待模型通道…';
+    if (live?.status === 'retrying') return `模型响应异常，正在重试（第 ${Math.max(2, Math.min(3, Number(live.attempt) || 2))} 次）…`;
+    if (canSeeText && live?.text) return '✍ 正在发言';
+    return live?.text ? '… 正在决策' : '正在思考…';
+  }
+
   /** 玩家/上帝视图地址：after 由调用方决定传什么（两端原本一个带 `|| 0` 一个不带，这里不做默认） */
   function viewUrl(gameId, token, after) {
     return `/api/games/${gameId}/view?token=${token}&after=${after}`;
@@ -116,6 +150,7 @@
    * 桌面端把重试定时器的那半段留在自己的 stopPolling 里（收尾顺序在源码守卫里钉死），这里再判一次是幂等的。
    */
   function stopConnection(state, streamKeys) {
+    stopLiveClock(state);
     if (state.streamRetry) { clearInterval(state.streamRetry); state.streamRetry = null; }
     if (state.pollTimer) clearInterval(state.pollTimer);
     state.pollTimer = null;
@@ -148,6 +183,7 @@
   const api = {
     POLL_MS, PUSH_RETRY_MS, viewUrl, streamUrl, parseFrame, canStream, openStream, stopStreams,
     startConnection, beginFallback, stopConnection, canRetryPush, watchdogTick,
+    syncLiveClock, stopLiveClock, liveSeconds, liveStatus,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   global.WWConnectionState = api;

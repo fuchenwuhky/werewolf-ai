@@ -15,6 +15,8 @@
 <title>AI 狼人杀 · APP</title>
 <link rel="stylesheet" href="../shared/tokens.css">
 <link rel="stylesheet" href="m.css">
+<link rel="stylesheet" href="../shared/nocturne.css">
+<link rel="stylesheet" href="../shared/nocturne-mobile.css">
 </head>
 <body>
 <script>
@@ -52,10 +54,16 @@
       <img class="m-brand-mark" src="../assets/brand/wolf-emblem.svg" alt="月夜狼冠" width="72" height="72">
       <div class="m-brand-txt">
         <h1 class="m-brand-name">AI 狼人杀</h1>
-        <p class="m-brand-sub">月夜集会 · 与 AI 同桌</p>
+        <p class="m-brand-sub">月夜议会 · 与 AI 同桌</p>
       </div>
     </header>
     <div class="m-home-scroll">
+      <section class="m-nocturne-banner" aria-labelledby="m-nocturne-title">
+        <p class="ng-inscription">THE MOONLIT COUNCIL</p>
+        <h2 id="m-nocturne-title">月已升，诸位请入席</h2>
+        <p>一位人类 · 一桌 AI · 每句话都可能改变结局。</p>
+        <button class="btn primary big m-home-cta" id="m-play-new" data-ww-icon="start" type="button">开始新局</button>
+      </section>
       <!-- 当前档案行（复用现有档案体系）：头像徽记/自定义头像图 + 昵称 + 管理入口 -->
       <button class="m-profile-chip" id="m-profile-chip" type="button" title="我的档案（战绩/笔记按档案隔离）">
         <span class="m-profile-avatar" id="m-profile-avatar"><svg class="ww-avatar-badge" viewBox="0 0 24 24" width="1.2em" height="1.2em" focusable="false"><use href="#wwAvScholar" xlink:href="#wwAvScholar"/></svg></span>
@@ -72,8 +80,23 @@
         <button class="btn primary" id="m-resume-go" data-ww-icon="resume" type="button">继续</button>
       </div>
 
-      <!-- 主行动 -->
-      <button class="btn primary big m-home-cta" id="m-play-new" data-ww-icon="start" type="button">开始新局</button>
+      <div class="m-more-row">
+        <button class="btn ghost" id="m-settings-btn" data-ww-icon="settings" type="button">设置</button>
+        <button class="btn ghost" id="m-codex-btn" data-ww-icon="codex" type="button">角色图鉴</button>
+        <a class="btn ghost" href="../ai-cast.html?from=mobile" data-ww-icon="aiCast">AI 来客</a>
+        <button class="btn ghost" id="m-switch-profile" type="button">切换玩家</button>
+        <button class="btn ghost" id="btn-lang" data-ww-icon="lang" type="button" title="切换界面语言">中</button>
+      </div>
+      <p class="hint m-home-note">免费试玩无需密钥。真实对局使用你在设置中保存的模型。</p>
+    </div>
+  </section>
+
+  <section id="m-setup" class="m-screen hidden" data-stage="mode">
+    <header class="m-head"><button class="btn ghost" id="m-setup-back" type="button" data-ww-icon="back" aria-label="返回上一步"></button><h2 id="m-setup-title">模式准备</h2><span class="hint" id="m-setup-step">1 / 4</span></header>
+    <div class="m-scroll">
+      <div class="m-setup-mode">
+      <p class="ng-inscription">NEW MATCH</p><h3 class="m-h3">今晚，如何入席？</h3>
+      <p class="hint">试玩熟悉流程，或与你配置的 AI 模型正式交锋。</p>
       <!-- AC-11/§4：模式选择改单选卡（红开关形似扣费主行动按钮——审查项） -->
       <div class="m-mode-cards" role="radiogroup" aria-label="对局模式">
         <button class="m-mode-card sel" id="m-mock-btn" type="button" role="radio" aria-checked="true" data-mode="mock">
@@ -83,24 +106,35 @@
           <b>真实对局</b><span>调用 API · 按用量计费</span>
         </button>
       </div>
-
+      <p class="hint" id="m-mode-status" role="status"></p>
+      <button class="btn ghost" id="m-mode-settings" type="button" data-ww-icon="settings">配置模型与密钥</button>
+      </div>
+      <div class="m-setup-board">
       <!-- 开始新局 · 第一步：选板子（保留原有 m-grid 功能） -->
-      <h3 class="m-h3 m-step-title"><span class="m-step-no">1</span> 选择板子</h3>
+      <h3 class="m-h3 m-step-title">选择板子</h3>
       <div id="m-board-grid" class="m-grid m-grid-home"></div>
-      <div class="m-foot m-foot-inline">
+      <details class="ng-advanced" id="m-board-options"><summary>板子构成与规则</summary><div id="m-board-options-body"></div></details>
+      </div>
+    </div>
+      <div class="m-foot">
         <span class="hint" id="m-hint"></span>
+        <button class="btn primary big" id="m-mode-next" type="button">下一步：板子与规则</button>
         <button class="btn primary big" id="m-next" disabled data-i18n="m.next">下一步 →</button>
       </div>
+  </section>
 
-      <!-- 次级入口：不占主视区 -->
-      <div class="m-more-row">
-        <button class="btn ghost small" id="m-settings-btn" data-ww-icon="settings" data-i18n="m.settings">设置</button>
-        <button class="btn ghost small" id="m-codex-btn" data-ww-icon="codex" data-i18n="codex.entry">角色图鉴</button>
-        <button class="btn ghost small" id="btn-lang" data-ww-icon="lang" data-i18n-title="api.langSwitch" title="切换界面语言">中</button>
+  <section id="m-settings" class="m-screen hidden">
+    <header class="m-head"><button class="btn ghost" id="m-settings-back" type="button" data-ww-icon="back" aria-label="返回"></button><h2 id="m-settings-title">设置</h2></header>
+    <div class="m-scroll">
+      <div id="m-settings-menu" class="ng-settings-list">
+        <p class="ng-inscription">MAKE IT YOURS</p>
+        <button class="btn ghost" data-mobile-settings="model" type="button"><b>模型与连接</b><span>接口、密钥与高级配置</span></button>
+        <button class="btn ghost" data-mobile-settings="appearance" type="button"><b>外观与操作</b><span>字号、阅读布局与动态效果</span></button>
+        <button class="btn ghost" data-mobile-settings="data" type="button"><b>设备与数据</b><span>档案备份、导入与回收站</span></button>
+        <button class="btn ghost" data-mobile-settings="about" type="button"><b>关于</b><span>版本与本机数据说明</span></button>
       </div>
-      <p class="hint m-home-note">API / 模型配置在「<span data-ww-icon="settings">设置</span>」里（安装级，此设备共享）。</p>
+      <div id="m-settings-detail" hidden></div>
     </div>
-
   </section>
 
   <!-- 屏2：角色图鉴（渲染在共享模块 ../codex.js 里，与桌面版同一份逻辑）
@@ -183,32 +217,38 @@
     </div>
   </section>
 
-  <!-- 屏3：规则确认（开始新局 · 第二步） -->
-  <section id="m-rules" class="m-screen hidden">    <header class="m-head">
+  <!-- 屏3：参与与座位（开始新局 · 第三步） -->
+  <section id="m-rules" class="m-screen hidden">
+    <header class="m-head">
       <button class="btn small" id="m-back" data-ww-icon="back" data-i18n-title="m.back" title="返回"></button>
       <h2 id="m-rules-title" data-i18n="m.rulesTitle">对局规则</h2>
     </header>
     <div class="m-scroll">
-      <p class="m-step-label">开始新局 · 第 2 步：规则与座位</p>
+      <p class="m-step-label">3 / 4 · 参与与座位</p>
       <div id="m-board-summary" class="m-summary"></div>
       <div id="m-custom-editor" class="hidden"></div>
       <h3 class="m-h3" data-i18n="m.rulesSection">⚔ 对局规则</h3>
       <div id="m-rules-list"></div>
-      <div class="row2">
-        <label><span data-i18n="players.seat">我的座位</span><select id="m-my-seat"></select></label>
-        <label><span data-i18n="players.name">我的昵称</span><input id="m-my-name" value="我" maxlength="40"></label>
+      <div class="m-participation-card">
+        <div class="m-participation-fields">
+          <label class="m-seat-field"><span data-i18n="players.seat">我的座位</span><select id="m-my-seat"></select></label>
+          <label><span data-i18n="players.name">我的昵称</span><input id="m-my-name" value="我" maxlength="40"></label>
+        </div>
+        <!-- 玩家档案：保留原有选择/管理接线，不改变对局归属。 -->
+        <div class="m-profile-row">
+          <label><span>我的档案</span><select id="m-profile-select" aria-describedby="m-profile-help" title="对局将归属到该档案（战绩/笔记按档案隔离）"></select></label>
+          <button class="btn ghost small" id="m-profile-manage" type="button">管理档案</button>
+        </div>
+        <p class="m-participation-help" id="m-profile-help">本局战绩与私人笔记归属此档案。</p>
+        <div class="m-participation-ai">
+          <p class="m-participation-help" data-i18n="m.aiNamesHint">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
+          <a class="btn ghost" data-ww-icon="aiCast" href="../ai-cast.html?from=mobile" target="_blank" rel="noopener">AI 来客名册 ↗</a>
+        </div>
       </div>
-      <!-- 玩家档案（PROF-01）：对局归属到所选档案，战绩/笔记按档案隔离；管理弹层在 m.js 里 -->
-      <div class="m-profile-row">
-        <label><span>我的档案</span><select id="m-profile-select" title="对局将归属到该档案（战绩/笔记按档案隔离）"></select></label>
-        <button class="btn ghost small" id="m-profile-manage" type="button">管理档案…</button>
-      </div>
-      <p class="hint" style="margin-top:10px" data-i18n="m.aiNamesHint">AI 昵称开局自动从名字库随机（进入对局后无法修改）</p>
-      <a class="btn ghost" data-ww-icon="aiCast" href="../ai-cast.html?from=mobile" target="_blank" rel="noopener">AI 来客名册 ↗</a>
     </div>
     <div class="m-foot">
       <span class="hint" id="m-err"></span>
-      <button class="btn primary big" id="m-start" data-ww-icon="start" data-i18n="m.start">开始游戏</button>
+      <button class="btn primary big" id="m-start" data-ww-icon="start">下一步：确认开局</button>
     </div>
   </section>
 
@@ -272,10 +312,10 @@
         · m-rules（向导第 2 步，专注模式）与 m-game（局内有自己的顶栏 + 页签）隐藏，两套导航不叠加。
        它在本屏之后 = flex 列的最后一项，靠 .m-tabbar 的 flex:none 贴底，不覆盖任何滚动内容。 -->
   <nav class="m-tabbar" id="m-tabbar" aria-label="主页导航">
-    <button class="m-tab-btn active" id="m-tab-start" data-ww-icon="start" type="button">开始</button>
+    <button class="m-tab-btn active" id="m-tab-start" data-ww-icon="home" type="button">大厅</button>
     <button class="m-tab-btn" id="m-tab-game" data-ww-icon="game" type="button">对局</button>
     <button class="m-tab-btn" id="m-tab-codex" data-ww-icon="codex" type="button">资料</button>
-    <button class="m-tab-btn" id="m-tab-me" type="button">👤 我的</button>
+    <button class="m-tab-btn" id="m-tab-me" data-ww-icon="players" type="button">我的</button>
   </nav>
 </div>
 
@@ -283,19 +323,20 @@
 <!-- 底部弹层（手机习惯）：档案管理（PROF-01）与私人标注编辑（NOTE-04）的容器，内容由 m.js 填充 -->
 <div id="m-sheet"></div>
 <div id="m-flash" class="m-flash hidden"></div>
-<div id="m-flip" class="m-flip hidden">
-  <div class="flip-card" id="m-flip-card">
+<div id="m-flip" class="m-flip hidden" role="dialog" aria-modal="true" aria-label="我的身份牌">
+  <div class="flip-wrap">
+  <div class="flip-card" id="m-flip-card" role="button" tabindex="0" aria-label="点击或按回车揭示身份">
     <div class="flip-inner">
-      <!-- 提示文案放在内层 span：i18n 是直接重写 [data-i18n-html] 元素的 innerHTML 的，
-           挂在 .flip-back 上会把启动时注入的框层一起冲掉（桌面端的 .cb-txt 就是这个结构） -->
-      <div class="flip-back"><span class="cb-txt" data-i18n-html="m.flipHint">身份牌<br>点击翻开</span></div>
-      <div class="flip-front" id="m-flip-front"></div>
+      <div class="flip-back"></div>
+      <div class="flip-front" id="m-flip-front" hidden aria-hidden="true"></div>
     </div>
   </div>
-  <div class="flip-caption" id="m-flip-caption"></div>
-  <div class="flip-tools">
+  <div class="flip-hint" id="m-flip-hint"><span class="cb-txt" data-i18n-html="m.flipHint">身份牌<br>点击翻开</span></div>
+  <div class="flip-caption" id="m-flip-caption" hidden aria-hidden="true"></div>
+  <div class="flip-tools" hidden>
     <button class="btn primary" id="m-flip-done" data-ww-icon="start" data-i18n="m.start">开始游戏</button>
     <button class="btn" id="m-inspect-btn" data-ww-icon="inspect" data-i18n="m.inspect">检视</button>
+  </div>
   </div>
 </div>
 <script src="../i18n.js"></script>
@@ -319,7 +360,9 @@
 <script src="../shared/draft-store.js"></script>
 <script src="../shared/setup-wizard.js"></script>
 <script src="../shared/stats-bucket.js"></script>
+<script src="../shared/presentation.js"></script>
   <script src="../shared/export-status.js"></script>
+  <script src="../shared/entry-portal.js"></script>
 <script src="m.js"></script>
 </body>
 </html>

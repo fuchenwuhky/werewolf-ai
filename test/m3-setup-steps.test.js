@@ -28,7 +28,7 @@ function tag(id) {
 test('三步骨架：步进条 + 上一步/下一步 + 第三步确认区 + 修复入口', () => {
   assert.ok(html.includes('id="setup-steps"'), '要有步进条容器 #setup-steps');
   const btns = [...html.matchAll(/data-setup-step-btn="(\d)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(btns, ['1', '2', '3'], '步进条要有且只有三步（板子与规则 → 参与与座位 → 确认开局）');
+  assert.deepStrictEqual(btns, ['0', '1', '2', '3'], '四步界面：模式准备 + 原有三步核心，提交锁仍由共享模块管理');
   for (const id of ['setup-prev', 'setup-next', 'setup-confirm', 'setup-confirm-rows', 'setup-fix-settings']) {
     assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
   }

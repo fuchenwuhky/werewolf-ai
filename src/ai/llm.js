@@ -10,6 +10,7 @@
 const { scheduler: defaultScheduler, PRIORITY } = require('./scheduler');
 const { LlmFatalError } = require('../errors');
 const { parseApiKeys, perKeyChannels } = require('../config');
+const { requestScope, abortReason, deadlineError, withSignal, wait } = require('../request-scope');
 
 function buildEndpoint(baseUrl) {
   let u = String(baseUrl || '').trim().replace(/\/+$/, '');
@@ -18,7 +19,27 @@ function buildEndpoint(baseUrl) {
   return u + '/chat/completions';
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** Cline 等网关将非流式 completion 放入成功响应的 data 中；错误体仍交给原错误分类。 */
+function completionBody(body) {
+  if (body && body.success === true && !body.error && !Array.isArray(body.choices)
+    && body.data && Array.isArray(body.data.choices)) return body.data;
+  return body;
+}
+
+// DeepSeek minimal 与 low 是同一档；低档失败时真正关闭思考才是有效的轻量补救。
+const isDeepSeek = model => /deepseek/i.test(String(model));
+function lowerEffort(model, effort) {
+  if (!isDeepSeek(model)) return 'minimal';
+  return ['high', 'medium', 'xhigh', 'max', 'ultra'].includes(effort) ? 'low' : 'none';
+}
+function applyEffort(payload, model, effort) {
+  if (effort) payload.reasoning_effort = effort;
+  else delete payload.reasoning_effort;
+  if (isDeepSeek(model)) {
+    if (effort === 'minimal') payload.reasoning_effort = 'low';
+    if (effort === 'none') payload.thinking = { type:'disabled' };
+  }
+}
 
 // 思考模型的 reasoning 计入输出上限：截断时预算 ×4 连续放大，直到此硬上限
 const HARD_OUTPUT_CAP = 32768;
@@ -203,7 +224,7 @@ function finalizeReasoning(raw) {
  *   （服务端可能延迟冲刷响应头，那样会把首字延迟算成 0）
  * 返回 {content, reasoning, usage, finishReason, ttftMs, error}
  */
-async function consumeSse(res, onDelta, startedAt) {
+async function consumeSse(res, onDelta, startedAt, signal) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder('utf-8');
   let buf = '';
@@ -214,8 +235,11 @@ async function consumeSse(res, onDelta, startedAt) {
   let ttftMs = null;
   let errorPayload = null;
   const t0 = Number.isFinite(startedAt) ? startedAt : Date.now();
-  for (;;) {
-    const { done, value } = await reader.read();
+  let ended = false;
+  const cancel = () => { reader.cancel(abortReason(signal)).catch(() => {}); };
+  signal?.addEventListener('abort', cancel, { once:true });
+  try { for (;;) {
+    const { done, value } = await withSignal(reader.read(), signal);
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     let nl;
@@ -225,7 +249,8 @@ async function consumeSse(res, onDelta, startedAt) {
       if (!line || line.startsWith(':')) continue;          // SSE 注释/心跳
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
-      if (!data || data === '[DONE]') continue;
+      if (data === '[DONE]') { ended = true; break; }
+      if (!data) continue;
       let j;
       try { j = JSON.parse(data); } catch (_) { continue; }
       if (j.error) { errorPayload = j.error; continue; }
@@ -244,6 +269,11 @@ async function consumeSse(res, onDelta, startedAt) {
         if (onDelta) { try { onDelta({ content: dc, reasoning: dr }); } catch (_) { /* 回调异常不得影响请求 */ } }
       }
     }
+    if (ended) break;
+  } } finally {
+    signal?.removeEventListener('abort', cancel);
+    if (ended) reader.cancel().catch(() => {});
+    try { reader.releaseLock(); } catch (_) { /* abort 时尚有被取消的 read */ }
   }
   return { content, reasoning, usage, finishReason, ttftMs, error: errorPayload };
 }
@@ -261,11 +291,11 @@ async function consumeSse(res, onDelta, startedAt) {
  *     cfg.structuredOutput 与进程级自适应级别决定
  * @returns {content, reasoning, usage, latencyMs, ttftMs, attempts, streamed}
  */
-async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, model, timeoutMs: callTimeoutMs, signal, priority, scheduler: sched, onDelta, onStart, stream, hardCap, responseFormat } = {}) {
+async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTokens, model, timeoutMs: callTimeoutMs, signal, deadlineAt, requestBudget, retries, priority, scheduler: sched, onDelta, onStart, onStatus, stream, hardCap, responseFormat } = {}) {
   const endpoint = buildEndpoint(cfg.baseUrl);
   // 分层模型（A2）：调用方可为快速任务指定更小的模型，缺省回落 cfg.model
   const useModel = model || cfg.model;
-  const maxRetries = cfg.retries != null ? cfg.retries : 3;
+  const maxRetries = retries != null ? retries : cfg.retries != null ? cfg.retries : 3;
   // 分任务软超时（A3）：调用方可按任务压死上限。360s 的 cfg.timeoutMs 只作兜底 ——
   // 过去的用法是"所有任务都可能等 6 分钟"，一次卡住的发言就能让整局看起来死掉。
   const timeoutMs = Number(callTimeoutMs) > 0 ? Number(callTimeoutMs) : (cfg.timeoutMs || 120000);
@@ -285,7 +315,13 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     max_tokens: baseMaxTokens,
   };
   const eff = effort != null ? effort : cfg.reasoningEffort;
-  if (eff) body.reasoning_effort = eff;
+  applyEffort(body, useModel, eff);
+  const status = info => {
+    if (requestBudget && requestBudget.remaining <= 0) return;
+    if (typeof onStatus === 'function') {
+      try { onStatus({...info,attempt:requestBudget ? 4 - requestBudget.remaining : info.attempt}); } catch (_) {}
+    }
+  };
 
   // 只有调用方真的消费增量时才走流式：
   // 流式的价值在于实时反馈（前端"打字中"、上帝视角独白直播）；
@@ -313,10 +349,12 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     });
   }
   let usageEstimatedWarned = false;
+  const scope = requestScope({signal, deadlineAt});
 
   // 整段"重试 + 退避"都在泳道内执行：退避期间也不该放别的请求出去，
   // 否则等于自己在服务商侧制造并发。
   const job = async (slot = 0) => {
+    scope.check();
     // 泳道 ↦ Key：单 Key（默认）时恒等于 cfg.apiKey，多 Key 时每把 Key 打自己的账号。
     const apiKey = apiKeys.length ? apiKeys[Math.min(slot, apiKeys.length - 1)] : cfg.apiKey;
     // 请求真正开始时才通知上层（直播缓冲放在这一刻开始，才不会出现"还没轮到就已经在打字"的错位）
@@ -331,7 +369,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     let attempts = 0;
     let lastErr = null;
     let tokenBudget = baseMaxTokens;
-    // A3 降档重试：超时/截断时**先降思考强度**（minimal）再试，而不是原样重试或直接翻倍预算。
+    // A3 降档重试：先使用模型真正支持的低档；DeepSeek 低档再失败时关闭思考。
     // 理由：这两类失败的根因都是"模型在思考里绕太久"，把 effort 压到最低比给更多预算更快也更省；
     // 只有降档后仍被截断（说明是正文太长而非思考太长）才回退到旧的"翻倍预算"路径。
     let curEffort = eff;
@@ -341,24 +379,20 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
     let streamDown = 0;
     let structDown = 0;
     while (attempts <= maxRetries) {
-      attempts++;
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-      // 外部中止（终止对局）：转发到本次请求的 ctrl；超时 abort 与外部 abort 共用同一信号
-      let onExternalAbort = null;
-      if (signal) {
-        onExternalAbort = () => ctrl.abort();
-        signal.addEventListener('abort', onExternalAbort, { once: true });
+      scope.check();
+      if (requestBudget && requestBudget.remaining <= 0) {
+        const err = new Error('本次 AI 决策已达到请求次数上限'); err.code = 'LLM_ATTEMPTS'; err.retryable = false;
+        throw err;
       }
+      attempts++;
+      const attemptDeadline = Math.min(Date.now() + timeoutMs, Number(deadlineAt) || Infinity);
+      const attemptScope = requestScope({signal:scope.signal, deadlineAt:attemptDeadline});
       const t0 = Date.now();
-      const useStream = wantStream && streamMode !== 'off';
+      let useStream = wantStream && streamMode !== 'off';
       try {
         const payload = { ...body, max_tokens: tokenBudget };
         // 降档后按调用级覆盖 effort（body 里的 reasoning_effort 是初始档位）
-        if (curEffort !== eff) {
-          if (curEffort) payload.reasoning_effort = curEffort;
-          else delete payload.reasoning_effort;
-        }
+        applyEffort(payload, useModel, curEffort);
         if (useStream) {
           payload.stream = true;
           if (streamMode === 'usage') payload.stream_options = { include_usage: true };
@@ -369,7 +403,8 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           rf = structuredMode === 'json_object' ? { type: 'json_object' } : responseFormat;
           payload.response_format = rf;
         }
-        const res = await fetch(endpoint, {
+        if (requestBudget) requestBudget.remaining--;
+        const res = await attemptScope.run(fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -381,11 +416,10 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
             ...(cfg.keepAlive === false ? { Connection: 'close' } : {}),
           },
           body: JSON.stringify(payload),
-          signal: ctrl.signal,
-        });
-        clearTimeout(timer);
+          signal: attemptScope.signal,
+        }));
         if (!res.ok) {
-          const text = await res.text();
+          const text = await attemptScope.run(res.text());
           // 服务商不支持流式参数：自适应降级后重试一次，避免整局失去流式能力
           if (useStream && (res.status === 400 || res.status === 422) && streamMode !== 'off' && streamDown < 2) {
             streamDown++;
@@ -434,11 +468,12 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         // "没有内容" → 校验失败 → 重试 → 永远重复（单局空转上万次调用，真实额度按次烧掉）。
         // 用 Content-Type 判断（比嗅探首字节稳，也不必预读流）：
         //   · 是错误体 → 按业务码分类，致命就走既有的暂停路径；
-        //   · 只是 JSON 而不是 SSE（网关改造过响应）→ 退回非流式重试一次，让非流式分支正常处理。
+        //   · 已有 JSON 回复 → 本次直接读取，后续改非流式；不丢弃已付费的成功回答再外呼。
+        let jsonData;
         if (useStream) {
           const ctype = String(res.headers.get('content-type') || '').toLowerCase();
           if (ctype.includes('application/json')) {
-            const data = await res.json().catch(() => null);
+            const data = completionBody(await attemptScope.run(res.json()));
             const cls = classifyFailure(res.status, JSON.stringify(data || {}), res.headers);
             if (data && (data.error || data.code)) {
               if (cls.fatal) {
@@ -453,15 +488,10 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
               berr.rateLimited = !!cls.rateLimited;
               throw berr;
             }
-            if (streamMode !== 'off') {
-              streamMode = 'off';
-              attempts--; // 协议降级不消耗重试预算
-              if (logger) logger.warn('llm', `${label} 流式请求收到 JSON 而非 SSE（网关改造过响应）→ 退回非流式重试`);
-              const derr = new Error('响应体不是 SSE，退回非流式重试');
-              derr.retryable = true;
-              derr.noBackoff = true;
-              throw derr;
-            }
+            streamMode = 'off';
+            useStream = false;
+            jsonData = data;
+            if (logger) logger.warn('llm', `${label} 流式请求收到 JSON 而非 SSE → 直接读取已有回复，后续使用非流式`);
           }
         }
 
@@ -482,7 +512,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         let finishReason = null;
         let ttftMs = null;
         if (useStream) {
-          const s = await consumeSse(res, onDelta, t0);
+          const s = await consumeSse(res, onDelta, t0, attemptScope.signal);
           if (s.error) {
             const cls = classifyFailure(res.status, JSON.stringify({ error: s.error }), res.headers);
             if (cls.fatal) throw new LlmFatalError(cls);
@@ -498,7 +528,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           finishReason = s.finishReason;
           ttftMs = s.ttftMs;
         } else {
-          const data = await res.json();
+          const data = jsonData !== undefined ? jsonData : completionBody(await attemptScope.run(res.json()));
           // 有的服务商把限流/配额错误放在 HTTP 200 的响应体里：同样按业务码处置
           if (data && data.error) {
             const cls = classifyFailure(res.status, JSON.stringify(data), res.headers);
@@ -523,13 +553,13 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         // 服务商返回成功但没有可用回复 → 明确报错并记录可诊断信息
         if (typeof content !== 'string' || !content.trim()) {
           // ① 先降档：思考模型把预算全花在 reasoning 上（finish_reason=length），
-          //    压到 minimal 通常一次就够，且比翻倍预算更快（A3 实测：这一步就能救回绝大多数截断）
+          //    用模型支持的低档/关闭思考补救，避免 minimal 映射回 low 后仍然耗尽思考预算。
           if (finishReason === 'length' && !downgraded && baseMaxTokens < escalationCap) {
             downgraded = true;
             const fromEffort = curEffort;
-            curEffort = 'minimal';
+            curEffort = lowerEffort(useModel, curEffort);
             tokenBudget = Math.min(Math.max(Math.round(baseMaxTokens * 1.5), 1000), escalationCap);
-            if (logger) logger.warn('llm', `${label} 回复被截断（思考耗尽）→ 降档重试（effort ${fromEffort || '默认'}→minimal，预算 ${baseMaxTokens}→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
+            if (logger) logger.warn('llm', `${label} 回复被截断（思考耗尽）→ 降档重试（effort ${fromEffort || '默认'}→${curEffort}，预算 ${baseMaxTokens}→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
             const err = new Error('max_tokens 被思考耗尽，降档重试');
             err.retryable = true;
             err.noBackoff = true;
@@ -589,25 +619,28 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         lane.noteSuccess(slot);
         return out;
       } catch (err) {
-        clearTimeout(timer);
-        if (signal && onExternalAbort) signal.removeEventListener('abort', onExternalAbort);
+        if (scope.signal.aborted) throw abortReason(scope.signal);
+        // 同一截止时间的两个 timer 触发顺序不保证；不能把总截止误认成可再试的单次软超时。
+        if (Number.isFinite(deadlineAt) && (Date.now() >= deadlineAt || (attemptScope.signal.aborted && attemptDeadline === deadlineAt))) throw deadlineError();
+        if (attemptScope.signal.aborted) err = abortReason(attemptScope.signal);
         lastErr = err;
         const externalAbort = !!(signal && signal.aborted); // 外部终止 ≠ 超时：立即退出不重试
-        const timedOut = !externalAbort && err.name === 'AbortError';
+        const timedOut = !externalAbort && (err.timedOut || err.name === 'AbortError');
         if (timedOut) err.timedOut = true; // 让上层能区分"超时"与"服务端报错"
         // 限流反馈给调度器：乘性回退该 Key 的泳道数（"这把 Key 实际允许几并发"只有服务商知道，
         // 撞到限流就是最直接的证据）。降档重试与退避照旧，两者互补：泳道数治源头，退避治当下。
         if (!externalAbort && err.rateLimited) lane.noteRateLimited(slot);
-        // 超时先降档（A3）：原样重试大概率再等一个软超时，把 p99 拖成两三倍；压到 minimal 往往能过。
+        // 单次软超时先有效降档；总截止已在上面拦截，绝不延长总预算。
         if (timedOut && !downgraded && attempts <= maxRetries) {
           downgraded = true;
           const fromEffort = curEffort;
-          curEffort = 'minimal';
+          curEffort = lowerEffort(useModel, curEffort);
           tokenBudget = Math.min(Math.max(Math.round(baseMaxTokens * 0.6), 800), escalationCap);
-          if (logger) logger.warn('llm', `${label} 请求超时（${Math.round(timeoutMs / 1000)}s）→ 降档重试（effort ${fromEffort || '默认'}→minimal，预算→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
+          if (logger) logger.warn('llm', `${label} 请求超时（${Math.round(timeoutMs / 1000)}s）→ 降档重试（effort ${fromEffort || '默认'}→${curEffort}，预算→${tokenBudget}）`, { task: meta.task, seat: meta.seat });
+          status({status:'retrying',attempt:attempts+1});
           continue; // 不等待退避：降档本身就是换一种打法，退避只是白等
         }
-        const retryable = !externalAbort && (err.retryable || err.name === 'AbortError' || err.name === 'TypeError');
+        const retryable = !externalAbort && (err.retryable || timedOut || err.name === 'TypeError');
         const msg = externalAbort ? '对局已终止，请求被中止'
           : err.name === 'AbortError' ? `请求超时（${Math.round(timeoutMs / 1000)}s，思考/生成未完成被中止）` : err.message;
         if (logger) logger.warn('llm', `${label} 第${attempts}次失败：${msg}`, { task: meta.task, seat: meta.seat, retryable });
@@ -617,6 +650,7 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
           break;
         }
         if (!retryable || attempts > maxRetries) break;
+        status({status:'retrying',attempt:attempts+1});
         // 死连接（复用连接被掐断）：立即重试，不退避——退避 0.8s 纯属白等，重试基本必然成功
         const stale = isStaleSocketError(err);
         if (stale) {
@@ -630,14 +664,17 @@ async function chatCompletion(cfg, messages, { logger, meta = {}, effort, maxTok
         //（抖动用于避免多客户端同时退避造成的同步撞点）
         if (!err.noBackoff) {
           const waitMs = backoffMs({ attempt: attempts, retryAfterMs: err.retryAfterMs, noBackoff: stale || !!err.noBackoff });
-          if (waitMs > 0) await sleep(waitMs);
+          if (waitMs > 0) await wait(waitMs, scope.signal);
         }
+      } finally {
+        attemptScope.close();
       }
     }
     throw lastErr || new Error('LLM 调用失败');
   };
 
-  return lane.enqueue(job, { priority: priority != null ? priority : PRIORITY.decision, label });
+  try { return await scope.run(lane.enqueue(job, { priority: priority != null ? priority : PRIORITY.decision, label, signal:scope.signal })); }
+  finally { scope.close(); }
 }
 
 /** 测试连通性（设置页"测试连接"）：要求模型真实返回非空内容才算成功 */

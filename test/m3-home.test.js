@@ -71,11 +71,11 @@ test('屏1 文案：试玩要说成"流程脚本、不调用模型"，并说明�
   assert.ok(hint.length > 0, '缺 Key 警示元素要保留（真实模式才提示）');
 });
 
-test('屏1 空态：无可恢复对局时给出"开始新局 + 三步"的下一步', () => {
+test('屏1 空态：无可恢复对局时给出开始新局的下一步', () => {
   const html = read('web/index.html');
   const empty = html.slice(html.indexOf('id="resume-empty"'), html.indexOf('</div>', html.indexOf('id="resume-empty"')));
   assert.ok(empty.length > 0, '空态容器必须存在');
-  assert.match(empty, /三步|第 1 步|板子与规则/, '空态要指向三步开局的走法');
+  assert.match(empty, /开始新局/, '紧凑空态仍须指向主行动');
 });
 
 test('共享模块注册：三步向导脚本要在两端都被加载，且早于各自的入口脚本', () => {

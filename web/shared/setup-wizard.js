@@ -114,7 +114,7 @@
       ? o.participation
       : resolveParticipation({ participation: seededParticipation });
     /** 恢复场景（有既有模式）之后模式不许被静默改掉 */
-    const modeOrigin = D.MODES.includes(existingMode) ? existingMode : null;
+    let modeOrigin = D.MODES.includes(existingMode) ? existingMode : null;
 
     let data = Object.assign({}, seed, o.board !== undefined ? { board: clone(o.board) } : {});
     let step = 1;
@@ -153,13 +153,18 @@
       return api;
     }
 
-    /** 改模式：只有显式 `{explicit:true}` 才允许覆盖既有模式（B2 不静默切换） */
+    /** 改模式：只有显式 `{explicit:true}` 才允许覆盖既有模式（B2 不静默切换）。
+     *  准许后必须同时更新闭包和草稿，否则 UI 已切换而最终提交仍沿用旧模式。 */
     function setMode(next, flags) {
       assertAxesOrThrow('mode', next);
       const drift = modeOrigin ? D.modeDrift(modeOrigin, next) : null;
       if (drift && !(flags && flags.explicit)) {
         return { ok: false, reason: drift, mode };
       }
+      mode = next;
+      if (flags && flags.explicit) modeOrigin = next;
+      frozen = null;
+      persist();
       return { ok: true, reason: '', mode: next };
     }
 

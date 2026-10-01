@@ -20,11 +20,47 @@ function sheriffNote(player, kind, voteWeight) {
   return hold ? `\n【警徽打法】${hold}` : '';
 }
 
+/** Code-generated turn boundary: never infer a future speech from a role, name or personality. */
+function speechTimeline(game, player, req) {
+  // General speech already has the snapshot + shared discipline. Add the detailed boundary
+  // only during elections: repeating it everywhere would displace today's transcript.
+  if (req.task !== 'sheriff_speech') return '';
+  const events = typeof game.visibleEvents === 'function' ? game.visibleEvents(player.seat, 0) : [];
+  const day = Number(game.day) || 1;
+  const electionPK = req.speechRound === 'sheriff_pk' || req.canWithdraw === false;
+  const context = electionPK ? 'pk' : 'sheriff';
+  const round = electionPK ? '警长竞选平票 PK' : '警上竞选首轮';
+  const said = [...new Set(events.filter(e => e.day === day && e.type === 'speech'
+    && (e.data?.context || 'day') === context && (!game.phase || e.phase === game.phase)).map(e => Number(e.actor)).filter(s => Number.isInteger(s) && s > 0))];
+  let order = Array.isArray(req.speechOrder) ? req.speechOrder : [];
+  if (!order.length && !electionPK) {
+    order = events.filter(e => e.day === day && e.type === 'sheriff_run' && e.data?.run).map(e => Number(e.actor));
+  }
+  const validOrder = [...new Set(order.filter(s => Number.isInteger(s) && s > 0))];
+  const waiting = validOrder.filter(s => s !== player.seat && !said.includes(s));
+  const seats = list => list.length ? list.map(s => `${s}号`).join('、') : '无';
+  const lines = [
+    `\n【本轮时间与证据边界】第${day}天 · ${round}，现在轮到${player.seat}号。`,
+    `本轮已发言：${seats(said)}。历史发言可引用，但须注明此前轮次。`,
+  ];
+  if (validOrder.length) lines.push(`本轮其他尚未发言者：${seats(waiting)}。上警/昵称/性格不是发言证据，不许编造后置位观点。`);
+  lines.push(electionPK
+    ? '首轮警长投票已结束；PK 重投尚未发生。警长票不是放逐票。'
+    : '竞选未结束；本轮警长投票、当选结果和今天放逐投票尚未发生。');
+  lines.push('过去行动的理由仅限当时已知信息，不能用今天上警/发言/投票解释昨夜选人；新信息只用于当前判断。');
+  if (day === 1) lines.push('首夜前没有本局公开发言或票型。首验理由只能是当时的座位偏好等，不能是今天“上警积极/发言强势”。');
+  lines.push('原话须确实存在；宣称不是事实，推测用“倾向/可能”，计划用“今晚打算”。缺证据就具体提问，不编造。');
+  if (player.role === 'seer') lines.push('报查验时座位/夜次/金水或查杀须符合“你确知”；可藏信息，不能改报或多报。');
+  if (ROLES[player.role]?.team === 'wolf') lines.push('狼人仍可悍跳、报假查验；但须符合夜次与因果，不能编造他人已发言/投票。');
+  lines.push('只做一次简短核对：时序→证据→合法动作，然后输出 JSON，不展开长推演。');
+  return lines.join('\n');
+}
+
 /** 每种任务的指令与 JSON 格式要求 */
 function taskInstruction(game, player, req) {
   const cand = (list) => (list && list.length ? `可选目标座位：${list.join('、')}。` : '');
   const retryNote = req._retryNote ? `\n\n⚠️ ${req._retryNote}` : '';
-  const base = '请只输出一个 JSON 对象，不要输出任何其他文字或代码围栏。';
+  const base = speechTimeline(game, player, req) + '\n请只输出一个 JSON 对象，不要输出任何其他文字或代码围栏。';
   // 宣称自报（B2）：真正的账本由引擎扫发言正文得到，这里只是让模型补上规则扫不到的措辞
   const claimsNote = '若发言包含身份自称或查验/用药宣称，请在 claims 里列出（没有就空数组）：'
     + '{"claims":[{"kind":"seer/witch/guard/hunter/villager/other","subject":<座位号，自认身份填0>,"value":"self/wolf/good/save/poison"}]}。'
@@ -35,12 +71,12 @@ function taskInstruction(game, player, req) {
   // "有些事天黑之后你们自然会懂"这种空话，而那句话等于自称掌握夜晚信息，好人不会这么说，
   // 谁说了谁被当狼（用户实战反馈）。这里把"必须给出可检验的内容"和一条硬红线写死。
   const SPEECH_DISCIPLINE = '\n【发言要求】' +
-    '① 落地：至少给出 1 个明确的怀疑对象（座位号）并说明理由（发言矛盾/票型异常/逻辑跳跃/身份声称可疑）；' +
+    '① 落地：有依据才点名怀疑对象并说明理由；没有足够证据时，明确想听哪个座位回答什么，不许硬造发言矛盾或票型；' +
     '② 表态：说清你自己的立场或票向（"我倾向投X"或"我先听X怎么说"）；' +
     '③ 有问必答：别人点了你，就正面回应，别绕开；' +
     '④ 像真人：2~6 句，口语化，别写小作文、别列标题、别复述规则。' +
     '\n【硬红线】不许暗示自己掌握夜晚发生的事（例如"天黑之后你们自然会懂""有些事你们不知道""我心里有数"），' +
-    '也不许用谜语、空话代替内容 —— 好人没有夜间信息，这么说只会被当成狼；狼说这种话等于自曝。' +
+    '也不许用谜语、空话代替内容；神职可以按自己的真实私密记录决定是否公开信息，不能越过身份权限。' +
     '同样不许说"过""我没什么想法""随便投"这类无效发言。';
   // 投票纪律（放逐/PK 共用）。原先投票指令只有一句"请选出你认为最可能是狼人的玩家"，
   // 没有任何策略约束 → 弃票随手就来、发言说怀疑谁却投别人、狼队整齐同投暴露关系。
@@ -104,7 +140,7 @@ function taskInstruction(game, player, req) {
     case 'crow_curse':
       return `你是乌鸦，今晚诅咒一名玩家（不能是自己）。被诅咒者明天的放逐投票中额外+0.5票（警长竞选不受影响），每晚重新诅咒会覆盖之前的。常见思路：诅咒你最怀疑的狼帮好人聚集火力，或诅咒悍跳者提高其被推出局概率。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
     case 'admirer_crush':
-      return `第一夜开始了，你是暗恋者，必须暗中选择一名玩家作为暗恋对象（对方不知情）。你的胜负阵营与他终身绑定：他是神你算神、民你算民、狼你随狼营（但预言家查验你永远是好人）。选前思考：板子神民狼比例、谁的位置和发言风格更像生存率高的阵营；绑狼风险高但验人免疫是护身符。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
+      return `第一夜开始了，你是暗恋者，必须暗中选择一名玩家作为暗恋对象（对方不知情）。你的胜负阵营与他终身绑定：他是神你算神、民你算民、狼你随狼营（但预言家查验你永远是好人）。选前只能参考板子比例、座位等开局已知信息；首夜尚无公开发言，不能假称已观察其发言风格。绑狼风险高但验人免疫是护身符。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
     case 'seer_check':
       return `请选择今晚查验的对象。${cand(req.candidates)}请输出 {"target":<座位号>}。${base}${retryNote}`;
     case 'witch': {
@@ -118,7 +154,7 @@ function taskInstruction(game, player, req) {
     case 'sheriff_run':
       return `警长竞选开始，是否上警？上警将参与竞选演讲并有机会成为警长（1.5票、决定发言顺序），但会暴露身份受关注。${ROLES[player.role].team === 'wolf' ? '作为狼人，上警可抢警徽、悍跳、掩护队友；狼队商量过由你上就务必上。' : ''}请输出 {"run":true/false}。${base}${retryNote}`;
     case 'sheriff_speech':
-      return `轮到你警上竞选演讲。请输出 {"text":"你的演讲","withdraw":false}` +
+      return `轮到你警上竞选演讲。请输出 {"text":"你的演讲","withdraw":false}。${SPEECH_DISCIPLINE}${claimsNote}` +
         (req.canWithdraw ? '。演讲后如果你想退出竞选可设 "withdraw":true（退水后无被投票权也无投票权）' : '') +
       (req.canExplode ? `。作为狼阵营你也可以自爆吞警徽/打断局势：{"text":"...","explode":true}` + (player.role === 'whitewolfking' ? `，白狼王自爆必须给出带走目标：{"text":"...","explode":true,"target":<座位号>}` : '') : '') +
       (ROLES[player.role].team === 'wolf' ? '。作为狼人可悍跳预言家（假查验+警徽流+心路历程）；队友已跳则别撞车；自洽红线：首夜只能声称 1 个查验结果，报 2 个等于当场穿帮' : '') +
@@ -185,11 +221,11 @@ function buildCommonPrompt(game) {
   lines.push('## 时间与信息常识（防幻觉铁律）');
   lines.push('- 游戏按"夜晚→天亮→白天发言→投票"循环推进。事件都按发生顺序给出，【局面快照】开头的"当前时刻"就是唯一的现在，一切以快照为准。');
   lines.push('- 第1夜你只知道发牌时系统告诉你的信息（身份、队友）。狼人第1夜不知道任何人的身份——"狼人首夜刀预言家/刀神职"这类剧本没有任何信息支撑，绝不要臆测。');
-  lines.push('- 只基于时间线上真实出现过的事件与发言推理。日志里没有的事就是没发生过，不要脑补"按常理应该已经发生了什么"。');
-  lines.push('- 已翻牌的身份是确定事实；出局玩家不再有任何发言与行动。');
+  lines.push('- 只根据可见记录推理；未发生的事不能当证据，也不能用后来的发言/上警解释此前夜间行动。');
+  lines.push('- 翻牌身份是事实；出局者只能完成规则允许的遗言/离场技能，不能参加常规行动。');
   if (!game.rules.revealOnDeath) lines.push('- **本局为暗牌局（死亡不翻牌）**：任何死者的身份都不公开，你没有渠道得知死者是什么牌——绝不声称、暗示或基于"死者是某身份"推理。死者死因也不公开。唯一例外：生前公开行使技能的行为（开枪、骑士决斗、白痴免疫、狼人自爆）本身是公开事实。');
   lines.push('- 你的私密信息（查验/刀口/用药/守护/队友）以快照中"你确知"清单为准；其余玩家未翻牌前身份一律未知，"公开宣称"区只是"某人这样说过"的记录，不是事实。');
-  lines.push('- **声称必须自洽（穿帮红线）**：编造的信息要经得起规则核对。硬账目：预言家每晚只验一人——第1天白天最多声称 1 个查验，之后每过一夜可多报 1 个，"一夜双验"等于自爆；女巫两药各限一次；死人不会发言行动。战术谎言可以撒，账目错的谎言是低级穿帮。');
+  lines.push('- **声称必须自洽（穿帮红线）**：编造的信息要经得起规则核对。硬账目：预言家每晚只验一人——第1天白天最多声称 1 个查验，之后每过一夜可多报 1 个，"一夜双验"等于自爆；女巫两药各限一次；死者仅遗言/离场技能。战术谎言可以撒，账目错的谎言是低级穿帮。');
   lines.push('');
   lines.push('## 行为要求（通用）');
   lines.push('- 全程中文口语化发言，像真人玩家，正常发言 50~150 字，有明确观点和逻辑。用符合你性格的方式说话，但不要每句都提自己的性格标签。');

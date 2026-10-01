@@ -140,9 +140,11 @@ test('llm 接入：排队期间对局被终止，则不发请求直接失败', a
     const blocker = s.enqueue(async () => { await sleep(20); }, { priority: PRIORITY.decision });
     const queued = chatCompletion({ baseUrl: 'http://x', apiKey: 'k', model: 'm', maxTokens: 10, retries: 0 },
       [{ role: 'user', content: 'hi' }], { scheduler: s, signal: ctrl.signal, meta: { label: '等待中' } });
-    ctrl.abort(); // 排队期间终止对局
+    const cancelled = assert.rejects(() => queued, (e) => e.aborted === true);
+    ctrl.abort(); // 现在立即撤销排队任务，不能等 blocker 完成后才挂拒绝处理。
+    await cancelled;
+    assert.strictEqual(s.depth, 0, '取消的排队项立即移除，而不是等泳道空闲才发现');
     await blocker;
-    await assert.rejects(() => queued, (e) => e.aborted === true);
     assert.strictEqual(fetchCalls, 0, '排队中被取消的任务不得发出任何网络请求');
   } finally { global.fetch = origFetch; }
 });

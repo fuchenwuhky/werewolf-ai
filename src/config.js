@@ -51,12 +51,9 @@ const DEFAULT_CONFIG = {
   // 密钥-地址绑定指纹（审核 P0-1/P1-2）：baseUrl 与 Key 成对可信的凭证，
   // 必须进白名单才能持久化 —— 丢保存会导致真实对局被绑定校验全部拒绝
   keyBinding: '',
-  // 发言类任务思考强度：low=最低 / medium=中档（默认）/ high=最深。
-  // 为什么默认从 high 降到 medium（实测依据，6 局真实对局）：
-  //   高思考档的发言平均等 103.6s、单次最长 362s（≈ 撞满 6 分钟硬超时），
-  //   而同模型同接口的微决策只要 1.3~8.8s —— 慢的不是模型，是"给发言的思考预算"。
-  //   历史遗留的 max 档已下线（迁移为 medium）。
-  reasoningEffort: 'medium',
+  // 发言默认 low：依靠严格的阶段/证据提示保障质量，而不是每句都加深思考。
+  // medium/high 仍可显式选择；已有自定义档位不自动覆盖。
+  reasoningEffort: 'low',
   fastEffort: 'low',         // 快速任务（夜晚行动/投票/警竞等）思考强度：默认最低保流畅
   // info = 按"信息含量"调度思考预算（常规决策降档、关键节点加档，实测 p90 降 7×）；
   // flat = 旧的按任务名一刀切，保留用于 A/B 对比与回滚
@@ -101,8 +98,8 @@ const PACES = {
   },
   standard: {
     label: '标准局',
-    desc: '出厂默认：中档思考（发言不再动辄等上百秒）+ 按信息含量分配预算，平衡发言质量与速度。',
-    values: { effortPolicy: 'info', reasoningEffort: 'medium', fastEffort: 'low', digestMinEvents: 6, digestKeep: 6, contextBudget: 12000 },
+    desc: '出厂默认：轻度思考 + 严格阶段与证据约束，按信息量分配输出预算，保留完整的常用记忆。',
+    values: { effortPolicy: 'info', reasoningEffort: 'low', fastEffort: 'low', digestMinEvents: 6, digestKeep: 6, contextBudget: 12000 },
   },
   deep: {
     label: '深度局',

@@ -3,6 +3,14 @@
  */
 'use strict';
 
+/** 人类主动结束：取消作用域与流程驱动必须传播同一种结束语义，不能误作模型失败。 */
+class ForceEnded extends Error {
+  constructor() {
+    super('对局被手动终止');
+    this.code = 'FORCE_ENDED';
+  }
+}
+
 /**
  * LLM 侧不可重试的致命错误：配额耗尽 / 套餐权限受限 / 鉴权失败。
  * 语义：重试无意义，且**绝不能降级**（降级＝随机票＝一局烂棋），应暂停对局并明示原因。
@@ -32,4 +40,4 @@ class GamePaused extends Error {
   }
 }
 
-module.exports = { LlmFatalError, GamePaused };
+module.exports = { LlmFatalError, GamePaused, ForceEnded };

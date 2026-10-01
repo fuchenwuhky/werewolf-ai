@@ -49,7 +49,8 @@ const state = {
   seatListNodes: new Map(), // 列表视图座位行节点（与圆桌共用同一份选择状态）
   seatStructKey: '',     // 座位结构签名（人数/我的座位/视角）：变化才全量重建，否则逐座位补丁
   seatView: 'ring',      // 座位视图：'ring' 圆桌 | 'list' 列表（记住选择，切换不清草稿）
-  notesCollapsed: false, // 右侧笔记栏在宽屏（≥960，与 style.css 的收栏断点同一口径）下是否被用户收起
+  notesCollapsed: true,
+  notesChoice: false, // Empty notes start closed; an explicit toggle wins over later loads.
   newMsgCount: 0,        // 用户上翻历史期间累计的新发言条数（新消息胶囊）
   modalReturnFocus: null,// 最上层模态的焦点来源（关闭后焦点回来源）
   gameMeta: null,        // 懒加载的当前局元数据（mock 等，视图负载里没有；结算标识用）
@@ -111,13 +112,21 @@ function hasUnsavedDraft() {
 /** 当前设置屏的值（只收开局参数；**不收**任何 Key/令牌 —— 写入前还会再过一道 sanitizeDraft） */
 function setupDraftOf() {
   const s = state.setup || {};
-  return { boardId: s.boardId, mode: s.mode, mySeat: s.mySeat, boardCounts: s.boardCounts, rules: s.rules };
+  return {
+    boardId: s.boardId,
+    mode: $('#use-mock') && !$('#use-mock').checked ? 'real' : 'mock',
+    participation: s.mode,
+    mySeat: s.mySeat,
+    boardCounts: s.boardCounts,
+    rules: s.rules,
+  };
 }
 
 /** 把设置屏当前的值落到"它所属档案"的草稿键上（事件委托统一调它，见 init） */
 function persistSetupDraft() {
   if (!state.setupDraftProfileId || !state.meta) return;
-  window.WWDraftStore.writeSetupDraft(sessionStorage, state.setupDraftProfileId, setupDraftOf());
+  const prior = window.WWDraftStore.readSetupDraft(sessionStorage, state.setupDraftProfileId) || {};
+  window.WWDraftStore.writeSetupDraft(sessionStorage, state.setupDraftProfileId, { ...prior, ...setupDraftOf() });
 }
 
 /**
@@ -147,7 +156,10 @@ function applySetupDraft(draft) {
   //   ⇒ 开局落到"试玩"（纯流程脚本、无真人身份牌）⇒ **身份翻牌遮罩不再出现**。
   //   症状是静默的（无异常、无 console 报错），只能靠运行时门禁的 7b 段照出来。
   //   契约不变：§8.2 :262「恢复既有草稿/对局时保持它原来的模式，不能静默切换」。
-  state.setup.mode = (d.mode === 'play' || d.mode === 'watch') ? d.mode : state.setup.mode;
+  state.setup.mode = (d.participation === 'play' || d.participation === 'watch') ? d.participation
+    : ((d.mode === 'play' || d.mode === 'watch') ? d.mode : state.setup.mode);
+  const mockChoice = $('#use-mock');
+  if (mockChoice) mockChoice.checked = d.mode === 'real' ? false : (d.mode === 'mock' || !draft ? true : mockChoice.checked);
   applyBoardTemplate(d.boardId && state.meta.boards[d.boardId] ? d.boardId : 'adv12');
   if (d.boardId === 'custom' && d.boardCounts) {
     state.setup.boardId = 'custom';
@@ -183,6 +195,24 @@ function loadSetupDraftFor(profileId) {
  * 这里只保留这个名字，是为了不动下面 4 处使用点（`PHASE_LABEL[phase] || phase` 的兜底语义不变）。
  */
 const PHASE_LABEL = window.WWPhaseLabel.PHASE_LABEL;
+const BOARD_LABEL_EN = Object.freeze({
+  adv12: '12-player advanced · Guard (default)',
+  guard12: '12-player Guard · standard wolves',
+  std12: '12-player standard · Idiot',
+  quick10: '10-player quick match',
+  wwknight12: '12-player White Wolf King · Knight',
+  wwkguard12: '12-player White Wolf King · Guard',
+  dreamer12: '12-player Wolf King · Dreamer',
+  wolfbeautyknight12: '12-player Wolf Beauty · Knight',
+  crowhidden12: '12-player Crow · Hidden Wolf',
+  admirer12: '12-player Admirer',
+});
+const ROLE_LABEL_EN = Object.freeze({
+  villager: 'Villager', wolf: 'Werewolf', wolfking: 'Wolf King', whitewolfking: 'White Wolf King',
+  seer: 'Seer', witch: 'Witch', hunter: 'Hunter', guard: 'Guard', idiot: 'Idiot',
+  knight: 'Knight', dreamer: 'Dreamer', wolfbeauty: 'Wolf Beauty', crow: 'Crow',
+  hiddenwolf: 'Hidden Wolf', admirer: 'Admirer',
+});
 
 // 座位视图偏好（FIN-05）：圆桌 / 列表记住上一次选择
 // AC-10：左栏 240px 塞 12 人圆桌（座位 56px/姓名 10px）不可读——默认用列表视图；
@@ -277,7 +307,115 @@ function showPairingGate() {
 }
 
 // ---------------- 设置页 ----------------
+const lobbyScrollPositions = new Map();
+let replayingNavigation = false;
+function rememberLobbyRoute(view, step) {
+  if (replayingNavigation) return;
+  const current = history.state || {};
+  const route = { wwPage: view, wwStep: step };
+  if (current.wwPage === view && current.wwStep === step) return;
+  try { history[current.wwPage ? 'pushState' : 'replaceState'](route, ''); } catch (_) { /* restricted browser history */ }
+}
+window.addEventListener('popstate', (event) => {
+  const route = event.state;
+  if (!route?.wwPage) return;
+  if (!$('#screen-game').classList.contains('hidden') && state.game) {
+    if (confirm('返回大厅？对局会保留，可稍后继续。')) backHome();
+    else history.pushState({ wwPage: 'game' }, '');
+    return;
+  }
+  if ($('#modal-root').children.length) {
+    (state.modalDismiss || closeModal)();
+    history.pushState({ wwPage: $('#screen-setup').dataset.view }, '');
+    return;
+  }
+  replayingNavigation = true;
+  showScreen('screen-setup');
+  if (route.wwPage === 'player') void openPlayerCenter();
+  else if (route.wwPage === 'history') void openHistoryPage();
+  else if (route.wwPage === 'rulebook') openRulebookPage();
+  else if (route.wwPage === 'settings') openSettingsPage();
+  else if (route.wwPage === 'wizard') openSetupWizard(route.wwStep || 0);
+  else setLobbyView('lobby');
+  replayingNavigation = false;
+});
+
+function setLobbyView(view) {
+  const screen = $('#screen-setup');
+  const setup = $('#setup-section');
+  if (!screen || !setup) return;
+  const scroll = $('#screen-setup .setup-scroll');
+  if (screen.dataset.view && screen.dataset.view !== view) lobbyScrollPositions.set(screen.dataset.view, scroll.scrollTop);
+  const changed = screen.dataset.view !== view;
+  screen.dataset.view = view;
+  if (view !== 'wizard') rememberLobbyRoute(view);
+  setup.hidden = view !== 'settings' && view !== 'wizard';
+  $('#history-page').hidden = view !== 'history';
+  $('#rulebook-page').hidden = view !== 'rulebook';
+  $('#player-page').hidden = view !== 'player';
+  window.WWPresentation.closeNavigation();
+  if (view === 'settings') {
+    setup.dataset.page = 'settings';
+    delete setup.dataset.step;
+  } else if (view === 'wizard') {
+    setup.dataset.page = 'wizard';
+  }
+  const active = { lobby: 'entry-lobby', history: 'entry-history', rulebook: 'entry-rulebook', settings: 'entry-settings', wizard: 'entry-settings' }[view];
+  for (const id of ['entry-lobby', 'entry-history', 'entry-rulebook', 'entry-settings']) {
+    const node = $(`#${id}`);
+    if (node) { if (id === active) node.setAttribute('aria-current', 'page'); else node.removeAttribute('aria-current'); }
+  }
+  const titleKey = { lobby: 'app.title', history: 'home.history', rulebook: 'home.rulebook', settings: 'home.settingsPage', wizard: 'home.wizardPage' }[view];
+  const title = $('#app-title');
+  if (title && titleKey) title.textContent = I18N.t(titleKey) || title.textContent;
+  if (title && view === 'player') title.textContent = '玩家中心';
+  if (scroll) scroll.scrollTop = lobbyScrollPositions.get(view) || 0;
+  const heading = view === 'lobby' ? $('#app-title') : view === 'player' ? $('#player-page-title') : view === 'history' ? $('#history-page-title') : view === 'rulebook' ? $('#rulebook-page-title') : $('#setup-page-title');
+  if (heading) { heading.tabIndex = -1; heading.focus({ preventScroll: true }); }
+  if (changed) window.WWPresentation.enter(view === 'lobby' ? $('.home-main') : view === 'player' ? $('#player-page') : setup.hidden ? heading?.parentElement : setup);
+}
+
+function openSettingsPage(target) {
+  setLobbyView('settings');
+  $('#setup-page-kicker').textContent = 'SETTINGS';
+  $('#setup-page-title').textContent = I18N.t('home.settingsPage') || '设置';
+  $('#setup-page-description').textContent = I18N.t('home.settingsDescription') || '';
+  window.WWPresentation.selectSettings(target === '#card-appearance' ? 'appearance' : 'model');
+  if (target) requestAnimationFrame(() => { const node = $(target); if (node) node.scrollIntoView({ block: 'start' }); });
+}
+
+async function openHistoryPage() {
+  setLobbyView('history');
+  const box = $('#history-page-body');
+  const pid = state.profileId;
+  const ticket = getRequestGuard().begin(pid);
+  box.textContent = '加载中…';
+  const [stats, un, fin] = await Promise.all([
+    pcFetch(pid ? `/api/profiles/${pid}/stats` : null),
+    pcFetch(pid ? `/api/profiles/${pid}/games?status=unfinished&limit=5` : null),
+    pcFetch(pid ? `/api/profiles/${pid}/games?status=finished&limit=5` : null),
+  ]);
+  if (!getRequestGuard().isCurrent(ticket) || $('#screen-setup').dataset.view !== 'history') return;
+  box.innerHTML = '';
+  fillPcGames(box, { stats, un, fin });
+}
+
+function openRulebookPage() {
+  setLobbyView('rulebook');
+  const box = $('#rulebook-page-body');
+  box.innerHTML = '';
+  if (window.Rulebook && window.Rulebook.render) window.Rulebook.render(box);
+  else box.textContent = '规则书资源未加载。';
+}
+
 async function initSetup() {
+  window.WWPresentation.desktop({
+    onProfiles: openPlayerCenter,
+    onPlayerBack: () => {
+      if (state.playerReturn === 'screen-game' && state.game) showScreen('screen-game');
+      else setLobbyView('lobby');
+    },
+  });
   state.meta = await api('GET', '/api/meta');
   const cfg = await api('GET', '/api/config');
   state.cfg = cfg; // 供输入时的通道数预览使用（与磁盘一致的最近一次读数）
@@ -286,13 +424,13 @@ async function initSetup() {
   $('#cfg-modelfast').value = cfg.modelFast || '';
   $('#cfg-temp').value = cfg.temperature;
   $('#cfg-maxtokens').value = cfg.maxTokens;
-  $('#cfg-effort').value = cfg.reasoningEffort || 'medium';
+  $('#cfg-effort').value = cfg.reasoningEffort || 'low';
   $('#cfg-fasteffort').value = cfg.fastEffort || 'low';
   $('#cfg-budget').value = cfg.contextBudget || 12000;
   $('#cfg-cachecontrol').checked = !!cfg.cacheControl;
   $('#cfg-keepalive').checked = cfg.keepAlive !== false; // 默认开
   renderPaceSelect(cfg.pace);
-  if (cfg.hasKey) $('#cfg-key').placeholder = `已保存（${cfg.apiKeyMasked}），留空则不修改`;
+  if (cfg.hasKey) $('#cfg-key').placeholder = I18N.getLang() === 'en' ? `Saved (${cfg.apiKeyMasked}); leave blank to keep` : `已保存（${cfg.apiKeyMasked}），留空则不修改`;
   renderKeyChannels(cfg);
 
   // LAN 模式下，本机设置页展示当前配对码（整改 SEC-01：手机等设备要用它配对）
@@ -301,8 +439,8 @@ async function initSetup() {
     const pairStatus = $('#pairing-status');
     if (pairStatus) {
       pairStatus.textContent = p && p.needed && p.code
-        ? `🌐 局域网配对进行中：配对码 ${p.code}（${Math.ceil((p.expiresInMs || 0) / 1000)}s 内有效，手机打开本页需输入）`
-        : '局域网配对：当前无需配对，手机直接访问本服务地址即可。';
+        ? (I18N.getLang() === 'en' ? `LAN pairing code ${p.code} (valid for ${Math.ceil((p.expiresInMs || 0) / 1000)}s; enter it on the phone)` : `🌐 局域网配对进行中：配对码 ${p.code}（${Math.ceil((p.expiresInMs || 0) / 1000)}s 内有效，手机打开本页需输入）`)
+        : (I18N.getLang() === 'en' ? 'LAN pairing is not required. Open this server address on your phone.' : '局域网配对：当前无需配对，手机直接访问本服务地址即可。');
     }
     if (!p || !p.needed || !p.code) return;
     const card = document.querySelector('#cfg-key') && document.querySelector('#cfg-key').closest('div');
@@ -333,7 +471,7 @@ async function initSetup() {
     renderAiNames(true); renderPersonas();
   });
   // 模型 / Mock / 节奏 任一变化都要刷新顶部的"这一局是什么"信息条（它存在的意义就是给人做最后确认）
-  ['#cfg-model', '#use-mock', '#cfg-pace'].forEach((sel) => {
+  ['#cfg-model', '#cfg-pace'].forEach((sel) => {
     const node = $(sel);
     if (!node) return;
     node.addEventListener('change', renderSetupDigest);
@@ -345,28 +483,28 @@ async function initSetup() {
   // 搜索框、筛选项、牌面点击、细节栏里的检视/规则书按钮，都由 Codex.mount() 自己接线。
   const codexBtn = $('#btn-codex');
   if (codexBtn) codexBtn.addEventListener('click', openCodex);
+  const castCodexBtn = $('#ng-cast-codex');
+  if (castCodexBtn) castCodexBtn.addEventListener('click', openCodex);
   const codexBack = $('#btn-codex-back');
   if (codexBack) codexBack.addEventListener('click', closeCodex);
+  const codexRulebook = $('#btn-codex-rulebook');
+  if (codexRulebook) codexRulebook.addEventListener('click', openRulebook);
   // ---- 首页次级入口与分组（FIN-04 §8.1/8.3）：都是真实存在的能力，不做假开关 ----
   const entryRulebook = $('#entry-rulebook');
-  if (entryRulebook) entryRulebook.addEventListener('click', openRulebook);
+  if (entryRulebook) entryRulebook.addEventListener('click', openRulebookPage);
   const entrySettings = $('#entry-settings');
-  if (entrySettings) entrySettings.addEventListener('click', () => {
-    const sec = $('#setup-section');
-    if (!sec) return;
-    sec.hidden = !sec.hidden; // AC-11：长表单默认收起，入口展开/收起
-    if (!sec.hidden) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
-  // 历史入口（§8.2 :247 次级入口含历史）：直接复用玩家中心里的「对局与战绩」组，
-  // 不另造第二份列表 —— 同一份数据两处渲染，正是本批要清掉的重复。
+  if (entrySettings) entrySettings.addEventListener('click', () => openSettingsPage());
+  const lobbyEntry = $('#entry-lobby');
+  if (lobbyEntry) lobbyEntry.addEventListener('click', () => setLobbyView('lobby'));
+  const appearanceEntry = $('#entry-appearance');
+  if (appearanceEntry) appearanceEntry.addEventListener('click', () => openSettingsPage('#card-appearance'));
+  // 历史是独立页面，复用玩家中心的同一套统计/对局行渲染，不复制业务判断。
   const entryHistory = $('#entry-history');
-  if (entryHistory) entryHistory.addEventListener('click', async () => {
-    await openPlayerCenter();
-    const group = document.querySelector('[data-ww-group="games"]');
-    if (group) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  });
+  if (entryHistory) entryHistory.addEventListener('click', openHistoryPage);
   const profilesEntry = $('#btn-profiles-entry');
   if (profilesEntry) profilesEntry.addEventListener('click', openPlayerCenter);
+  const switchEntry = $('#ng-switch-profile');
+  if (switchEntry) switchEntry.addEventListener('click', openNocturneProfileEntry);
   const deviceProfiles = $('#btn-device-profiles');
   if (deviceProfiles) deviceProfiles.addEventListener('click', openPlayerCenter);
   // 局中顶栏入口（§5「桌面首页与顶栏提供一致入口」）：与首页/设备与数据卡是同一个玩家中心
@@ -406,9 +544,10 @@ async function initSetup() {
   $('#btn-god-close').addEventListener('click', toggleGod);
   $('#board-template').addEventListener('change', (e) => {
     state.setup.boardId = e.target.value;
-    if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderBoardEditor(); renderRulesEditor(); }
+    if (e.target.value !== 'custom') { applyBoardTemplate(e.target.value); renderRulesEditor(); }
+    renderBoardEditor();
   });
-  $('#btn-start').addEventListener('click', () => openSetupWizard(1));
+  $('#btn-start').addEventListener('click', () => openSetupWizard(0));
   // 玩家档案（PROF-01）：加载列表 + 绑定选择/管理入口；失败不阻塞开局（服务端会归默认档案）
   $('#profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#btn-profile-manage').addEventListener('click', openProfileManager);
@@ -482,6 +621,18 @@ async function initSetup() {
   if (errBox && /正在加载配置/.test(errBox.textContent || '')) errBox.textContent = '';
   state.ready = true;
   window.__wwReady = true; // 告诉顶部守卫可以放行了
+  setLobbyView('lobby');
+  if (new URLSearchParams(location.search).has('choose')) openNocturneProfileEntry();
+}
+
+function openNocturneProfileEntry() {
+  window.WWEntryPortal.open({
+    profiles: state.profiles,
+    currentId: state.profileId,
+    renderAvatar: renderAvatarInto,
+    onSelect: onSelectProfile,
+    onManage: openProfileManager,
+  });
 }
 
 function applyBoardTemplate(id) {
@@ -496,19 +647,23 @@ function renderBoardTemplateSelect() {
   const sel = $('#board-template');
   sel.innerHTML = '';
   for (const b of Object.values(state.meta.boards)) {
-    sel.appendChild(el('option', null, b.name)).value = b.id;
+    sel.appendChild(el('option', null, I18N.getLang() === 'en' ? (BOARD_LABEL_EN[b.id] || b.name) : b.name)).value = b.id;
   }
-  sel.appendChild(el('option', null, '自定义')).value = 'custom';
+  sel.appendChild(el('option', null, I18N.getLang() === 'en' ? 'Custom board' : '自定义')).value = 'custom';
   sel.value = state.setup.boardId;
 }
 
 function renderBoardEditor() {
   const box = $('#board-editor');
+  box.hidden = state.setup.boardId !== 'custom';
+  const summary = $('#board-summary');
+  summary.hidden = !box.hidden;
+  summary.textContent = Object.entries(state.setup.boardCounts || {}).filter(([, n]) => n > 0).map(([id, n]) => `${state.meta.roles[id].name} × ${n}`).join(' · ');
   box.innerHTML = '';
   const roles = state.meta.roles;
   for (const [rid, meta] of Object.entries(roles)) {
     const row = el('div', 'role-row');
-    row.appendChild(el('span', 'rname', `${meta.emoji} ${meta.name}`));
+    row.appendChild(el('span', 'rname', `${meta.emoji} ${I18N.getLang() === 'en' ? (ROLE_LABEL_EN[rid] || meta.name) : meta.name}`));
     const cnt = el('span', 'cnt');
     const minus = el('button', null, '−');
     const num = el('b', null, String(state.setup.boardCounts[rid] || 0));
@@ -538,10 +693,13 @@ function updateBoardTotal() {
   const total = boardTotal();
   const wolves = Object.entries(state.setup.boardCounts).filter(([r]) => state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
   const msgs = [];
-  if (total < 4) msgs.push('总人数至少 4');
-  if (wolves < 1) msgs.push('至少 1 狼');
-  if (wolves >= total - wolves) msgs.push('狼不能多于好人');
-  $('#board-total').textContent = `总人数：${total}（狼 ${wolves} / 好 ${total - wolves}）${msgs.length ? ' ⚠️ ' + msgs.join('；') : ' ✓'}`;
+  const en = I18N.getLang() === 'en';
+  if (total < 4) msgs.push(en ? 'at least 4 players' : '总人数至少 4');
+  if (wolves < 1) msgs.push(en ? 'at least 1 wolf' : '至少 1 狼');
+  if (wolves >= total - wolves) msgs.push(en ? 'wolves must be fewer than good players' : '狼不能多于好人');
+  $('#board-total').textContent = en
+    ? `Total ${total} (wolves ${wolves} / good ${total - wolves})${msgs.length ? ' ⚠ ' + msgs.join('; ') : ' ✓'}`
+    : `总人数：${total}（狼 ${wolves} / 好 ${total - wolves}）${msgs.length ? ' ⚠️ ' + msgs.join('；') : ' ✓'}`;
   renderSeatsSelect();
   renderAiNames(false);
   renderSetupDigest();
@@ -565,9 +723,6 @@ function renderSetupDigest() {
   const mode = document.querySelector('input[name=mode]:checked');
   const isWatch = mode && mode.value === 'watch';
   const model = ($('#cfg-model') && $('#cfg-model').value.trim()) || T('digest.noModel');
-  const paceSel = $('#cfg-pace');
-  const pace = paceSel && paceSel.selectedOptions[0] ? paceSel.selectedOptions[0].textContent : '';
-  const paceTxt = pace ? pace.replace(/（.*$/, '') : '';
   const mock = $('#use-mock') && $('#use-mock').checked;
     // 整改：开头的「12人」剥干净（人数已单列「12 人局」），否则留下孤字「人」读不通。
   const cleanBoard = escapeHtml(String(boardName || T('digest.unknownBoard'))
@@ -580,19 +735,19 @@ function renderSetupDigest() {
     `<li>${isWatch ? T('digest.watch') : T('digest.play')}</li>`,
     mock ? `<li>${T('digest.mock')}</li>` : `<li>${T('digest.model', { m: escapeHtml(model.replace(/^.*\//, '')) })}</li>`,
   ];
-  if (paceTxt) facts.push(`<li>${T('digest.pace', { p: escapeHtml(paceTxt) })}</li>`);
+  // The lobby only needs board, size and mode. Detailed settings belong to confirmation.
   // 本局归属档案（M3 §8.2 :247「当前档案」是第一屏四件事之一）：上方档案卡说的是"现在选中的是谁"，
   // 这里说的是"这一局会归到谁名下" —— 两句话不同，不是把同一份内容渲染两遍。
   const profile = (state.profiles || []).find((p) => p.id === state.profileId);
-  if (profile) facts.push(`<li>本局归属 👤 ${escapeHtml(profile.nickname)}</li>`);
+  if (profile) $('#home-nick').title = profile.nickname;
   syncWizardFromSetup();
   const box = $('#hero-facts');
-  if (box) box.innerHTML = facts.join('');
+  if (box) box.innerHTML = [facts[0], `<li>${T('digest.players', { n: total })}</li>`, facts[3]].join('');
   // 真实模式缺 Key 的显式警示（不阻止浏览，但按下开始时会被拦截并引导 —— 见 startGame）
   const warn = $('#setup-warn');
   if (warn) {
     const hasKey = !!(state.cfg && state.cfg.hasKey);
-    warn.textContent = (!mock && !hasKey) ? '⚠ 真实模式需要先在下方「模型与密钥」保存 API Key（Mock 试玩不需要）。' : '';
+    warn.textContent = (!mock && !hasKey) ? T('home.keyWarning') : '';
   }
 }
 
@@ -610,8 +765,9 @@ function renderSeatsSelect() {
   const total = boardTotal();
   const cur = sel.value || state.setup.mySeat; // 'random' 或数字
   sel.innerHTML = '';
-  sel.appendChild(el('option', null, '🎲 随机（推荐）')).value = 'random';
-  for (let i = 1; i <= total; i++) sel.appendChild(el('option', null, `${i} 号座位`)).value = i;
+  const en = I18N.getLang() === 'en';
+  sel.appendChild(el('option', null, en ? '🎲 Random (recommended)' : '🎲 随机（推荐）')).value = 'random';
+  for (let i = 1; i <= total; i++) sel.appendChild(el('option', null, en ? `Seat ${i}` : `${i} 号座位`)).value = i;
   const wanted = String(cur);
   sel.value = [...sel.options].some((o) => o.value === wanted) ? wanted : 'random';
   state.setup.mySeat = sel.value;
@@ -762,11 +918,13 @@ function renderPaceSelect(currentPace) {
   const sel = $('#cfg-pace');
   if (!sel) return;
   const paces = (state.meta && state.meta.paces) || [];
-  const options = paces.map((p) => `<option value="${p.id}">${p.label}</option>`);
-  options.push('<option value="custom">自定义（当前参数与任何档位都不完全一致）</option>');
+  const en = I18N.getLang() === 'en';
+  const paceNames = { fast: 'Fast', standard: 'Standard', deep: 'Deep' };
+  const options = paces.map((p) => `<option value="${p.id}">${en ? (paceNames[p.id] || p.label) : p.label}</option>`);
+  options.push(`<option value="custom">${en ? 'Custom (current values differ from all presets)' : '自定义（当前参数与任何档位都不完全一致）'}</option>`);
   sel.innerHTML = options.join('');
   sel.value = paces.some((p) => p.id === currentPace) ? currentPace : 'custom';
-  sel.addEventListener('change', () => applyPaceToForm(sel.value));
+  sel.onchange = () => applyPaceToForm(sel.value);
   renderPaceHint(sel.value);
 }
 
@@ -786,15 +944,27 @@ function renderPaceHint(paceId) {
   const box = $('#cfg-pace-hint');
   if (!box) return;
   const p = ((state.meta && state.meta.paces) || []).find((x) => x.id === paceId);
+  const en = I18N.getLang() === 'en';
   if (!p) {
-    box.textContent = '当前参数与任何档位都不完全一致（例如你手工调过其中某一项）。再选一个档位并保存，即可回到该档的完整参数。';
+    box.textContent = en ? 'These values differ from every preset. Select a preset and save to restore its complete settings.' : '当前参数与任何档位都不完全一致（例如你手工调过其中某一项）。再选一个档位并保存，即可回到该档的完整参数。';
     return;
   }
   const v = p.values;
-  box.textContent = `${p.desc}（本档同时设定：反思阈值 ${v.digestMinEvents} 条、纪要保留 ${v.digestKeep} 条、思考调度 ${v.effortPolicy === 'flat' ? '按任务名一刀切' : '按信息含量'}）`;
+  const descriptions = {
+    fast: 'Lowest effort and fewer reflections; uses less context and fewer tokens.',
+    standard: 'Balanced default: moderate speech reasoning and information-aware budget.',
+    deep: 'More reasoning and reflection, including night actions; slowest and most expensive.',
+  };
+  box.textContent = en
+    ? `${descriptions[p.id] || p.desc} Reflection threshold ${v.digestMinEvents} events · summaries ${v.digestKeep} · scheduling ${v.effortPolicy === 'flat' ? 'by task' : 'by information'}.`
+    : `${p.desc}（本档同时设定：反思阈值 ${v.digestMinEvents} 条、纪要保留 ${v.digestKeep} 条、思考调度 ${v.effortPolicy === 'flat' ? '按任务名一刀切' : '按信息含量'}）`;
 }
 
 async function saveConfig() {
+  const button = $('#btn-save-config');
+  if (button.disabled) return;
+  button.disabled = true; button.setAttribute('aria-busy', 'true');
+  $('#cfg-test-result').textContent = '正在保存配置…';
   const pace = $('#cfg-pace') ? $('#cfg-pace').value : '';
   const body = {
     baseUrl: $('#cfg-baseurl').value.trim(),
@@ -820,12 +990,13 @@ async function saveConfig() {
     const r = await api('PUT', '/api/config', body);
     $('#cfg-key').value = '';
     $('#cfg-keys').value = '';
-    $('#cfg-key').placeholder = `已保存（${r.apiKeyMasked}），留空则不修改`;
-    $('#cfg-test-result').textContent = `✓ 已保存（${r.channels || 1} 条并发通道）`;
+    $('#cfg-key').placeholder = I18N.getLang() === 'en' ? `Saved (${r.apiKeyMasked}); leave blank to keep` : `已保存（${r.apiKeyMasked}），留空则不修改`;
+    $('#cfg-test-result').textContent = I18N.getLang() === 'en' ? `✓ Saved (${r.channels || 1} concurrent channels)` : `✓ 已保存（${r.channels || 1} 条并发通道）`;
     // 保存后按服务端反查结果回显档位：不以客户端的想法为准，避免"界面显示 A、磁盘是 B"
     const after = await api('GET', '/api/config').catch(() => null);
-    if (after) { state.cfg = after; renderPaceSelect(after.pace); renderKeyChannels(after); }
+    if (after) { state.cfg = after; renderPaceSelect(after.pace); renderKeyChannels(after); updateWizardMode(); }
   } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
+  finally { button.disabled = false; button.removeAttribute('aria-busy'); }
 }
 
 /**
@@ -845,24 +1016,27 @@ function renderKeyChannels(cfg) {
   const keys = (pool && pool.keys) || extra + 1;
   const live = (pool && pool.channels) || (cfg && cfg.channels) || 1;
   const limits = pool && pool.slots ? pool.slots.map((s) => s.limit) : null;
+  const en = I18N.getLang() === 'en';
   box.placeholder = extra > 0
-    ? `已保存 ${extra} 把额外 Key（留空则不修改）`
-    : 'sk-...（可选：一行一个，或用逗号分隔）';
+    ? (en ? `${extra} extra keys saved; leave blank to keep` : `已保存 ${extra} 把额外 Key（留空则不修改）`)
+    : (en ? 'sk-... (optional: one per line or comma-separated)' : 'sk-...（可选：一行一个，或用逗号分隔）');
   const local = box.value.split(/[\s,;、]+/).filter((s) => s.trim()).length;
   const afterKeys = local ? local + 1 : keys;
   const parts = [];
-  if (local) parts.push(`保存后共 ${afterKeys} 把 Key`);
-  else parts.push(`${keys} 把 Key`);
-  parts.push(`当前并发容量 ${live} 条${limits && limits.length > 1 ? `（每把 ${limits.join('/')} 条）` : ''}`);
+  if (local) parts.push(en ? `${afterKeys} ${afterKeys === 1 ? 'key' : 'keys'} after saving` : `保存后共 ${afterKeys} 把 Key`);
+  else parts.push(en ? `${keys} ${keys === 1 ? 'key' : 'keys'}` : `${keys} 把 Key`);
+  parts.push(en ? `current concurrency ${live}${limits && limits.length > 1 ? ` (${limits.join('/')} per key)` : ''}` : `当前并发容量 ${live} 条${limits && limits.length > 1 ? `（每把 ${limits.join('/')} 条）` : ''}`);
   let detail = '';
   if (pool && pool.adaptive) {
     detail = pool.ramps > 0
-      ? `已按实测自动加档 ${pool.ramps} 次${pool.rateLimited ? `、撞限流回退 ${pool.rateLimited} 次` : ''}。`
-      : '自适应已开：忙时有排队就加档、撞限流就回退，无需手动调。';
+      ? (en ? `Automatically increased ${pool.ramps} times${pool.rateLimited ? ` and backed off ${pool.rateLimited} times after rate limits` : ''}.` : `已按实测自动加档 ${pool.ramps} 次${pool.rateLimited ? `、撞限流回退 ${pool.rateLimited} 次` : ''}。`)
+      : (en ? 'Adaptive concurrency is on; capacity grows under load and backs off on rate limits.' : '自适应已开：忙时有排队就加档、撞限流就回退，无需手动调。');
   } else if (pool) {
-    detail = '自适应已关：并发固定为上面的值。';
+    detail = en ? 'Adaptive concurrency is off.' : '自适应已关：并发固定为上面的值。';
   }
-  hint.textContent = `${parts.join('；')}。${detail}并发不是线性提速 —— 发言必须按顺序听，实测上限约 -23%，不是减半。`;
+  hint.textContent = en
+    ? `${parts.join('; ')}. ${detail} Concurrency does not speed up serial speeches linearly.`
+    : `${parts.join('；')}。${detail}并发不是线性提速 —— 发言必须按顺序听，实测上限约 -23%，不是减半。`;
 }
 
 /** 主动探测每把 Key 的实际并发额度，并直接写进运行中的调度器 */
@@ -894,52 +1068,6 @@ async function testConfig() {
     const r = await api('POST', '/api/config/test');
     $('#cfg-test-result').textContent = r.ok ? `✓ 连接成功（${r.latencyMs}ms）` : `✗ ${r.error}`;
   } catch (e) { $('#cfg-test-result').textContent = `✗ ${e.message}`; }
-}
-
-/** AC-11 §8.2：开局最终确认页——档案/板子/人数/座位策略/模式/模型状态一次复核；
- *  无 Key 的真实模式提供「改用 Mock 开局」的一步入局路径（不改服务端安全门禁）。 */
-function openStartConfirm() {
-  const useMock = document.querySelector('#use-mock') && document.querySelector('#use-mock').checked;
-  const total = boardTotal();
-  const seatChoice = state.setup.mode === 'play' ? String(($('#my-seat') && $('#my-seat').value) || 'random') : '0';
-  const owner = (state.profiles || []).find((x) => x.id === state.profileId);
-  const tpl = state.meta.boards[state.setup.boardId];
-  const boardName = tpl ? tpl.name : '自定义板子';
-  const hasKey = !!(state.cfg && state.cfg.hasKey);
-  const wolves = Object.entries(state.setup.boardCounts || {}).filter(([r]) => state.meta.roles[r] && state.meta.roles[r].team === 'wolf').reduce((a, [, n]) => a + n, 0);
-  const row = (k, v, warn) => `<div class="start-review-row${warn ? ' needs-config' : ''}"><span>${k}</span><b>${v}</b></div>`;
-  const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>入席之前</h2>');
-  const body = el('div', 'mbody start-review');
-  body.innerHTML = [
-    row('本局归属', owner ? escapeHtml(owner.nickname) : '默认档案'),
-    row('板子', `${escapeHtml(boardName)} · ${total} 人局 · 狼 ${wolves}/好 ${total - wolves}`),
-    row('我的座位', seatChoice === '0' ? '观战' : seatChoice === 'random' ? '随机' : seatChoice + ' 号'),
-    row('模式', useMock ? '免费试玩 · 不调用 API' : '真实对局 · 按模型用量计费', !useMock && !hasKey),
-    row('模型', hasKey ? `${escapeHtml(String(state.cfg.model || ''))} · 已配置` : '未配置 API Key', !hasKey && !useMock),
-  ].join('');
-  body.appendChild(el('p', 'hint', useMock ? 'Mock 局不调用 API、完全免费。' : (hasKey ? '真实对局将按模型用量计费。' : '⚠ 真实模式需要先保存 API Key——当前尚未配置。')));
-  const br = el('div', 'btnrow');
-  const back = el('button', 'btn ghost', '← 返回调整');
-  back.addEventListener('click', () => { closeModal(); $('#setup-section').hidden = false; $('#setup-section').scrollIntoView({ block: 'start', behavior: 'smooth' }); });
-  const go = el('button', 'btn primary', useMock ? '开始免费试玩' : '确认并开始真实对局');
-  go.disabled = !useMock && !hasKey;
-  go.addEventListener('click', () => { closeModal(); startGame(); });
-  br.append(back, go);
-  body.appendChild(br);
-  // 无 Key：一步 Mock 入口（门禁仍在服务端：真实模式没 Key 依旧被拒）
-  if (!hasKey && !useMock) {
-    const mockNow = el('button', 'btn primary', '改用免费试玩');
-    mockNow.addEventListener('click', () => {
-      const cb = document.querySelector('#use-mock');
-      if (cb && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change', { bubbles: true })); }
-      closeModal();
-      startGame();
-    });
-    body.appendChild(el('div', 'btnrow')).appendChild(mockNow);
-  }
-  wrap.append(head, body);
-  openModal(wrap);
 }
 
 /* ======== M3 三步开局（§8.2 :255-268）—— 桌面端接线 ========
@@ -1042,18 +1170,25 @@ function openSetupWizard(step) {
   // 惰性接线：模块加载时不绑（那时 #setup-section 还是 hidden 的展开前状态，而且 renderSetupDigest
   // 在初始化里会被调用多次），只在用户第一次真的打开向导时绑一次，重复打开也不会叠监听器。
   if (!setupWired) { setupWired = true; wireSetupWizard(); }
-  const sec = $('#setup-section');
-  if (sec) sec.hidden = false;
+  setLobbyView('wizard');
+  $('#setup-page-kicker').textContent = 'NEW MATCH';
+  $('#setup-page-title').textContent = I18N.t('home.wizardPage') || '创建对局';
+  $('#setup-page-description').textContent = I18N.t('home.wizardDescription') || '';
   syncWizardFromSetup();
-  applySetupStep(step || 1, { scroll: true });
+  applySetupStep(step == null ? 0 : step, { scroll: true });
 }
 
 function applySetupStep(step, opts) {
   const w = wizardOf();
-  w.goTo(step);
   const sec = $('#setup-section');
-  const n = w.step;
+  const n = Math.max(0, Math.min(w.steps, Number(step) || 0));
+  const changed = sec && sec.dataset.step !== String(n);
+  rememberLobbyRoute('wizard', n);
+  if (n) w.goTo(n);
   if (sec) sec.dataset.step = String(n);
+  const preflight = $('#wizard-preflight');
+  if (preflight) preflight.hidden = n !== 0;
+  updateWizardMode();
   document.querySelectorAll('[data-setup-step-btn]').forEach((b) => {
     b.setAttribute('aria-selected', String(Number(b.dataset.setupStepBtn) === n));
   });
@@ -1063,16 +1198,36 @@ function applySetupStep(step, opts) {
     //   + step/stepId/steps 三个 getter）⇒ 这里只能用 stepId 取标签，写 w.STEPS[i].hint 会抛 TypeError、把后面的
     //   dataset.step 与确认区渲染一起带走（这正是 M3 第二批真页面 --full 全线超时的原因之一）。
     const stepLabels = {
-      board: '第 1 步 · 板子与规则（这一步不会建局）',
-      players: '第 2 步 · 参与与座位（这一步不会建局）',
-      confirm: '第 3 步 · 确认后才会建局',
+      board: '第 2 步 · 板子与规则（这一步不会建局）',
+      players: '第 3 步 · 参与与座位（这一步不会建局）',
+      confirm: '第 4 步 · 确认后才会建局',
     };
-    hint.textContent = stepLabels[w.stepId] || '';
+    const stepLabelsEn = {
+      board: 'Step 1 · Board & rules (no match is created yet)',
+      players: 'Step 2 · Players & seat (no match is created yet)',
+      confirm: 'Step 3 · A match is created only after confirmation',
+    };
+    hint.textContent = I18N.getLang() === 'en'
+      ? (n === 0 ? 'Choose free practice or save a model and API key first' : (stepLabelsEn[w.stepId] || ''))
+      : (n === 0 ? '先选择免费试玩或保存模型与 API Key' : (stepLabels[w.stepId] || ''));
   }
-  const prev = $('#setup-prev'); if (prev) prev.disabled = n <= 1;
-  const next = $('#setup-next'); if (next) next.disabled = n >= w.steps;
+  const prev = $('#setup-prev'); if (prev) prev.disabled = n <= 0;
+  const next = $('#setup-next'); if (next) { next.disabled = n >= w.steps; next.hidden = n >= w.steps; }
   if (n === w.steps) renderSetupConfirm();
-  if (opts && opts.scroll && sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (changed) window.WWPresentation.enter(sec);
+  if (opts && opts.scroll && sec) sec.scrollIntoView({ behavior: window.WWPresentation.reducedMotion() ? 'auto' : 'smooth', block: 'start' });
+}
+
+function updateWizardMode() {
+  const mock = !!($('#use-mock') && $('#use-mock').checked);
+  const sec = $('#setup-section');
+  if (sec) sec.dataset.mode = mock ? 'mock' : 'real';
+  const mockBtn = $('#wizard-mode-mock');
+  const realBtn = $('#wizard-mode-real');
+  if (mockBtn) mockBtn.setAttribute('aria-pressed', String(mock));
+  if (realBtn) realBtn.setAttribute('aria-pressed', String(!mock));
+  const status = $('#wizard-key-status');
+  if (status) status.textContent = mock ? '' : (I18N.t(state.cfg && state.cfg.hasKey ? 'wizard.keyReady' : 'wizard.keyMissing') || '');
 }
 
 /** 第三步确认区：行文案来自共享 summarize()（两端同一份），不在页面里再拼一套 */
@@ -1095,27 +1250,51 @@ function wireSetupWizard() {
   document.querySelectorAll('[data-setup-step-btn]').forEach((b) => {
     b.addEventListener('click', () => applySetupStep(Number(b.dataset.setupStepBtn)));
   });
-  const prev = $('#setup-prev'); if (prev) prev.addEventListener('click', () => applySetupStep(wizardOf().step - 1));
-  const next = $('#setup-next'); if (next) next.addEventListener('click', () => applySetupStep(wizardOf().step + 1));
+  const prev = $('#setup-prev'); if (prev) prev.addEventListener('click', () => applySetupStep(Number($('#setup-section').dataset.step || 0) - 1));
+  const next = $('#setup-next'); if (next) next.addEventListener('click', () => {
+    const now = Number($('#setup-section').dataset.step || 0);
+    if (now === 0 && !$('#use-mock').checked && !(state.cfg && state.cfg.hasKey)) {
+      updateWizardMode();
+      $('#cfg-key').focus();
+      return;
+    }
+    applySetupStep(now + 1);
+  });
   const confirm = $('#setup-confirm'); if (confirm) confirm.addEventListener('click', () => startGame());
+  const home = $('#setup-home'); if (home) home.addEventListener('click', () => setLobbyView('lobby'));
   const fix = $('#setup-fix-settings');
-  if (fix) fix.addEventListener('click', () => { const c = $('#card-api'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  if (fix) fix.addEventListener('click', () => { applySetupStep(0); $('#cfg-key').focus(); });
+  const chooseMode = (mock) => {
+    const cb = $('#use-mock');
+    if (cb && cb.checked !== mock) { cb.checked = mock; cb.dispatchEvent(new Event('change', { bubbles: true })); }
+    updateWizardMode();
+  };
+  const mockChoice = $('#wizard-mode-mock'); if (mockChoice) mockChoice.addEventListener('click', () => chooseMode(true));
+  const realChoice = $('#wizard-mode-real'); if (realChoice) realChoice.addEventListener('click', () => chooseMode(false));
   const mockCb = $('#use-mock');
   if (mockCb) mockCb.addEventListener('change', () => {
-    try { wizardOf().set({ mode: mockCb.checked ? 'mock' : 'real' }); } catch (e) { console.warn('[ww] 模式切换失败', e); }
+    try {
+      const result = wizardOf().setMode(mockCb.checked ? 'mock' : 'real', { explicit: true });
+      if (!result.ok) throw new Error(result.reason);
+      renderSetupDigest();
+    } catch (e) {
+      mockCb.checked = wizardOf().modeOf() === 'mock';
+      setSetupError(String(e.message || e));
+    }
+    updateWizardMode();
   });
 }
 
 async function startGame() {
-  $('#setup-error').textContent = '';
+  setSetupError('');
   try {
     const total = boardTotal();
     const useMock = $('#use-mock').checked;
     // 真实模式缺 Key：客户端先行阻止并引导（服务端门禁保留，这里是更早、更有指向性的失败）
     if (!useMock && state.cfg && !state.cfg.hasKey) {
-      $('#setup-error').textContent = '✗ 真实对局需要 API Key：请在下方「模型与密钥」填写并保存，或勾选「Mock 试玩」（免费，不调用 API）。';
-      const apiCard = $('#card-api');
-      if (apiCard) apiCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setSetupError('✗ 真实对局需要 API Key：请先在「模型与密钥」填写并保存，或选择免费试玩。');
+      openSetupWizard(0);
+      $('#cfg-key').focus();
       return;
     }
     // 座位：'random'（默认，由服务端抽签）或明确的号数；纯观战没有人类座位
@@ -1178,8 +1357,8 @@ async function startGame() {
       const extra = outcome.unknown
         ? ' 已先查本档案名下已有的对局（不会自动重建）：请在「对局历史」里确认那一局是否存在，再决定是否重试。'
         : '';
-      $('#setup-error').textContent = `✗ ${outcome.reason}${extra}`;
-      if (outcome.fix === 'settings') { const c = $('#card-api'); if (c) c.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+      setSetupError(`✗ ${outcome.reason}${extra}`);
+      if (outcome.fix === 'settings') { applySetupStep(0); $('#cfg-key').focus(); }
       if (outcome.fix === 'board') { applySetupStep(1); }
       return;
     }
@@ -1193,7 +1372,14 @@ async function startGame() {
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGameScreen();
   } catch (e) {
-    $('#setup-error').textContent = `✗ ${e.message}`;
+    setSetupError(`✗ ${e.message}`);
+  }
+}
+
+function setSetupError(message) {
+  for (const id of ['setup-error', 'wizard-error']) {
+    const node = $(`#${id}`);
+    if (node) node.textContent = message;
   }
 }
 
@@ -1220,7 +1406,7 @@ async function checkResume() {
       // 于是刷新页面会被误判成"不可恢复"，紧接着把用户令牌删掉（丢档）。
       if (v && !v.finished && v.started) {
         state.resume = window.SessionModel.withView(g, v);
-        showResumeCard(v.inMemory ? '继续上局' : '从存档恢复', `${v.ownerNickname || '原档案'} · ${await resumeDetail(g.gameId, v)}`);
+        showResumeCard(I18N.t(v.inMemory ? 'resume.activeTitle' : 'resume.diskTitle'), `${v.ownerNickname || (I18N.getLang() === 'en' ? 'Previous player' : '原档案')} · ${await resumeDetail(g.gameId, v)}`);
         return;
       }
       window.WWGameDraft.clearHandle(localStorage, 'ww_current'); // 已结束/从未开局（设置页放弃的创建残留）→ 不恢复
@@ -1237,7 +1423,7 @@ async function checkResume() {
       if (v && !v.finished) {
         window.WWGameDraft.writeHandle(localStorage, 'ww_current', g);
         state.resume = window.SessionModel.withView(g, v);
-        showResumeCard(v.inMemory ? '继续上局' : '从存档恢复', `${v.ownerNickname || '原档案'} · ${await resumeDetail(g.gameId, v)}`);
+        showResumeCard(I18N.t(v.inMemory ? 'resume.activeTitle' : 'resume.diskTitle'), `${v.ownerNickname || (I18N.getLang() === 'en' ? 'Previous player' : '原档案')} · ${await resumeDetail(g.gameId, v)}`);
         return;
       }
     }
@@ -1267,18 +1453,20 @@ function showResumeCard(title, detail) {
  * 拿不到详情不影响恢复 —— 详情是锦上添花，恢复本身不能因为它失败。
  */
 async function resumeDetail(gameId, v) {
+  const en = I18N.getLang() === 'en';
+  const phaseEn = { setup: 'Setup', night: 'Night', dawn: 'Dawn', sheriff: 'Sheriff race', speech: 'Day speech', vote: 'Exile vote', pk: 'Tie-break', over: 'Result' };
   const parts = [];
-  if (v && v.phase) parts.push(PHASE_LABEL[v.phase] || v.phase);
-  if (v && v.day != null) parts.push(`第 ${v.day} 天`);
+  if (v && v.phase) parts.push(en ? (phaseEn[v.phase] || v.phase) : (PHASE_LABEL[v.phase] || v.phase));
+  if (v && v.day != null) parts.push(en ? `Day ${v.day}` : `第 ${v.day} 天`);
   try {
     const { rows } = await api('GET', '/api/games');
     const r = (rows || []).find((x) => x.id === gameId);
     if (r) {
-      if (r.seats) parts.push(`${r.seats} 人局`);
-      parts.push(r.mock ? '试玩局' : '真实对局');
+      if (r.seats) parts.push(en ? `${r.seats} players` : `${r.seats} 人局`);
+      parts.push(en ? (r.mock ? 'Practice' : 'Real match') : (r.mock ? '试玩局' : '真实对局'));
       if (r.date) {
         const mins = Math.round((Date.now() - new Date(r.date).getTime()) / 60000);
-        if (mins >= 1) parts.push(`存档于 ${mins} 分钟前`);
+        if (mins >= 1) parts.push(en ? `saved ${mins} min ago` : `存档于 ${mins} 分钟前`);
       }
     }
   } catch (_) { /* 详情拿不到就只显示已知信息 */ }
@@ -1508,7 +1696,7 @@ function renderTopbarIdentity() {
 function renderAbout() {
   const box = $('#about-version');
   if (!box) return;
-  box.textContent = `AI 狼人杀 · 版本 v${APP_VERSION} · 桌面浏览器端`;
+  box.textContent = I18N.getLang() === 'en' ? `AI Werewolf · v${APP_VERSION} · desktop browser` : `AI 狼人杀 · 版本 v${APP_VERSION} · 桌面浏览器端`;
 }
 
 /** 连接/保存状态点（FIN-05 顶栏）：ok=实时推送，warn=轮询降级，off=未连接 */
@@ -1573,6 +1761,13 @@ function pcFetch(path) {
  *  实测表现为"点回收站没反应"，且只在打开后的几十毫秒内出现，是间歇性红）。
  */
 async function openPlayerCenter() {
+  closeModal();
+  if ($('#player-page').hidden) state.playerReturn = $('#screen-game').classList.contains('hidden') ? 'screen-setup' : 'screen-game';
+  showScreen('screen-setup');
+  setLobbyView('player');
+  const pageBody = $('#player-page-body');
+  pageBody.textContent = '正在读取你的档案…';
+  pageBody.setAttribute('aria-busy', 'true');
   // §5.2：票据绑定**发起时**的档案与代次。取数期间切档（含 A→B→A 绕一圈）都让这张票据作废
   const ticket = getRequestGuard().begin(state.profileId);
   const pid = ticket.profileId; // 取数期间的档案：切了就整份作废（落笔前再判一次）
@@ -1584,14 +1779,8 @@ async function openPlayerCenter() {
     pcFetch('/api/import/recoveries'),
   ]);
   // §5.2：等数据期间切了档（或绕回同一个档案）⇒ 旧票据不再是"当前页面"，不许把旧数据画上去
-  if (!getRequestGuard().isCurrent(ticket)) return;
-
-  const wrap = el('div');
-  const head = el('div', 'mhead', '<h2>👤 玩家档案</h2>');
-  const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { closeModal(); });
-  head.appendChild(close);
-  const body = el('div', 'mbody');
+  if (!getRequestGuard().isCurrent(ticket) || $('#screen-setup').dataset.view !== 'player') return;
+  const body = el('div', 'ng-player-grid');
 
   // 四组按 PC_GROUPS 的**固定顺序**先建骨架，再按 id 把内容填进各自的盒子；
   // 页面里的组顺序因此只由 PC_GROUPS 决定（守卫 test/player-center.test.js 钉它，打乱即判红）。
@@ -1610,8 +1799,8 @@ async function openPlayerCenter() {
   fillPcGames(boxes.get('games'), { stats, un, fin });
   fillPcAppearance(boxes.get('appearance'));
   fillPcData(boxes.get('data'), { trash, rec });
-  wrap.append(head, body);
-  openModal(wrap);
+  pageBody.replaceChildren(body);
+  pageBody.setAttribute('aria-busy', 'false');
 }
 
 /** 旧名别名：既有调用点与"返回档案列表"路径继续可用（少一次回归面） */
@@ -1619,14 +1808,14 @@ function openProfileManager() { openPlayerCenter(); }
 
 /** ① 个人资料：头像、昵称、简介、当前档案（列表每一行 = 切档 + 该档案的数据操作） */
 function fillPcProfile(box, usableCount) {
-  box.appendChild(el('p', 'hint', '同一台设备可以建多个玩家档案：战绩、笔记、AI 经验池互相隔离。API 配置是整台设备共享的，切换档案不会改动它。档案的唯一身份是 UUID，昵称允许重名。'));
   const cur = state.profiles.find((p) => p.id === state.profileId && !p.archivedAt);
-  const me = el('div', 'home-profile');
+  const me = el('div', 'ng-profile-identity');
   const av = el('span', 'pm-name-av');
   me.appendChild(av);
   renderAvatarInto(av, cur); // 与首页/顶栏同一条渲染路径，缺失也回落内置徽记
   const who = el('span', 'home-who');
   who.appendChild(elText('b', null, cur ? cur.nickname : '默认档案'));
+  who.title = cur ? cur.nickname : '默认档案';
   who.appendChild(elText('div', 'hint', cur && cur.bio ? cur.bio : '简介还没写（点「编辑」补上）'));
   me.appendChild(who);
   const edit = el('button', 'btn ghost small', cur ? '编辑资料' : '新建档案');
@@ -1659,7 +1848,7 @@ function fillPcProfile(box, usableCount) {
       return b;
     };
     if (!p.archivedAt) {
-      op('选用', async (pp) => { onSelectProfile(pp.id); closeModal(); renderProfileStrip(); }, 'btn small');
+      op('选用', async (pp) => { onSelectProfile(pp.id); renderProfileStrip(); openPlayerCenter(); }, 'btn small');
     }
     op('编辑', (pp) => openProfileEdit(pp));
     // 战绩（PROF-03，§3.7）：懒加载，按桶分列（真实胜率分母只含真实+自然结束+可判定）
@@ -1696,14 +1885,15 @@ function fillPcProfile(box, usableCount) {
     list.appendChild(row);
   }
   const exportStatus = makeExportStatusLine();
-  box.appendChild(exportStatus);
-  box.appendChild(list);
+  const manage = el('details', 'ng-profile-manage');
+  manage.append(el('summary', null, '切换与管理档案'), exportStatus, list);
+  box.appendChild(manage);
 
   const btnrow = el('div', 'btnrow');
   const mk = el('button', 'btn', '＋ 新建档案');
   mk.addEventListener('click', () => openProfileEdit(null));
   btnrow.appendChild(mk);
-  box.appendChild(btnrow);
+  manage.appendChild(btnrow);
 }
 
 /**
@@ -1761,7 +1951,7 @@ function fillPcGames(box, res) {
   stats.textContent = R.stats && R.stats.ok
     ? `统计概览：${statsLine(R.stats.data)}`
     : failText('统计概览', R.stats);
-  box.appendChild(stats);
+  box.appendChild(R.stats && R.stats.ok ? window.WWPresentation.stats(R.stats.data) : stats);
 
   const unBox = el('div');
   unBox.appendChild(el('h4', 'pc-sub', '进行中'));
@@ -1828,7 +2018,10 @@ async function openPcHistory(gameId) {
   const wrap = el('div');
   const head = el('div', 'mhead', `<h2>${ico('timeline')} 对局历史</h2>`);
   const close = el('button', 'btn ghost small', '✕');
-  close.addEventListener('click', () => { closeModal(); openProfileManager(); });
+  close.addEventListener('click', () => {
+    closeModal();
+    if ($('#screen-setup').dataset.view !== 'history') openProfileManager();
+  });
   head.appendChild(close);
   const body = el('div', 'mbody');
   body.appendChild(elText('p', 'hint', `只读历史 · ${gameId}：来自存档事件，不启动引擎、不调用模型。`));
@@ -1912,7 +2105,6 @@ function fillPcData(box, res) {
   trashBtn.id = 'pm-trash-entry';
   trashBtn.addEventListener('click', openProfileTrash);
   row.appendChild(trashBtn);
-  box.appendChild(row);
   // 计数用取好的那份：**打开就定形**，不给它一次异步改字的机会（改字=重排=按钮位移）
   if (R.trash && R.trash.ok) {
     trashBtn.innerHTML = icoLabel('trash', `回收站（${((R.trash.data && R.trash.data.items) || []).length}）`);
@@ -1921,14 +2113,13 @@ function fillPcData(box, res) {
     trashBtn.title = (R.trash && R.trash.err && R.trash.err.message) || '回收区不可用';
   }
 
-  const row2 = el('div', 'btnrow');
   const arch = el('button', 'btn ghost', '归档当前档案');
   arch.id = 'pc-archive';
   arch.disabled = !cur;
   arch.title = cur ? '归档后从选择器隐藏，战绩与笔记保留，可随时恢复' : '先选一个档案';
   arch.addEventListener('click', () => { if (cur) archiveProfile(cur, usableCount); });
-  row2.appendChild(arch);
-  box.appendChild(row2);
+  row.appendChild(arch);
+  box.appendChild(row);
 
   box.appendChild(el('p', 'hint', '待清理恢复记录（导入中断后留下的中间文件）'));
   const recLine = el('p', 'hint');
@@ -2573,8 +2764,11 @@ function enterGameScreen() {
   state.playerAfter = 0;
   state.godAfter = 0;
   state.playerView = null; state.godView = null; // 清掉上一局的缓存帧，避免切换对局后渲染残留
-  state.roleShown = false;
+  state.roleShown = false; state.roleRevealed = false;
+  roleRevealController?.cancel();
   state.anno = { rev: 0, seats: {}, loaded: false, gameId: state.game.gameId };
+  state.notesCollapsed = true;
+  state.notesChoice = false;
   state.annoUndo = null;
   try { state.tags = window.WWGameDraft.readTags(localStorage, 'ww_tags_', state.game.gameId); } catch (_) { state.tags = {}; }
   $('#stream').innerHTML = '';
@@ -2628,9 +2822,9 @@ function bindGameChrome() {
     state.notesModeBound = true;
     if (window.matchMedia) {
       try {
-        matchMedia('(min-width: 961px)').addEventListener('change', applyNotesMode);
+        matchMedia('(min-width: 1440px)').addEventListener('change', applyNotesMode);
         // 玩家区抽屉与笔记同一断点口径（guidance §3.3 :156：低于 960px 时"玩家和笔记"都改抽屉）
-        matchMedia('(min-width: 961px)').addEventListener('change', applySeatsMode);
+        matchMedia('(min-width: 1024px)').addEventListener('change', applySeatsMode);
       } catch (_) { /* 老 WebView 无 addEventListener 版本：跳过动态切换，刷新后生效 */ }
     }
   }
@@ -2645,7 +2839,7 @@ function bindGameChrome() {
 function applySeatsMode() {
   const game = $('#screen-game');
   if (!game) return;
-  const wide = !!(window.matchMedia && matchMedia('(min-width: 961px)').matches);
+  const wide = !!(window.matchMedia && matchMedia('(min-width: 1024px)').matches);
   // 控件**无条件先创建**（幂等），再决定可见性。
   // 上一版在宽屏分支提前 return，导致宽屏下这个按钮根本不存在（真页面实测读到 btnHidden=null），
   // 断言与行为都无从对齐；现在宽屏读到 true、抽屉档读到 false，两种档位都可核对。
@@ -2658,7 +2852,10 @@ function applySeatsMode() {
     btn.addEventListener('click', () => {
       const open = game.classList.toggle('seats-open');
       btn.setAttribute('aria-expanded', String(open));
+      $('#left-col').inert = !open;
+      if (open) $('#btn-seats-close').focus(); else btn.focus();
     });
+    $('#btn-seats-close').addEventListener('click', () => btn.click());
     const host = $('.game-top .top-actions') || $('#screen-game .game-top') || game;
     host.appendChild(btn);
   }
@@ -2667,9 +2864,13 @@ function applySeatsMode() {
     game.classList.remove('seats-open');
     btn.hidden = true;
     btn.setAttribute('aria-expanded', 'false');
+    $('#left-col').inert = false;
+    $('#btn-seats-close').hidden = true;
     return;
   }
   btn.hidden = false;
+  $('#btn-seats-close').hidden = false;
+  $('#left-col').inert = !game.classList.contains('seats-open');
   btn.setAttribute('aria-expanded', String(game.classList.contains('seats-open')));
 }
 
@@ -2695,7 +2896,7 @@ function setSeatView(view) {
 }
 
 /** 笔记右栏模式（FIN-05）：≥1280px 常驻右栏（.docked），更窄时回到既有抽屉机制 */
-function notesDocked() { return !!(window.matchMedia && matchMedia('(min-width: 961px)').matches); }
+function notesDocked() { return !!(window.matchMedia && matchMedia('(min-width: 1440px)').matches); }
 
 function applyNotesMode() {
   const d = $('#notes-drawer');
@@ -2706,13 +2907,15 @@ function applyNotesMode() {
     d.classList.toggle('hidden', !!state.notesCollapsed);
   } else {
     d.classList.remove('docked');
-    $('#screen-game').classList.remove('notes-collapsed');
+    $('#screen-game').classList.add('notes-collapsed');
     d.classList.add('hidden'); // 抽屉模式默认收起，由顶栏 📝 打开
   }
   if (!d.classList.contains('hidden')) renderNotesList();
+  $('#btn-notes').setAttribute('aria-expanded', String(!d.classList.contains('hidden')));
 }
 
 function toggleNotesDrawer() {
+  state.notesChoice = true;
   const d = $('#notes-drawer');
   if (notesDocked()) {
     // 常驻右栏模式：📝 按钮 = 收起/展开右栏
@@ -2724,6 +2927,8 @@ function toggleNotesDrawer() {
   $('#god-drawer').classList.add('hidden'); // 两个抽屉互斥
   d.classList.toggle('hidden');
   if (opening) renderNotesList();
+  $('#btn-notes').setAttribute('aria-expanded', String(opening));
+  if (opening) $('#btn-notes-close').focus(); else $('#btn-notes').focus();
 }
 
 /** 当前局的元数据（mock 等）：视图负载里没有，结算层要如实标注，懒加载一次并缓存 */
@@ -2842,6 +3047,7 @@ async function initAnnotations() {
     state.anno.seats = r.annotations.seats || {};
   } catch (_) { /* 无归属档案的旧局：标注功能只读不可用，不阻塞对局 */ }
   state.anno.loaded = true;
+  if (!state.notesChoice) { state.notesCollapsed = Object.keys(state.anno.seats || {}).length === 0; applyNotesMode(); }
   // 关键：进局首次渲染座位时标注往往还在拉取中；数据到达后必须补一次重绘，
   // 否则刷新恢复的场景下角标要等下一次全量重绘才会出现（实测踩过）
   if (state.view) updateSeats(state.view);
@@ -3319,6 +3525,8 @@ function backHome() {
   stopPolling();
   if (!state.view || !state.view.finished) window.WWGameDraft.writeHandle(localStorage, 'ww_current', state.game);
   else window.WWGameDraft.clearHandle(localStorage, 'ww_current');
+  // Keep the resumable handle, but do not immediately auto-enter the same game on reload.
+  sessionStorage.setItem('ww_return_home_once', '1');
   location.reload();
 }
 
@@ -3554,20 +3762,18 @@ async function resumePausedGame() {
  *
  * 秒表（2026-09 加）：实测发言平均等 103.6s、最长 362s，而普通模式下这段时间屏幕**完全不动**
  * —— 体感上"卡死"和"在跑"的差别比实际耗时更伤人。这里只加"已 N 秒"和公开发言的字数，
- * 不泄露任何私密内容（秒数进入 sig，让既有的 1.2s 轮询把秒表走起来）。
+ * 独立的本地秒表不依赖 SSE 新帧；服务器 startedAt 保证刷新后仍显示实际等待时长。
  */
-function liveSince(key) {
-  if (!state.liveSince || state.liveSince.key !== key) state.liveSince = { key, at: Date.now() };
-  return state.liveSince.at;
-}
-
-function renderLive(v) {
+function renderLive(v, clockOnly = false) {
   const node0 = document.getElementById('live-typing');
-  const l = v && v.live;
+  const l = v && !v.finished && !v.paused ? v.live : null;
   // 私密投票期间：没有公开发言，但服务端会播报"已收集几票"——
   // 那是这个阶段唯一能让玩家知道"在跑"的信号（不泄露任何目标），不能因为 live 为空就收掉。
-  const vpRaw = v && !v.finished ? state.voteProgress : null;
+  const vpRaw = v && !v.finished && !v.paused ? state.voteProgress : null;
   const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
+  window.WWConnectionState.syncLiveClock(state, !!(l || vp) && !$('#screen-game').classList.contains('hidden'), () => {
+    if (!document.hidden) renderLive(state.godMode ? state.view : (state.playerView || state.view), true);
+  });
   if (!l && !vp) {
     if (node0) node0.remove();
     state.liveSig = '';
@@ -3578,9 +3784,17 @@ function renderLive(v) {
   const text = l ? l.text || '' : '';
   const reasoning = l ? l.reasoning || '' : '';
   const canSeeText = !!l && (!!l.public || !!state.godMode);
-  const secs = l ? Math.max(0, Math.round((Date.now() - liveSince(`${l.seat}|${l.task || ''}`)) / 1000))
-    : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
-  const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
+  const workStatus = window.WWConnectionState.liveStatus(l, canSeeText);
+  const secs = window.WWConnectionState.liveSeconds(state, l, vp && vp.at);
+  const countText = vp && !l
+    ? `已思考 ${vp.done}/${vp.total} · ${secs}s`
+    : `已 ${secs}s${canSeeText && text ? ` · ${text.length} 字` : ''}${state.godMode && reasoning ? ` · 思考 ${reasoning.length} 字` : ''}`;
+  if (clockOnly && node0) {
+    const counter = node0.querySelector('.typing-count');
+    if (counter) counter.textContent = countText;
+    return; // A clock tick never rebuilds speech text or moves the reader's scroll position.
+  }
+  const sig = `${l ? l.seat : 0}|${l ? l.task : ''}|${workStatus}|${text.length}|${reasoning.length}|${state.godMode ? 1 : 0}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}`;
   if (node0 && state.liveSig === sig) return; // 内容未增长：不写 DOM
   state.liveSig = sig;
   let node = node0;
@@ -3592,29 +3806,27 @@ function renderLive(v) {
   // FIN-10 流式更新当前节点：骨架（谁在说/什么形态）只在一段直播开始或形态变化时重建；
   // 之后每个字块只写正文与计数两个文本节点，不重建整个气泡。
   const who = l ? seatLabel(l.seat) : '';
-  const skelSig = `${l ? l.seat : 0}|${l ? l.task : ''}|${canSeeText ? 1 : 0}|${state.godMode ? 1 : 0}|${vp && !l ? 1 : 0}`;
+  const skelSig = `${l ? l.seat : 0}|${l ? l.task : ''}|${canSeeText ? 1 : 0}|${workStatus}|${state.godMode ? 1 : 0}|${vp && !l ? 1 : 0}`;
   if (state.liveSkel !== skelSig || !node.firstChild) {
     state.liveSkel = skelSig;
     if (vp && !l) {
       node.innerHTML = '<div class="meta"><span class="typing-tag">… 正在收集投票</span></div>'
         + '<div class="typing-body muted"><span class="typing-count"></span></div>';
     } else {
-      const tag = canSeeText && text ? '✍ 正在发言' : (text ? '… 正在决策' : '… 正在思考');
+      const tag = workStatus;
       node.innerHTML = `<div class="meta"><span class="who">${who}</span> <span class="typing-tag">${tag}</span> <span class="typing-count"></span></div>`
         + (canSeeText
           ? '<div class="typing-body"><span class="typing-text"></span><span class="caret"></span></div>'
-          : '<div class="typing-body muted">正在思考…<span class="caret"></span></div>')
+          : `<div class="typing-body muted">${escapeHtml(workStatus)}<span class="caret"></span></div>`)
         + (state.godMode ? '<div class="typing-reason" hidden></div>' : '');
     }
   }
   const count = node.querySelector('.typing-count');
-  if (count) {
-    count.textContent = vp && !l
-      ? `已思考 ${vp.done}/${vp.total} · ${secs}s`
-      : `已 ${secs}s${canSeeText && text ? ` · ${text.length} 字` : ''}${state.godMode && reasoning ? ` · 思考 ${reasoning.length} 字` : ''}`;
-  }
+  if (count) count.textContent = countText;
+  const tag = node.querySelector('.typing-tag');
+  if (tag && l) tag.textContent = workStatus;
   const tNode = node.querySelector('.typing-text');
-  if (tNode) tNode.textContent = text;
+  if (tNode) { tNode.textContent = text || workStatus; tNode.classList.toggle('muted', !text); }
   const rNode = node.querySelector('.typing-reason');
   if (rNode) {
     if (state.godMode && reasoning) { rNode.hidden = false; rNode.textContent = `💭 ${reasoning.slice(-400)}`; }
@@ -3654,11 +3866,13 @@ function mountRoleArt(root, rid, width) {
 
 /** 检视模式：保留现有点击/指针行为，牌面由共享渲染器绘制。 */
 function openInspect(rid) {
+  if (document.querySelector('.inspect-stage')) return;
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
+  stage.setAttribute('aria-label', `检视${r.name}角色牌`);
   const card = el('div', 'inspect-card');
   const fit = window.CardFrame.fitSize(window.CardFrame.SIZES.inspect, {
-    width: window.innerWidth - 48, height: window.innerHeight - 110,
+    width: window.innerWidth - 48, height: window.innerHeight - 180,
   });
   card.style.width = `${fit.width}px`;
   window.CardFrame.mount(card, { roleId: rid, revealed: true, name: r.name, width: fit.width });
@@ -3666,13 +3880,15 @@ function openInspect(rid) {
   stage.appendChild(el('div', 'inspect-desc', escapeHtml(r.short)));
   stage.appendChild(el('div', 'inspect-hint', '移动指针检视 · 点击任意处关闭'));
   stage.addEventListener('mousemove', (e) => {
+    if (window.WWPresentation.reducedMotion()) return;
     const rect = card.getBoundingClientRect();
     const dx = (e.clientX - rect.left - rect.width / 2) / rect.width;
     const dy = (e.clientY - rect.top - rect.height / 2) / rect.height;
     card.style.transform = `rotateY(${(dx * 16).toFixed(2)}deg) rotateX(${(-dy * 14).toFixed(2)}deg)`;
   });
-  stage.addEventListener('click', () => stage.remove());
   document.body.appendChild(stage);
+  const restore = window.WWPresentation.beginInspection(stage);
+  stage.addEventListener('click', () => { stage.remove(); restore(); syncModalLayerState(); });
 }
 
 /* ============================================================
@@ -3684,7 +3900,11 @@ function openInspect(rid) {
    对局中从齿轮菜单进来也不会盖住牌桌。
    ============================================================ */
 function showScreen(id) {
+  if (id !== 'screen-game') window.WWConnectionState.stopLiveClock(state);
+  const changed = $('#' + id).classList.contains('hidden');
   document.querySelectorAll('#app > .screen').forEach((s) => s.classList.toggle('hidden', s.id !== id));
+  if (id === 'screen-game' && state.view) renderLive(state.godMode ? state.view : (state.playerView || state.view));
+  if (changed) window.WWPresentation.enter($('#' + id));
 }
 
 /** 本局在场人数：优先当前对局的板子，其次设置页选中的板子（都没有就返回空表 = 不加角标） */
@@ -4028,6 +4248,8 @@ function renderEventNode(e) {
       const text = (d.text || '').slice(0, 900);
       return el('div', 'msg private', `💭 ${seatLabel(e.actor)} 的内心独白（${escapeHtml(d.task || '')}）<div class="hint" style="margin-top:4px;white-space:pre-wrap">${escapeHtml(text)}${(d.text || '').length > 900 ? '…' : ''}</div>`);
     }
+    case 'ai_status':
+      return elText('div', 'sysline', e.data?.message || '模型响应异常，本次已使用规则兜底行动。');
     case 'ai_thinking':
     case 'await_input':
     case 'llm_error':
@@ -4054,6 +4276,19 @@ function updateHeader(v) {
   renderTopbarIdentity();
   $('#g-day').textContent = `第${v.day}天`;
   $('#g-phase').textContent = PHASE_LABEL[v.phase] || v.phase;
+  const lead = $('#ng-game-headline');
+  const leadPhase = $('#ng-game-phase');
+  const leadAlive = $('#ng-game-alive');
+  const leadCaption = $('#ng-game-caption');
+  if (lead) {
+    const ambient = PHASE_AMBIENT[v.phase] || 'dusk';
+    lead.textContent = ambient === 'night' ? '长夜已至，谨慎行动'
+      : ambient === 'vote' ? '每一票，都将改变长夜'
+        : v.phase === 'over' ? '故事落幕，真相揭晓' : '倾听，也留下你的判断';
+    leadPhase.textContent = `第 ${v.day} 天 · ${PHASE_LABEL[v.phase] || v.phase}`;
+    leadAlive.textContent = `存活 ${(v.players || []).filter((player) => player.alive).length} / ${(v.players || []).length}`;
+    leadCaption.textContent = `${(v.players || []).length} 人对局 · 本局归属 ${state.game && state.game.ownerNickname ? state.game.ownerNickname : '当前档案'}`;
+  }
   document.body.dataset.phase = PHASE_AMBIENT[v.phase] || 'dusk';
   // 天数牌下沿的 DAY/NIGHT：与氛围同源，避免"画面是白天、文字说夜晚"的自相矛盾
   const kick = $('#g-day-kicker');
@@ -4062,6 +4297,8 @@ function updateHeader(v) {
     kick.textContent = v.day === 0 ? 'SETUP' : (night ? 'NIGHT' : 'DAY');
   }
   const me = v.me;
+  // 玩家身份已在座位栏展示；观战仍需保留视角提示。
+  $('#g-me').hidden = !!(me && me.role) || !state.godMode;
   $('#g-me').innerHTML = me && me.role
     ? `你是 ${me.seat}号 ${escapeHtml(me.name)} · ${roleChipHtml(me.role)}${me.isSheriff ? ' 👑警长' : ''}${me.alive ? '' : ' 💀'}`
     : (state.godMode ? '上帝视角' : '');
@@ -4081,6 +4318,10 @@ function updateHeader(v) {
  * 未变化的座位节点保持同一引用（头像 <img> 不重复创建，不再每帧重排）。
  */
 function updateSeats(v) {
+  const noteCount = Object.keys(state.anno.seats || {}).length;
+  const notesButton = $('#btn-notes');
+  notesButton.dataset.count = String(noteCount);
+  notesButton.setAttribute('aria-label', `私人笔记（${noteCount} 个座位）`);
   const box = $('#seats');
   if (!box || !Array.isArray(v.players)) return;
   const mySeat = v.me ? v.me.seat : 0;
@@ -4177,6 +4418,8 @@ function buildSeatStructure(v, structKey) {
     rnum.appendChild(elText('span', 'seat-index', String(p.seat)));
     const rrole = el('span', 'role-chip role-live hidden');
     rnum.appendChild(rrole);
+    // The list is the default desktop view, so it must carry the same portraits as the ring.
+    if (window.AICast) window.AICast.decorate(rnum, portraits.get(p.seat));
     const rmain = el('div', 'row-main');
     const rname = el('span', 'row-name');
     const rmeta = el('span', 'row-meta hint');
@@ -4317,6 +4560,13 @@ function patchSeatRow(row, p, i, ctx) {
     if (rc) {
       rc.classList.toggle('hidden', !info);
       if (info) { rc.textContent = info.emoji; rc.style.setProperty('color', info.color); rc.title = `${info.emoji}${info.name}`; }
+    }
+    const portrait = ctx.portraits ? ctx.portraits.get(p.seat) : null;
+    if (window.AICast && portrait && rnum.dataset.portrait !== portrait.id) {
+      const old = rnum.querySelector('.ai-portrait');
+      if (old) old.remove();
+      rnum.classList.remove('portrait-ready');
+      window.AICast.decorate(rnum, portrait);
     }
   }
   const rname = row.querySelector('.row-name');
@@ -4978,24 +5228,26 @@ async function submitSimple(payload, btn, pend) {
 }
 
 // ---------------- 身份翻牌 ----------------
+let roleRevealController = null;
 function maybeShowRole(v) {
   if (state.roleShown || !v.me || !v.me.role || v.finished || v.phase === 'setup') return; // 已结束的对局直接看结算，不再播翻牌
   if (v.day === 0 && !v.events.length) return;
   state.roleShown = true;
-  const r = roleInfo(v.me.role);
-  $('#flip-front').innerHTML = `
-    ${roleArtHtml()}`;
-  mountRoleArt($('#flip-front'), v.me.role);
-  $('#flip-caption').innerHTML = `
-    <div class="r-desc">${r.short}</div>
-    ${v.me.teammates && v.me.teammates.length ? `<div class="r-desc tm">狼队：${v.me.teammates.join('、')} 号</div>` : ''}`;
   const overlay = $('#role-overlay');
-  overlay.classList.remove('hidden');
-  const card = $('#flip-card');
-  card.classList.remove('flipped');
-  card.onclick = () => card.classList.add('flipped');
-  $('#btn-flip-done').onclick = () => overlay.classList.add('hidden');
-  $('#btn-inspect').onclick = () => openInspect(v.me.role);
+  roleRevealController = window.WWPresentation.roleReveal({
+    overlay, card: $('#flip-card'), front: $('#flip-front'), caption: $('#flip-caption'),
+    hint: $('#flip-hint'), tools: overlay.querySelector('.flip-tools'), done: $('#btn-flip-done'), inspect: $('#btn-inspect'),
+    renderFront(front) { front.innerHTML = roleArtHtml(); mountRoleArt(front, v.me.role); },
+    renderCaption(caption) {
+      const r = roleInfo(v.me.role);
+      caption.innerHTML = `<div class="r-desc">${escapeHtml(r.short)}</div>
+        ${v.me.teammates?.length ? `<div class="r-desc tm">狼队：${v.me.teammates.map(escapeHtml).join('、')} 号</div>` : ''}`;
+    },
+    onReveal() { state.roleRevealed = true; },
+    onDone() { roleRevealController.cancel(); overlay.classList.add('hidden'); syncModalLayerState(); $('#btn-gear').focus({ preventScroll: true }); },
+    onInspect() { openInspect(v.me.role); },
+  });
+  syncModalLayerState();
 }
 
 // ---------------- 规则书 ----------------
@@ -5066,7 +5318,7 @@ function openModal(inner, { onDismiss } = {}) {
  */
 function syncModalLayerState() {
   const root = document.getElementById('modal-root');
-  const open = !!root && root.children.length > 0;
+  const open = (!!root && root.children.length > 0) || !!document.querySelector('.inspect-stage') || !$('#role-overlay').classList.contains('hidden');
   const appEl = document.getElementById('app');
   if (appEl) appEl.inert = open;
   document.body.classList.toggle('ww-layer-open', open);
@@ -5074,6 +5326,7 @@ function syncModalLayerState() {
 
 // modal-root 被任何路径清空（含 innerHTML 直清）都自动解除背景 inert 与滚动锁
 new MutationObserver(syncModalLayerState).observe(document.getElementById('modal-root'), { childList: true });
+new MutationObserver(syncModalLayerState).observe(document.getElementById('role-overlay'), { attributes: true, attributeFilter: ['class'] });
 
 /** 关闭最上层模态并把焦点还给来源。链式打开下一个弹窗时来源保持不变。 */
 function closeModal() {
@@ -5097,18 +5350,19 @@ function closeModal() {
  * 避免"两个监听器各关一层"或"谁也不关"）。关闭一律走统一的关闭函数，遮罩、焦点归还、
  * body 滚动锁、返回栈清理都在那里，不再有"直接改 hidden"的旁路 —— 那条路被 `.modal{display:flex}`
  * 盖掉，等于没关（浏览器实测：手机端 Esc 后弹层仍在屏幕上）。
- * 优先级按 z-index 从高到低：检视大卡(90) → 弹窗(75/76) → 笔记抽屉。
+ * 优先级按 z-index 从高到低：检视大卡(100) → 弹窗(75/76) → 笔记抽屉。
  * ⚠ 身份翻牌浮层（#role-overlay，80）**有意不在关闭之列**：它是"确认看到自己身份"的必经步骤，
  * 允许 Esc 跳过会让玩家没看到身份就被推进对局；它只由「我记住了，开始游戏」关闭。
  * 上帝面板（#god-drawer）同理不关：语义是"关面板 = 退上帝视角"，保持原入口操作。
  */
 window.__wwEscClose = () => {
   const stage = document.querySelector('.inspect-stage');
-  if (stage) { stage.remove(); return true; }
+  if (stage) { stage.click(); return true; }
   const root = $('#modal-root');
   if (root && root.children.length) { (state.modalDismiss || closeModal)(); return true; }
   const notes = $('#notes-drawer');
   if (notes && !notes.classList.contains('hidden') && !notesDocked()) { toggleNotesDrawer(); return true; }
+  if ($('#screen-game').classList.contains('seats-open')) { $('#btn-seats-close').click(); return true; }
   return false;
 };
 
@@ -5164,7 +5418,7 @@ function renderCodexTab(box) {
   for (const r of Object.values(state.meta.roles)) {
     const c = el('div', 'r-card');
     c.innerHTML = `${roleArtHtml()}
-      <h4>${r.emoji} ${r.name} <small style="color:${r.color}">${{ wolf: '狼人阵营', god: '神职', villager: '平民' }[r.category]}</small></h4>
+      <h4>${r.emoji} ${r.name} <small style="color:${r.color}">${{ wolf: '狼人', god: '神职', villager: '平民' }[r.category]}</small></h4>
       <p>${r.short}</p>
       <button class="btn small ghost">${icoLabel('inspect', '检视')}</button>`;
     mountRoleArt(c, r.id);
@@ -5463,6 +5717,35 @@ window.WWIcons.ensureDefs(document);
 function mountNavIcons() { window.WWIcons.mount(document); }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mountNavIcons);
 else mountNavIcons();
+document.addEventListener('ww:languagechange', () => {
+  if (state.meta) {
+    renderBoardTemplateSelect();
+    renderBoardEditor();
+    renderSetupDigest();
+  }
+  if (!state.game && $('#screen-setup') && !$('#screen-setup').classList.contains('hidden')) checkResume().catch(() => {});
+  if (state.cfg) {
+    renderPaceSelect($('#cfg-pace') ? $('#cfg-pace').value : state.cfg.pace);
+    renderKeyChannels(state.cfg);
+    if (state.cfg.hasKey) $('#cfg-key').placeholder = I18N.getLang() === 'en'
+      ? `Saved (${state.cfg.apiKeyMasked}); leave blank to keep`
+      : `已保存（${state.cfg.apiKeyMasked}），留空则不修改`;
+  }
+  renderAbout();
+  const pairStatus = $('#pairing-status');
+  if (pairStatus && !/\d{4,}/.test(pairStatus.textContent || '')) pairStatus.textContent = I18N.getLang() === 'en'
+    ? 'LAN pairing is not required. Open this server address on your phone.'
+    : '局域网配对：当前无需配对，手机直接访问本服务地址即可。';
+  const view = $('#screen-setup') && $('#screen-setup').dataset.view;
+  const titleKey = { lobby: 'app.title', history: 'home.history', rulebook: 'home.rulebook', settings: 'home.settingsPage', wizard: 'home.wizardPage' }[view];
+  if (titleKey && $('#app-title')) $('#app-title').textContent = I18N.t(titleKey) || $('#app-title').textContent;
+  if (view === 'settings' || view === 'wizard') {
+    $('#setup-page-title').textContent = I18N.t(view === 'settings' ? 'home.settingsPage' : 'home.wizardPage');
+    $('#setup-page-description').textContent = I18N.t(view === 'settings' ? 'home.settingsDescription' : 'home.wizardDescription');
+    updateWizardMode();
+    if (view === 'wizard') applySetupStep(Number($('#setup-section').dataset.step || 0));
+  }
+});
 window.addEventListener('storage', async (e) => {
   if (!window.WWProfileState.isSelectionKey(e.key)) return;
   // §5.2：**另一个窗口**切换了当前档案。本窗口若正有未保存的资料/笔记，
@@ -5481,6 +5764,10 @@ window.addEventListener('storage', async (e) => {
   if (!state.game) await checkResume();
 });
 initSetup().then(async () => {
+  if (sessionStorage.getItem('ww_return_home_once') === '1') {
+    sessionStorage.removeItem('ww_return_home_once');
+    return;
+  }
   const saved = window.WWGameDraft.readHandleRaw(localStorage, 'ww_current');
   if (saved) {
     try {

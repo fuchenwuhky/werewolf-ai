@@ -572,12 +572,12 @@ test('migrateConfig：仅提升历史旧默认值，自定义值不动', () => {
   assert.strictEqual(migrateConfig({ timeoutMs: 120000 }).timeoutMs, DEFAULT_CONFIG.timeoutMs, '旧超时 120s → 360s');
   assert.strictEqual(migrateConfig({ timeoutMs: 240000 }).timeoutMs, DEFAULT_CONFIG.timeoutMs, '过渡值 240s → 360s');
   assert.strictEqual(migrateConfig({ timeoutMs: 300000 }).timeoutMs, 300000, '自定义超时保留');
-  assert.strictEqual(DEFAULT_CONFIG.reasoningEffort, 'medium', '发言类默认中档思考（实测 high 平均等 103.6s）');
+  assert.strictEqual(DEFAULT_CONFIG.reasoningEffort, 'low', '发言默认轻度思考，严格提示词提供阶段与证据约束');
   assert.strictEqual(DEFAULT_CONFIG.fastEffort, 'low', '快速任务默认最低思考');
   assert.strictEqual(migrateConfig({ reasoningEffort: 'low' }).reasoningEffort, 'low', 'low 是合法档位，保留');
   assert.strictEqual(migrateConfig({ reasoningEffort: 'medium' }).reasoningEffort, 'medium', 'medium 是合法档位，保留');
   assert.strictEqual(migrateConfig({ reasoningEffort: 'high' }).reasoningEffort, 'high', 'high 保留');
-  assert.strictEqual(migrateConfig({ reasoningEffort: 'max' }).reasoningEffort, 'medium', 'max 档已下线 → 迁移为默认中档');
+  assert.strictEqual(migrateConfig({ reasoningEffort: 'max' }).reasoningEffort, 'low', 'max 档已下线 → 迁移为默认轻度');
   assert.strictEqual(migrateConfig({ fastEffort: 'max' }).fastEffort, 'low', 'fastEffort 的 max 也迁移为默认 low');
   assert.strictEqual(migrateConfig({ maxContextTokens: 500000 }).contextBudget, DEFAULT_CONFIG.contextBudget, '旧压缩阈值 → 新上下文预算');
   assert.ok(!('maxContextTokens' in migrateConfig({ maxContextTokens: 500000 })), '旧字段删除');

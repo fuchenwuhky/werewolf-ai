@@ -75,7 +75,7 @@ test('字典：HTML 上标记的每个键都必须存在（否则用户会看到
 test('取词：t() 命中当前语言；未知键返回 null（而不是键名）', () => {
   const I18N = loadI18n();
   assert.strictEqual(I18N.getLang(), 'zh-CN');
-  assert.strictEqual(I18N.t('start.button'), '🎮 开始游戏');
+  assert.strictEqual(I18N.t('start.button'), '开始新局');
   assert.strictEqual(I18N.t('完全不存在.键'), null, '未知键必须返回 null，交由调用方保留原文案');
   assert.strictEqual(I18N.setLang('en'), true);
   assert.strictEqual(I18N.t('start.button'), '🎮 Start game');
@@ -140,7 +140,7 @@ test('DOM 应用：命中就替换，缺键就保留页面原文案（绝不显�
     ['data-i18n-html', 'overlay.flipHint'],
   ]);
   const n = I18N.applyI18n(doc);
-  assert.strictEqual(els[0].textContent, '🎮 开始游戏');
+  assert.strictEqual(els[0].textContent, '开始新局');
   assert.strictEqual(els[1].textContent, '原文案', '缺键必须保留原文案（显示键名比不翻译更糟）');
   assert.strictEqual(els[2].getAttribute('placeholder'), 'API Key');
   assert.strictEqual(els[3].getAttribute('title'), '切换界面语言');
@@ -154,7 +154,7 @@ test('DOM 应用：切换语言会重刷已标记的元素，且 <html lang> 跟
   const I18N = loadI18n();
   const { doc, els } = fakeDom([['data-i18n', 'start.button'], ['data-i18n', 'game.terminate']]);
   I18N.applyI18n(doc);
-  assert.strictEqual(els[0].textContent, '🎮 开始游戏');
+  assert.strictEqual(els[0].textContent, '开始新局');
   I18N.setLang('en', doc);
   assert.strictEqual(els[0].textContent, '🎮 Start game');
   assert.strictEqual(els[1].textContent, '⏹ End game');

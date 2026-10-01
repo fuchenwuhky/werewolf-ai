@@ -102,7 +102,7 @@ test('手机端「我的」是**独立页面**：与 #m-boards/#m-codex/#m-rules
   // 契约变更（M3 第一批 C1b）：**M3 把「对局」升级为独立页** #m-games，插在玩家中心之后、
   // 规则确认之前 —— 屏清单多了这一屏是**有意的结构变更**，不是放宽判据（新屏同样按 id 逐字钉住）。
   assert.deepStrictEqual(
-    screens, ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
+    screens, ['m-boards', 'm-setup', 'm-settings', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
     `屏的顺序变了（会把"返回"和 showScreen 的语义一起带偏）：${screens.join(' → ')}`
   );
   const el = elementById(html, 'm-player');
@@ -115,7 +115,7 @@ test('手机端「我的」是**独立页面**：与 #m-boards/#m-codex/#m-rules
   assert.ok(list, 'm.js 的 showScreen 显隐清单写法变了，这条守卫需要同步');
   const ids = [...list[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
   // 契约变更（M3 第一批 C1b）：**M3 把「对局」升级为独立页**，屏清单加 'm-games'（见 test/m3-mobile-nav.test.js）
-  assert.deepStrictEqual(ids, ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
+  assert.deepStrictEqual(ids, ['m-boards', 'm-setup', 'm-settings', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'],
     `showScreen 的屏清单与页面里的屏不一致：${ids.join(' → ')}`);
 });
 
@@ -133,11 +133,10 @@ test('「我的」页签：点它是进独立页面（退回"只开弹层"即判
 
   // 页签文字保持 HEAD 原样（`👤 我的`）：这处 👤 是「内容里的正常 emoji」，test/icons.test.js 的
   // CONTENT_EMOJI_PINS 逐条钉着它，不许换算成徽记。本用例只钉"点了进独立页面"这件事。
-  assert.strictEqual(buttonText(html, 'm-tab-me'), '👤 我的',
+  assert.strictEqual(buttonText(html, 'm-tab-me'), '我的',
     `#m-tab-me 的可见文字应保持 HEAD 原样，实际 ${JSON.stringify(buttonText(html, 'm-tab-me'))}`);
   const tabMe = elementById(html, 'm-tab-me');
-  assert.ok(tabMe && !('data-ww-icon' in tabMe.attrs),
-    '#m-tab-me 挂上了 data-ww-icon：既会踩 test/icons.test.js 的"内容 emoji 必须还在"，也会变成徽记+emoji 两份图标');
+  assert.ok(tabMe && tabMe.attrs['data-ww-icon'] === 'players', '系统导航必须使用统一的 players SVG 徽记');
 
   // 自检：同一个提取函数在"退回弹层"的源码上必须给出**别的**答案（证明这条判据真的能红）
   const reverted = mjs.replace(

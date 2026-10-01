@@ -74,7 +74,7 @@ const TIER_ORDER = ['minimal', 'low', 'normal', 'high', 'critical'];
 const CHATTER_TYPES = new Set([
   'speech', 'wolf_propose', 'ai_thinking', 'ai_reasoning', 'phase', 'night_step',
   'system', 'direction', 'deal', 'teammates', 'llm_error', 'await_input', 'game_paused',
-  'vote_progress', // 纯 UI 进度反馈，不是信息：不参与"信息量→思考预算"的打分
+  'vote_progress', 'ai_status', // 纯 UI 进度反馈，不是信息：不参与"信息量→思考预算"的打分
 ]);
 
 /** 采集决策特征（全部确定性，零 LLM 成本） */
@@ -144,7 +144,7 @@ function resolveBudget(tier, cfg = {}) {
   const fastMax = Number(cfg.fastMaxTokens) > 0 ? Number(cfg.fastMaxTokens) : 8000;
   const cap = t.effort === 'low' ? Math.min(hardMax, fastMax) : hardMax;
   return {
-    effort: t.effort === 'high' ? (cfg.reasoningEffort || 'high') : (cfg.fastEffort || 'low'),
+    effort: t.effort === 'high' ? (cfg.reasoningEffort || 'low') : (cfg.fastEffort || 'low'),
     maxTokens: Math.min(t.maxTokens, cap),
     hardCap: Math.min(t.hardCap, hardMax),
   };
@@ -153,7 +153,7 @@ function resolveBudget(tier, cfg = {}) {
 /** 旧的按任务名分层（effortPolicy='flat'）：保持与历史行为完全一致 */
 function flatBudget(task, cfg = {}) {
   return {
-    effort: FAST_TASKS.has(task) ? (cfg.fastEffort || 'low') : (cfg.reasoningEffort || 'high'),
+    effort: FAST_TASKS.has(task) ? (cfg.fastEffort || 'low') : (cfg.reasoningEffort || 'low'),
     maxTokens: FAST_TASKS.has(task) ? (cfg.fastMaxTokens || 8000) : Math.min(cfg.maxTokens || 16000, 12000),
     hardCap: 32768,
   };

@@ -42,12 +42,12 @@ test('校验失败：每次非法都留痕，最终降级带 degraded + 降级�
   const errs = g.events.filter((e) => e.type === 'llm_error' && e.data && e.data.task === 'vote');
   const degraded = errs.filter((e) => e.data.degraded);
   const retried = errs.filter((e) => !e.data.degraded);
-  assert.strictEqual(retried.length, 3, `首答 + 两次重试共 3 次失败，都该留痕（实际 ${retried.length} 条）`);
-  assert.deepStrictEqual(retried.map((e) => e.data.attempt), [1, 2, 3], 'attempt 必须逐次递增');
+  assert.strictEqual(retried.length, 2, `首答 + 一次轻量补救共 2 次失败，都该留痕（实际 ${retried.length} 条）`);
+  assert.deepStrictEqual(retried.map((e) => e.data.attempt), [1, 2], 'attempt 必须逐次递增');
   assert.ok(retried.every((e) => typeof e.data.error === 'string' && e.data.error), '每条重试都要带原因');
   assert.strictEqual(degraded.length, 1, '必须有且只有一条降级留痕');
   assert.strictEqual(degraded[0].data.degraded, true);
-  assert.strictEqual(degraded[0].data.attempts, 3, '降级留痕要写清一共试了几次');
+  assert.strictEqual(degraded[0].data.attempts, 2, '降级留痕要写清一共试了几次');
   assert.strictEqual(degraded[0].data.degradedTo, '{"target":0}', '降级留痕要写清降级成了什么');
   assert.ok(degraded.every((e) => e.visibleTo === 'god'), '降级留痕只给上帝看，不该进玩家视野');
 });

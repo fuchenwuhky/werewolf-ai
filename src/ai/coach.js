@@ -159,7 +159,7 @@ async function generateCoachReview({ game, facts, llmCfg, logger, signal }) {
     const out = await llm.chatCompletion(llmCfg, messages, {
       logger,
       // 发言级强度：点评是一次性文本产出，且只发一次调用；用户选"快速局"时这一项也自动降下来
-      effort: llmCfg.reasoningEffort || 'high',
+      effort: llmCfg.reasoningEffort || 'low',
       maxTokens: 2000,
       signal,
       priority: PRIORITY.lesson, // 最低的业务优先级：不抢正在进行的对局决策

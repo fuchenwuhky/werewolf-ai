@@ -6,6 +6,8 @@
 const { ROLES } = require('./roles');
 const { resolveNightDamage, triggersCharm } = require('./damage');
 const { claimScan, mergeClaims } = require('./claims');
+const { requestScope } = require('../request-scope');
+const { ForceEnded } = require('../errors');
 
 // ---------- 输入校验（人类与 AI 共用同一套） ----------
 /**
@@ -28,7 +30,8 @@ const SPEECH_MAX_CHARS = 600;
  * 调用层的"分任务软超时"是 90s（发言）/30s（微决策），但传输层重试与校验层重试会**相乘**：
  * 一次决策最坏能拖十几分钟，玩家的观感就是"整局卡死"。宁可降级出一手平凡但合法的棋。
  */
-const DECISION_TOTAL_MS = 180000;
+const DECISION_TOTAL_MS = 60000;
+const PUBLIC_AI_TASKS = new Set(['speech', 'sheriff_speech', 'pk_speech', 'lastwords']);
 
 /**
  * 截断发言并留痕（god 可见）。
@@ -261,35 +264,33 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
   }
   let note = '';
   let lastError = '';
-  // 单次决策的总时间闸（A3）：调用层已有"分任务软超时"（发言 90s / 微决策 30s），
-  // 但传输层重试 × 校验层重试会相乘 —— 极端情况一次决策能拖十几分钟，整局看起来就是卡死。
-  // 超过这个总预算就不再发**昂贵**的重试（宁可出一手平凡但合法的棋，也不要让全场等一个人）。
-  //
-  // E1 修正（真实对局暴露的问题）：一次发言就可能吃满 12000 tokens / 362s，把预算一次花光，
-  // 于是**第一次**校验失败时闸门已经超了 → 直接降级（真实发生：3 号只说了"我过。"）。
-  // 但"闸门用尽"不等于"只能放弃"：这里允许**一次轻量补救**——effort 压到 fastEffort、
-  // 预算封在极小上限（agent.js 的 _cheapRetry），几秒钟就能重新要一份合法 JSON。
-  // 只有这次补救也失败才降级，代价是几秒，收益是玩家不必看到一句空话。
-  const budgetMs = Number(game.decisionTotalMs) > 0 ? Number(game.decisionTotalMs) : DECISION_TOTAL_MS;
+  // 绝对截止时间覆盖排队/记忆准备/响应体/退避/校验；补救时间预留在总预算内，不能超预算再加一轮。
+  const budgetMs = Number(game.decisionTotalMs) > 0 ? Number(game.decisionTotalMs) : PUBLIC_AI_TASKS.has(req.task) ? DECISION_TOTAL_MS : 30000;
   const deadlineAt = Date.now() + budgetMs;
-  let cheapTried = false;
+  const reserveMs = Math.min(10000, budgetMs / 4);
+  const scope = requestScope({signal:game.abortSignal, deadlineAt});
+  const requestBudget = {remaining:3}; // 传输与校验共享，不是每层分别给三次。
+  let validationAttempts = 0;
   let wasCheap = false;
-  for (let i = 0; i <= maxRetries; i++) {
-    const overBudget = Date.now() > deadlineAt;
-    if (overBudget && cheapTried) {
-      lastError = `单次决策总耗时超过 ${Math.round(budgetMs / 1000)}s（超时/失败重试累计）`;
-      game.logger.warn('ai', `${seat}号 ${req.task} ${lastError}，停止重试并降级`);
-      game.emit('llm_error', { actor: seat, visibleTo: 'god', data: { task: req.task, attempt: i + 1, error: lastError, timeout: true, degraded: false } });
-      break;
-    }
-    if (overBudget) {
-      cheapTried = true;
-      game.logger.warn('ai', `${seat}号 ${req.task} 已用尽 ${Math.round(budgetMs / 1000)}s 决策预算 → 只再给一次轻量补救（最低思考 + 极小预算）`);
-    }
-    wasCheap = overBudget;
+  try { for (let i = 0; i <= Math.min(maxRetries, 1); i++) {
+    if (scope.signal.aborted || requestBudget.remaining <= 0) { lastError ||= '决策时间或请求次数预算已用尽'; break; }
+    wasCheap = i > 0;
     const base = note ? { ...req, _retryNote: note } : req;
-    const request = overBudget ? { ...base, _cheapRetry: true } : base;
-    const raw = await game.ask(seat, request);
+    const attemptDeadline = wasCheap ? deadlineAt : deadlineAt - reserveMs;
+    const attempt = requestScope({signal:scope.signal, deadlineAt:attemptDeadline});
+    const request = { ...base, _cheapRetry:wasCheap, _decisionSignal:attempt.signal, _decisionDeadline:attemptDeadline, _requestBudget:requestBudget };
+    let raw;
+    validationAttempts++;
+    try { raw = await attempt.run(() => game.ask(seat, request)); }
+    catch (error) {
+      if (game.forceEnded) throw new ForceEnded();
+      if (game.finished || game.paused || error.fatal || error.code === 'GAME_PAUSED') throw error;
+      lastError = error.message || '模型请求失败';
+      game.emit('llm_error', {actor:seat,visibleTo:'god',data:{task:req.task,attempt:i+1,error:lastError,transport:true,timeout:!!error.timedOut,degraded:false}});
+      // 传输失败不是“输出 JSON 不合法”，不能再以校验失败的名义重跑整套大预算。
+      note = '上一请求未能完成。这次只返回一份简短、完整、合法的 JSON，不输出分析过程。';
+      continue;
+    } finally { attempt.close(); }
     const v = validatePayload(req.task, raw, req, game, seat);
     if (v.ok) return v.value;
     lastError = v.error;
@@ -301,9 +302,13 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
       visibleTo: 'god',
       data: { task: req.task, attempt: i + 1, error: v.error, degraded: false, cheap: wasCheap },
     });
-  }
-  game.logger.warn('ai', `${seat}号 ${req.task} 多次输出不合法，使用降级方案`);
+  } } finally { scope.close(); }
+  if (game.forceEnded) throw new ForceEnded();
+  if (game.finished) throw new Error('对局已终止');
+  game.logger.warn('ai', `${seat}号 ${req.task} 模型响应异常或超时，使用规则兜底行动：${lastError}`);
   const value = fallback ? fallback() : null;
+  game.emit('ai_status', {actor:seat,visibleTo:PUBLIC_AI_TASKS.has(req.task) ? 'all' : [seat],
+    data:{status:'degraded',message:'模型响应异常或等待超时，本次已使用规则兜底行动。'}});
   // 降级必须可见：以前只留一行"已降级处理"，玩家侧完全无感 ——
   // 于是"暗恋对象莫名其妙绑到 1 号""遗言凭空消失"这类现象看起来像 bug 却无从追查。
   game.emit('llm_error', {
@@ -311,7 +316,8 @@ async function askValidated(game, seat, req, { fallback, maxRetries = 2 } = {}) 
     visibleTo: 'god',
     data: {
       task: req.task,
-      attempts: maxRetries + 1,
+      attempts: validationAttempts,
+      networkAttempts: 3 - requestBudget.remaining,
       error: lastError,
       degraded: true,
       degradedTo: value == null ? 'null' : JSON.stringify(value).slice(0, 120),
@@ -967,7 +973,7 @@ async function electionPhase(game) {
     const p = game.player(s);
     if (!p.alive) continue;
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: true, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '大家好。', withdraw: false })));
+    const v = await askValidated(game, s, { task: 'sheriff_speech', speechRound: 'campaign', speechOrder: candidates, canExplode, canWithdraw: true, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '大家好。', withdraw: false })));
     if (v.explode) {
       const r = await handleExplode(game, s, v, { inElection: true });
       if (game.badgeSwallowed) { game.emit('sheriff_none', {}); return 'ok'; }
@@ -997,7 +1003,7 @@ async function electionPhase(game) {
     const p = game.player(s);
     if (!p.alive) continue;
     const canExplode = game.rules.allowSelfExplode && !!ROLES[p.role].selfExplode;
-    const v = await askValidated(game, s, { task: 'sheriff_speech', canExplode, canWithdraw: false, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '再给大家讲讲我的逻辑。' })));
+    const v = await askValidated(game, s, { task: 'sheriff_speech', speechRound: 'sheriff_pk', speechOrder: pkOrder, canExplode, canWithdraw: false, candidates: game.aliveSeats().filter((x) => x !== s) }, fb(() => ({ text: '再给大家讲讲我的逻辑。' })));
     if (v.explode) {
       const r2 = await handleExplode(game, s, v, { inElection: true });
       if (game.badgeSwallowed) { game.emit('sheriff_none', {}); return 'ok'; }

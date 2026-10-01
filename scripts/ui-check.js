@@ -766,8 +766,25 @@ class Browser {
     checkGeometry('FIX-17 设置页：节奏档位下拉可见、非零尺寸、中心点未被遮挡', paceProbe, { minW: 100, minH: 24 });
     const cacheProbe = await b.probe('#cfg-cachecontrol', { scroll: true });
     checkGeometry('FIX-17 设置页：复选框可见且中心点命中它自己（上面那次真实点击点的就是这里）', cacheProbe, { minW: 12, minH: 12 });
+    // Settings is now a separate view; return to the lobby before measuring its primary action.
+    await b.realClick('#entry-lobby');
     const startProbe = await b.probe('#btn-start', { scroll: true });
     checkGeometry('FIX-17 设置页：开始游戏按钮可见、非零尺寸、中心点未被遮挡', startProbe, { minW: 120, minH: 40 });
+    // 桌面模式卡是显式选择：UI、向导闭包和按档案草稿必须同步。
+    // 旧实现会被外层草稿事件委托写回 participation='play'，刷新后真实模式静默退回试玩。
+    await b.realClick('#btn-start');
+    await b.realClick('#wizard-mode-real');
+    const realMode = await b.eval(`(() => {
+      const pid = state.profileId;
+      const draft = JSON.parse(sessionStorage.getItem('ww_draft_setup:' + pid) || '{}');
+      return { ui: document.getElementById('setup-section').dataset.mode, wizard: wizardOf().modeOf(), draft: draft.mode,
+        participation: draft.participation, keyVisible: document.getElementById('cfg-key').getClientRects().length > 0 };
+    })()`);
+    check('桌面显式切真实：界面/提交模式/草稿一致，API Key 区可见',
+      realMode.ui === 'real' && realMode.wizard === 'real' && realMode.draft === 'real'
+        && realMode.participation === 'play' && realMode.keyVisible, JSON.stringify(realMode));
+    await b.realClick('#wizard-mode-mock');
+    await b.realClick('#setup-home');
 
     // ---- 计划书第 83 行：桌面端「玩家中心」代表截图（1440×900）----
     // 位置有讲究：必须在这个时刻取。稍后一开局，桌面端会**异步自动进入对局屏**并把 #screen-setup 整个隐藏，
@@ -813,6 +830,10 @@ class Browser {
       // 所以下面第一条断言就是"服务端无未结束的活局"：它是"页面停在设置屏"的**物理前提**，不许放宽。
       log('\n=== 桌面触点几何门禁（设置屏，计划书 §3）===');
       {
+        // Board controls moved to wizard step 1, not the standalone Settings view.
+        await b.realClick('#btn-start');
+        await b.realClick('#setup-next');
+        await waitExpr('桌面板子触区：向导确实进入第 1 步', `document.querySelector('#setup-section')?.dataset.step === '1'`, { timeout: 3000 });
         const liveRows = (((await (await fetch(`${base}/api/games`)).json()).rows) || []).filter((x) => x.started && !x.finished);
         check('§3 触点门禁（桌面·设置屏）前置：服务端无未结束的活局（页面不会被自动恢复进局屏）',
           liveRows.length === 0, `仍有 ${liveRows.length} 局：${JSON.stringify(liveRows.map((x) => ({ id: x.id, inMemory: x.inMemory })))}`);
@@ -1022,7 +1043,7 @@ class Browser {
         };
       })()`);
 
-      await b.click('#entry-rulebook');
+      await b.eval('openRulebook()');
       // FIX-18：原来是固定 sleep(600)，改成等到弹层真的有了真实尺寸（超时打印实测几何）
       await waitExpr('FIX-08 弹窗已打开（弹层有真实尺寸）',
         `(() => { const m = document.querySelector('#modal-root .modal'); return !!m && m.getClientRects().length > 0 && m.getBoundingClientRect().height >= 120; })()`,
@@ -1078,7 +1099,7 @@ class Browser {
         ['程序化 closeModal()', async () => b.eval('closeModal()')],
       ];
       for (const [name, act] of closePaths) {
-        await b.click('#entry-rulebook');
+        await b.eval('openRulebook()');
         // FIX-18：原来是"固定 sleep(500) → 点 → 固定 sleep(500)"，改成两步条件等待
         await waitExpr(`FIX-08 关闭路径「${name}」前置：弹层已打开`,
           `(() => { const m = document.querySelector('#modal-root .modal'); return !!m && m.getClientRects().length > 0; })()`, { timeout: 4000 });
@@ -1112,7 +1133,7 @@ class Browser {
     // 标题取 #app-title（设置页 hero 里的 h1）：用稳定的 id 而不是 .topbar h1，
   // 后者是"对局页顶栏"的位置类名，界面重构一改标题就不在这里了（本轮就撞过一次）。
   const en = await b.eval(`({ lang: document.documentElement.lang, title: (document.getElementById('app-title') || document.querySelector('.topbar h1'))?.textContent, save: document.getElementById('btn-save-config')?.textContent })`);
-    check('切英文后 <html lang>=en 且文案变化', en.lang === 'en' && /Werewolf/.test(en.title || '') && en.save === 'Save', JSON.stringify(en));
+    check('切英文后 <html lang>=en 且文案变化', en.lang === 'en' && /Werewolf|Settings|Rulebook|Create a match/.test(en.title || '') && en.save === 'Save', JSON.stringify(en));
     await b.shot(path.join(SHOTS, '03-english.png'));
     await b.click('#btn-lang');
     // FIX-18：原来是固定 sleep(400)，改成等到 lang 切回中文
@@ -2821,11 +2842,6 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       await b.goto(base + '/', 2000);
       // FIX-18：原来是"固定 sleep(250) × 80 次"的轮询，改成带超时的条件等待
       await waitExpr('--full：开始按钮已就绪（观战局前置）', `(() => { const s = document.getElementById('btn-start'); return !!s && !s.disabled; })()`, { timeout: 25000, interval: 200 });
-      await b.realClick('#entry-settings');
-      await b.realClick('input[name=mode][value=watch]');
-      // FIX-18：原来是固定 sleep(400)，改成等到观战模式真的被选中
-      await waitExpr('--full：模式已切到纯观战', `document.querySelector('input[name=mode]:checked')?.value === 'watch'`, { timeout: 3000 });
-      check('切换到纯观战', await b.eval(`document.querySelector('input[name=mode]:checked').value`) === 'watch');
       // M3 §8.2 :255-268：开局走**真三步** —— 前两步只写草稿、不发任何建局请求，第 3 步点「确认开局」才提交。
       // 判据必须是**实测到的推进**：`b.click` 在元素不存在时返回 'NOT_FOUND' 且**不抛错**（时机不对/选择器写错
       // 都不会报错，脚本会继续往下走），所以"点了三下"本身不算走过 —— 三段返回值 + #setup-section[data-step]
@@ -2836,22 +2852,26 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         const r = c ? c.getBoundingClientRect() : null;
         return { step: s ? (s.dataset.step || '(未设)') : '(无设置区)', confirmH: r ? Math.round(r.height) : -1 };
       })()`);
-      const runThreeStepStart = async (label) => {
+      const runThreeStepStart = async (label, mode) => {
         const rStart = await b.click('#btn-start');
-        const st1 = await stepProbe();
+        const st0 = await stepProbe();
         const rNext1 = await b.click('#setup-next');
-        const st2 = await stepProbe();
+        const st1 = await stepProbe();
         const rNext2 = await b.click('#setup-next');
+        const st2 = await stepProbe();
+        await b.eval(`(() => { const input = document.querySelector('input[name=mode][value=${mode}]'); if (input && !input.checked) input.click(); })()`);
+        await waitExpr(`--full：模式已切到${mode}`, `document.querySelector('input[name=mode]:checked')?.value === '${mode}'`, { timeout: 3000 });
+        const rNext3 = await b.click('#setup-next');
         const st3 = await stepProbe();
         const rConfirm = await b.click('#setup-confirm');
-        check(`M3 三步开局（${label}）：点「开始游戏」落到第 1 步 → 两次「下一步」真的到第 3 步 → 第 3 步的「确认开局」可见且点得中`,
-          rStart === 'OK' && st1.step === '1' && st2.step === '2' && st3.step === '3' && st3.confirmH > 0 && rConfirm === 'OK',
-          JSON.stringify({ 点开始: rStart, 第1步: st1, 下一步1: rNext1, 第2步: st2, 下一步2: rNext2, 第3步: st3, 点确认: rConfirm }));
+        check(`开局向导（${label}）：模式预检 → 板子 → 玩家 → 确认，且只有最后一步建局`,
+          rStart === 'OK' && st0.step === '0' && st1.step === '1' && st2.step === '2' && st3.step === '3' && st3.confirmH > 0 && rConfirm === 'OK',
+          JSON.stringify({ 点开始: rStart, 模式预检: st0, 下一步1: rNext1, 第1步: st1, 下一步2: rNext2, 第2步: st2, 下一步3: rNext3, 第3步: st3, 点确认: rConfirm }));
       };
       // M3：新草稿默认试玩 ⇒ 不能再「用点击切换」（已勾选时点击会关掉试玩、反而开真实局）。
       // 改成幂等：确保 #use-mock 处于勾选态（试玩），未勾选才点一次。
       await b.eval(`(() => { const el = document.getElementById('use-mock'); if (el && el.checked !== true) el.click(); return el ? el.checked : null; })()`);
-      await runThreeStepStart('观战局 7a');
+      await runThreeStepStart('观战局 7a', 'watch');
       // M3 C2：这里原来还有一行 realClick('#modal-root .start-review .btn.primary') —— 那是**一步开局**时代
       // 「开局确认弹层」的主按钮。三步化后 #btn-start 只开向导（不再开 .start-review 弹层），该元素不存在，
       // realClick 会打空（返回 NOT_FOUND，不抛错）且这行本身没有任何效果，故删除该行。
@@ -2992,14 +3012,10 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       await b.goto(base + '/', 2000);
       // FIX-18：原来是"固定 sleep(250) × 80 次"的轮询，改成带超时的条件等待
       await waitExpr('--full 7b：开始按钮已就绪（玩家视角前置）', `(() => { const s = document.getElementById('btn-start'); return !!s && !s.disabled; })()`, { timeout: 25000, interval: 200 });
-      await b.realClick('#entry-settings');
-      await b.realClick('input[name=mode][value=play]');
-      // FIX-18：原来是固定 sleep(300)，改成等到"我参战"模式真的被选中
-      await waitExpr('--full 7b：模式已切到"我参战"', `document.querySelector('input[name=mode]:checked')?.value === 'play'`, { timeout: 3000 });
       // M3：新草稿默认试玩 ⇒ 不能再「用点击切换」（已勾选时点击会关掉试玩、反而开真实局）。
       // 改成幂等：确保 #use-mock 处于勾选态（试玩），未勾选才点一次。
       await b.eval(`(() => { const el = document.getElementById('use-mock'); if (el && el.checked !== true) el.click(); return el ? el.checked : null; })()`);
-      await runThreeStepStart('玩家视角 7b');
+      await runThreeStepStart('玩家视角 7b', 'play');
       // M3 C2：同上 —— 一步开局时代的 .start-review 弹层主按钮已不存在（三步化后 #btn-start 只开向导），
       // 该行是空转调用，故删除。建局只经 #setup-confirm → startGame() → 向导 commit()。
       // FIX-18：原来是固定 sleep(2500)，改成等到翻牌遮罩真的出现
@@ -3025,6 +3041,7 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         `(() => { const c = document.getElementById('flip-card'); return !!c && c.classList.contains('flipped') && !!c.querySelector('.flip-front .r3-shell'); })()`,
         { timeout: 4000 });
       await b.shot(path.join(SHOTS, '07c-flip-open.png'));
+      await waitExpr('--full 7b：翻牌动画结束后才显示确认按钮', `document.getElementById('role-overlay')?.classList.contains('revealed') === true && document.getElementById('btn-flip-done')?.disabled === false`, { timeout: 4000 });
       await b.click('#btn-flip-done');
       // FIX-18：原来是固定 sleep(1500)，改成等到真的进入对局页
       await waitExpr('--full 7b：确认翻牌后已进入对局页', `document.querySelector('.screen:not(.hidden)')?.id === 'screen-game'`, { timeout: 8000 });
@@ -3244,13 +3261,19 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       //   改成"见到就按真实鼠标收掉 + 连续 3 拍（约 450ms）确认都是收起态"，判据一点没放宽：
       //   状态条仍必须可见、非零尺寸、且中心点命中它自己（checkGeometry 原样）。
       const ovShown = () => b.eval(`(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`);
+      const closeRoleOverlay = async () => {
+        const flipped = await b.eval(`document.getElementById('flip-card')?.classList.contains('flipped') === true`);
+        if (!flipped) await b.realClick('#flip-card');
+        await waitExpr('翻牌已揭示，确认按钮可操作', `document.getElementById('role-overlay')?.classList.contains('revealed') === true && document.getElementById('btn-flip-done')?.disabled === false`, { timeout: 4000 });
+        return b.realClick('#btn-flip-done');
+      };
       let extraFlips = 0;
       const settleOverlay = async () => {
         let quiet = 0;
         for (let i = 0; i < 60 && quiet < 3; i++) {
           if (await ovShown()) {
             quiet = 0;
-            if (extraFlips < 3) { await b.realClick('#btn-flip-done'); extraFlips++; }
+            if (extraFlips < 3) { await closeRoleOverlay(); extraFlips++; }
             await sleep(200);
           } else { quiet++; await sleep(150); }
         }
@@ -3259,7 +3282,7 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
       const ovBefore = { shown: await ovShown() };
       let flipClick = '未开（无需收起）';
       if (ovBefore.shown) {
-        flipClick = await b.realClick('#btn-flip-done');
+        flipClick = await closeRoleOverlay();
         await waitExpr('P4-6：身份翻牌浮层已收起（此后状态条才真的可见）',
           `document.getElementById('role-overlay')?.classList.contains('hidden') === true`, { timeout: 6000 });
       }
@@ -3702,6 +3725,9 @@ log('\n=== 手机端自定义头像（裁切上传 / 删除回退）===');
         await waitCheck('桌面触点门禁：身份翻牌浮层已收起（局中触点不被全屏层压住）', async () => {
           const shown = await b.eval(`(() => { const o = document.getElementById('role-overlay'); return !!o && !o.classList.contains('hidden'); })()`);
           if (!shown) return { ok: true, shown: false };
+          const flipped = await b.eval(`document.getElementById('flip-card')?.classList.contains('flipped') === true`);
+          if (!flipped) await b.realClick('#flip-card');
+          await waitExpr('桌面触点门禁：翻牌动画结束，确认键可见', `document.getElementById('role-overlay')?.classList.contains('revealed') === true && document.getElementById('btn-flip-done')?.disabled === false`, { timeout: 4000 });
           await b.realClick('#btn-flip-done');
           return { ok: false, shown: true, clicked: true };
         }, { timeout: 6000, interval: 200 });

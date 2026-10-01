@@ -9,7 +9,7 @@ const { mergeRules, describeRules } = require('./rules');
 const { makeRng, seedFrom } = require('./rng');
 const { assertEventVisibility } = require('./visibility');
 const { sanitizeInline } = require('./text');
-const { GamePaused } = require('../errors');
+const { GamePaused, ForceEnded } = require('../errors');
 
 function shuffle(arr, rnd = Math.random) {
   const a = arr.slice();
@@ -18,13 +18,6 @@ function shuffle(arr, rnd = Math.random) {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
-}
-
-class ForceEnded extends Error {
-  constructor() {
-    super('对局被手动终止');
-    this.code = 'FORCE_ENDED';
-  }
 }
 
 /**
@@ -234,22 +227,32 @@ class Game {
       }
       // 终止对局时不再降级续跑：直接抛出让 runGame 优雅结算（否则还要等下一轮校验/降级才退出）
       if (this.forceEnded) throw new ForceEnded();
+      if (request._decisionSignal) throw err; // 交回统一决策预算；不能吞成 null 再乘一轮校验重试。
       return null; // 由 flow 走降级
     }
   }
 
+  /** Only living AI seats with an existing agent need ongoing daily memory maintenance. */
+  _reflectionAgents() {
+    if (this.finished) return [];
+    return this.alivePlayers().filter((p) => !p.isHuman)
+      .map((p) => this._agents.get(p.seat))
+      .filter((a) => a && typeof a.scheduleReflection === 'function');
+  }
+
   /**
-   * 日切边界：让已创建的 AI 智能体在后台（优先级 reflection）整理上一天纪要，不阻塞流程。
-   * 只通知"已经创建过"的智能体：还没上过场的没有记忆需要维护，等它首次决策时再惰性补齐。
+   * 日切边界：给存活且已创建的 AI 整理上一天纪要（优先级 reflection）。
+   * 返回后任务仍在执行；waitReflection 会等完成以保证锚点重放确定性。
+   * 出局者保留旧记忆供离场技能与赛后复盘读取，不再持续维护；未创建者首次决策时惰性补齐。
    */
   scheduleReflection(completedDay) {
-    const agents = [...this._agents.values()].filter((a) => a && typeof a.scheduleReflection === 'function');
-    if (!agents.length) return 0;
-    this.memory = { day: completedDay, total: agents.length, done: 0, startedAt: Date.now() };
+    const agents = this._reflectionAgents();
+    if (!agents.length) { this.memory = null; return 0; }
+    const batch = this.memory = { day: completedDay, total: agents.length, done: 0, startedAt: Date.now() };
     for (const a of agents) {
       const p = a.scheduleReflection(completedDay);
-      if (p && typeof p.then === 'function') p.then(() => this.memoryDone(), () => this.memoryDone());
-      else this.memoryDone();
+      if (p && typeof p.then === 'function') p.then(() => this.memoryDone(batch), () => this.memoryDone(batch));
+      else this.memoryDone(batch);
     }
     return agents.length;
   }
@@ -265,7 +268,7 @@ class Game {
   async waitReflection(completedDay) {
     this.scheduleReflection(completedDay);
     const waits = [];
-    for (const a of this._agents.values()) {
+    for (const a of this._reflectionAgents()) {
       // 注意：`_reflecting` 的条目会在它自己的 .then 里被 delete，所以必须"先取 Promise 再等"
       const p = a && a._reflecting && typeof a._reflecting.get === 'function' ? a._reflecting.get(completedDay) : null;
       if (p && typeof p.then === 'function') waits.push(p.catch(() => {}));
@@ -274,8 +277,9 @@ class Game {
   }
 
   /** 日切反思进度：全部结束后清空（前端据此显示"AI 正在整理记忆…"） */
-  memoryDone() {
-    if (!this.memory) return;
+  memoryDone(batch = this.memory) {
+    // Late completions from an earlier/skipped batch must not advance the current progress.
+    if (!batch || this.memory !== batch) return;
     this.memory.done++;
     if (this.memory.done >= this.memory.total) this.memory = null;
   }
@@ -318,16 +322,24 @@ class Game {
   updateLive(a, b) {
     const entry = b === undefined ? this.live : a;
     const delta = b === undefined ? a : b;
-    if (!entry || !delta) return;
+    if (!entry || !delta || this.lives.get(entry.key) !== entry) return;
     if (delta.content) entry.text += delta.content;
     if (delta.reasoning) entry.reasoning += delta.reasoning;
     entry.updatedAt = Date.now();
   }
 
+  setLiveStatus(entry, info = {}) {
+    if (!entry || this.lives.get(entry.key) !== entry) return;
+    entry.status = ['queued','thinking','retrying'].includes(info.status) ? info.status : 'thinking';
+    entry.attempt = Math.max(1, Number(info.attempt) || 1);
+    entry.text = ''; entry.reasoning = '';
+    entry.updatedAt = Math.max(Date.now(), entry.updatedAt + 1);
+  }
+
   /** endLive() 结束最近一路；endLive(entry) 精确结束；endLive(null) 是空操作（该次调用没开过直播） */
   endLive(entry) {
     const e = entry === undefined ? this.live : entry;
-    if (!e || !e.key) return;
+    if (!e || !e.key || this.lives.get(e.key) !== e) return;
     this.lives.delete(e.key);
     if (this.live === e) {
       this.live = [...this.lives.values()].sort((x, y) => y.startedAt - x.startedAt)[0] || null;
@@ -346,7 +358,7 @@ class Game {
     if (!visible.length) return null;
     const l = visible.reduce((best, x) => (x.updatedAt > best.updatedAt ? x : best));
     if (viewer === 'god') return l;
-    return { seat: l.seat, task: l.task, public: l.public, text: l.text, startedAt: l.startedAt, updatedAt: l.updatedAt };
+    return { seat: l.seat, task: l.task, public: l.public, text: l.text, startedAt: l.startedAt, updatedAt: l.updatedAt, status:l.status, attempt:l.attempt };
   }
 
   agentFor(seat) {
@@ -381,7 +393,7 @@ class Game {
     if (this.finished) return;
     this.forceEnded = true;
     this.terminateReason = reason;
-    try { this._abort.abort(); } catch (_) { /* 已 abort */ }
+    try { this._abort.abort(new ForceEnded()); } catch (_) { /* 已 abort */ }
     const p = this.pending;
     this.pending = null;
     if (p && p.reject) p.reject(new ForceEnded());

@@ -137,7 +137,12 @@ test('作用域：六棵源码树与根目录的 .js 一个都不能漏（防误
         if (e.isDirectory() && (e.name === 'node_modules' || e.name === 'dist')) continue;
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (e.name.endsWith('.js')) found.push(norm(path.relative(ROOT, p)));
+        else if (e.name.endsWith('.js')) {
+          const rel = norm(path.relative(ROOT, p));
+          // Figma Plugin API 的画布片段可含顶层 await/return，不是 Node/浏览器模块；
+          // 仅这一层工具脚本被 .gitignore 排除，设计文档和生产 web/ 仍必须全量扫描。
+          if (!/^design\/gothic-ui-v1\/[^/]+\.js$/.test(rel)) found.push(rel);
+        }
       }
     };
     walk(abs);

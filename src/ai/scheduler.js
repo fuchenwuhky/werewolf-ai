@@ -25,6 +25,7 @@
  *   6. 坏 Key 隔离：某把 Key 致命失败（配额/鉴权）时临时摘除，不让它继续吃请求
  */
 'use strict';
+const { abortReason } = require('../request-scope');
 
 /** 优先级：数值越小越优先 */
 const PRIORITY = {
@@ -241,9 +242,20 @@ class LlmScheduler {
    * @param {Function} fn 实际工作（内部自行重试/退避）；会收到 Key 序号，用于选 API Key
    * @param {{priority?:number,label?:string}} opts
    */
-  enqueue(fn, { priority = PRIORITY.decision, label = 'chat' } = {}) {
+  enqueue(fn, { priority = PRIORITY.decision, label = 'chat', signal } = {}) {
     return new Promise((resolve, reject) => {
-      this._queue.push({ id: ++this._seq, priority, label, enqueuedAt: Date.now(), fn, resolve, reject });
+      if (signal?.aborted) { reject(abortReason(signal)); return; }
+      const task = { id: ++this._seq, priority, label, enqueuedAt: Date.now(), fn, resolve, reject };
+      if (signal) {
+        const abort = () => {
+          const index = this._queue.indexOf(task);
+          if (index < 0) return; // 在途任务由请求层取消，不能提前释放泳道造成同 Key 并发。
+          this._queue.splice(index, 1); task.detach(); reject(abortReason(signal));
+        };
+        task.detach = () => signal.removeEventListener('abort', abort);
+        signal.addEventListener('abort', abort, { once: true });
+      }
+      this._queue.push(task);
       this._pump();
       // 入队后**仍有积压** ⇒ 泳道不够用（真的有人在排队等）。这才是"该加档"的证据：
       // 串行负载（一次只有一个请求、没人排队）永远不会置上它，因此不会被盲目加档。
@@ -262,6 +274,7 @@ class LlmScheduler {
       if (slot < 0) return;
       const task = this._take(now);
       if (!task) return;
+      task.detach?.();
       const k = this._keys[slot];
       const startedAt = Date.now();
       const waitMs = startedAt - task.enqueuedAt;

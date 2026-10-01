@@ -70,7 +70,7 @@ const CONTENT_EMOJI_PINS = [
   ['web/m/m.js', "'🎲 随机（推荐）'", '座位随机项（test/seat.test.js 钉）'],
   ['web/index.html', '👤 我的档案', '档案标签（非头像 👤）'],
   ['web/index.html', '👤 档案管理（导入 / 导出 / 战绩）', '档案管理按钮文案'],
-  ['web/m/index.html', '👤 我的', '手机"我的"页签'],
+  ['web/m/index.html', 'id="m-tab-me" data-ww-icon="players"', '系统导航统一 SVG；玩家内容 emoji 保持原样'],
   ['web/m/index.html', '⚔ 对局规则', '规则书分区小标题（内容，非控件标签）'],
   ['web/index.html', '<span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span>', '卡背翻看提示'],
 ];

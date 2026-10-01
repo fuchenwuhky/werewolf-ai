@@ -20,7 +20,7 @@ const { renderClaim } = require('../engine/claims');
 /** 公开宣称分区最多保留的"查验/用药"条数（自认身份每座位只留最近一次，不占这个额度） */
 const CLAIM_KEEP = 12;
 
-const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'vote_progress']);
+const NOISE_TYPES = new Set(['await_input', 'ai_thinking', 'llm_error', 'ai_reasoning', 'vote_progress', 'ai_status']);
 // 快速任务：低思考强度即可胜任的结构化决策（配合局面快照，无需自行拼时间线）
 // lastwords：遗言是一次性短内容，high 档推理曾出现 7k tokens/286s 的极差体验，策略菜单已由提示词托底
 const FAST_TASKS = new Set([
@@ -32,7 +32,7 @@ const FAST_TASKS = new Set([
 
 /** 任务分层：发言类用主思考强度，快速任务用 fastEffort */
 function taskEffort(task, cfg) {
-  return FAST_TASKS.has(task) ? (cfg.fastEffort || 'low') : (cfg.reasoningEffort || 'high');
+  return FAST_TASKS.has(task) ? (cfg.fastEffort || 'low') : (cfg.reasoningEffort || 'low');
 }
 /** 任务分层输出上限：快速任务压低上限降低最坏延迟；发言档封顶 12000 压思考失控的极值尾巴（实测最长 218s） */
 function taskMaxTokens(task, cfg) {

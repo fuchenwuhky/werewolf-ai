@@ -1435,7 +1435,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
    1024–1279：右栏自动变抽屉（JS 按 matchMedia 摘掉 .docked），发言优先；
    <900：紧凑单栏重排，座位在上、事件流在下。
    ============================================================ */
-@media (max-width: 960px) {
+@media (max-width: 1023px) {
   .game-layout,
   #screen-game.notes-collapsed .game-layout,
   #screen-game.has-coach .game-layout { grid-template-columns: minmax(0, 1fr); }
@@ -1745,7 +1745,7 @@ body[data-phase='vote'] .phase-chip::before { content: '⚖'; }
 
 /* 检视模式：大卡 + 指针 3D 倾斜 + 雾气 + 流光 */
 .inspect-stage {
-  position: fixed; inset: 0; z-index: 90;
+  position: fixed; inset: 0; z-index: 100;
   background: radial-gradient(ellipse at center, rgba(25,12,30,.9), rgba(2,1,4,.98));
   display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 18px;
   perspective: 1200px; overflow: hidden;

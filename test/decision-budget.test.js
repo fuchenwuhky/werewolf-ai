@@ -3,9 +3,9 @@
  *
  * E1（真实对局暴露）：一次发言可能吃满 12000 tokens / 362s，把 flow.js 的 180s 决策总预算一次花光，
  *   于是**第一次**校验失败时闸门已经超了 → 直接降级（真实发生：3 号只说了"我过。"）。
- *   修法：闸门用尽后不再等于放弃，而是允许**一次轻量补救**（_cheapRetry：最低思考 + 极小预算 + 短超时），
- *   只有补救也失败才降级。这里钉住三件事：
- *     ① 预算用尽后的第一次重试必须带 _cheapRetry；
+ *   修法：在硬总预算内预留一次轻量补救（_cheapRetry：低/关闭思考 + 极小预算 + 短超时），
+ *   只有补救也失败才降级，绝不在预算耗尽后追加时间。这里钉住三件事：
+ *     ① 失败后的第一次重试必须带 _cheapRetry；
  *     ② 该重试必须真的把 effort/maxTokens/超时压下来（否则等于再赌一次六分钟）；
  *     ③ 轻量补救只能有一次 —— 不能变成无限重试。
  *
@@ -35,26 +35,28 @@ function makeGame() {
   return g;
 }
 
-test('E1：决策预算用尽后的重试是"轻量补救"，且只给一次', async () => {
+test('E1：失败后的重试是"轻量补救"，且预留在硬总预算以内', async () => {
   const g = makeGame();
-  g.decisionTotalMs = 1; // 1ms：第一次尝试后预算必然已用尽（测试注入，正式路径用 DECISION_TOTAL_MS）
+  g.decisionTotalMs = 1000; // 总预算真正用尽后不再加一轮；这里验证预算内预留的补救。
   const seen = [];
   g.ask = async (seat, req) => {
-    seen.push({ cheap: !!req._cheapRetry, retryNote: !!req._retryNote });
+    seen.push({ cheap: !!req._cheapRetry, retryNote: !!req._retryNote,deadline:req._decisionDeadline,budget:req._requestBudget });
     if (seen.length === 1) { await new Promise((r) => setTimeout(r, 5)); return { text: '' }; } // 第 1 次：非法
     return { text: '我站边 5 号，理由是他敢报查验。' }; // 第 2 次（补救）：合法
   };
   const out = await askValidated(g, 3, { task: 'speech' }, { fallback: () => ({ text: '我过。' }) });
   assert.strictEqual(seen.length, 2, '必须有第二次尝试（旧行为是闸门一超就直接降级）');
   assert.strictEqual(seen[0].cheap, false, '第一次是正常档位');
-  assert.strictEqual(seen[1].cheap, true, '预算用尽后的重试必须标记为轻量补救');
+  assert.strictEqual(seen[1].cheap, true, '失败后的预算内重试必须标记为轻量补救');
   assert.strictEqual(seen[1].retryNote, true, '补救重试仍要带上"上次输出不合法"的提示');
+  assert.ok(seen[1].deadline > seen[0].deadline, '初次尝试为补救预留时间，而不是耗尽总预算后再延长');
+  assert.strictEqual(seen[0].budget, seen[1].budget, '传输与校验重试共享同一请求次数预算');
   assert.match(out.text, /站边 5 号/, '补救成功时必须用真实发言，而不是降级内容');
 });
 
 test('E1：轻量补救也失败时仍然降级（不会无限重试）', async () => {
   const g = makeGame();
-  g.decisionTotalMs = 1;
+  g.decisionTotalMs = 1000;
   let calls = 0;
   g.ask = async () => { calls++; await new Promise((r) => setTimeout(r, 5)); return { text: '' }; }; // 永远非法
   const out = await askValidated(g, 4, { task: 'speech' }, { fallback: () => ({ text: '我过。' }) });

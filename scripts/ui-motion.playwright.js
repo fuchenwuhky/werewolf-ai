@@ -1,0 +1,98 @@
+/* Browser interaction audit, isolated local data only. */
+/* global document, window, sessionStorage, localStorage, getComputedStyle, requestAnimationFrame, flash */
+async (page) => {
+  const origin = new URL(page.url()).origin;
+  if (origin !== 'http://127.0.0.1:3598') throw new Error('Use isolated QA server');
+  const context = await page.context().browser().newContext();
+  page = await context.newPage();
+  const checks = [], errors = [];
+  const ok = (condition, message) => { if (!condition) throw new Error(message); checks.push(message); };
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({width:1440,height:900});
+  await page.goto(origin);
+  await page.evaluate(()=>{localStorage.removeItem('ww_current');sessionStorage.setItem('ww_return_home_once','1');});
+  await page.reload(); await page.waitForFunction(()=>window.__wwReady);
+  await page.locator('#btn-lang').waitFor({state:'visible'});
+  const language = await page.locator('#btn-lang').boundingBox();
+  ok(language.y>=0 && language.y+language.height<=900, 'header language control is not clipped');
+  await page.locator('#entry-settings').click();
+  const button = page.locator('#btn-save-config');
+  const before = await button.boundingBox();
+  await button.hover();
+  const hover = await button.boundingBox();
+  ok(before.width===hover.width && before.height===hover.height, 'desktop hover never scales or resizes a button');
+  let pendingSave;
+  await page.route('**/api/config', route => { if (route.request().method()==='PUT') pendingSave=route; else return route.continue(); });
+  await button.click();
+  await page.locator('#btn-save-config[aria-busy=true]').waitFor();
+  const busy = await button.boundingBox();
+  ok(await button.isDisabled(), 'busy save is disabled against double submission');
+  ok(busy.width===before.width && busy.height===before.height, 'loading indicator does not move adjacent controls');
+  await page.screenshot({path:'output/playwright/motion-desktop-saving.png'});
+  await pendingSave.fulfill({status:503,contentType:'application/json',body:'{"error":"测试：暂时无法保存"}'});
+  await page.locator('#btn-save-config:not([aria-busy])').waitFor();
+  ok(await button.isEnabled() && (await page.locator('#cfg-test-result').innerText()).includes('暂时无法保存'), 'save failure restores control and retains visible explanation');
+  await page.unroute('**/api/config');
+  const pane = '#card-api';
+  const started = await page.locator(pane).evaluate(e=>{window.WWPresentation.enter(e,true);return e.getAnimations().length;});
+  ok(started>0, 'normal motion has a finite entrance animation');
+  await page.evaluate(()=>{document.documentElement.dataset.prefMotion='0';});
+  await page.waitForFunction(()=>document.querySelector('#card-api').getAnimations().length===0);
+  ok(await page.locator(pane).evaluate(e=>{window.WWPresentation.enter(e,true);return e.getAnimations().length===0;}), 'profile reduced motion cancels active and future transitions');
+  await page.evaluate(()=>{document.documentElement.dataset.prefMotion='1';});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.waitForFunction(()=>window.WWPresentation.reducedMotion());
+  ok(await page.locator(pane).evaluate(e=>{window.WWPresentation.enter(e,true);return e.getAnimations().length===0;}), 'OS reduced motion overrides animation preference');
+  const cssTime = await button.evaluate(e=>getComputedStyle(e).transitionDuration);
+  ok(cssTime.split(',').every(t=>parseFloat(t)<.01), 'OS reduced motion disables CSS button transitions');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.goto(`${origin}/m/`); await page.setViewportSize({width:390,height:844});
+  await page.locator('#m-settings-btn').click();
+  let delayedConfig;
+  await page.route('**/api/config', route=>{delayedConfig=route;});
+  await page.locator('[data-mobile-settings=model]').click();
+  await page.getByText('正在读取连接配置…',{exact:true}).waitFor();
+  await page.locator('#m-settings-back').click();
+  await page.locator('[data-mobile-settings=about]').click();
+  const response = page.waitForResponse(r=>r.url()===`${origin}/api/config`);
+  await delayedConfig.continue(); await response;
+  // Rendering from a fetch response runs after its response event.
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  ok(await page.locator('#m-settings-title').innerText()==='关于' && await page.locator('#ms-save').count()===0, 'late model response cannot replace About');
+  await page.unroute('**/api/config');
+  await page.locator('#m-settings-back').click();
+  await page.locator('[data-mobile-settings=model]').click();
+  await page.locator('#ms-save').waitFor();
+  let delayedPut;
+  await page.route('**/api/config', route=>{if(route.request().method()==='PUT') delayedPut=route; else return route.continue();});
+  await page.locator('#ms-save').click();
+  await page.locator('#ms-save[aria-busy=true]').waitFor();
+  await page.locator('#m-settings-back').click();
+  await page.locator('[data-mobile-settings=model]').click();
+  await page.locator('#ms-key').fill('local-unsaved-test-draft');
+  await delayedPut.fulfill({status:503,contentType:'application/json',body:'{"error":"旧表单的失败"}'});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  ok(await page.locator('#ms-key').inputValue()==='local-unsaved-test-draft', 'late save response does not clear new form input');
+  ok(!(await page.locator('#ms-result').innerText()).includes('旧表单'), 'late save error stays with original form');
+  await page.locator('#ms-key').fill('');
+  await page.evaluate(()=>flash('已保存到当前档案'));
+  const toast = page.locator('#m-flash');
+  const bounds = await toast.boundingBox();
+  ok(bounds.width<390 && bounds.height<180, 'ordinary feedback is a compact toast, not a full-screen overlay');
+  ok(await toast.getAttribute('role')==='status', 'toast has polite assistive feedback');
+  await page.screenshot({path:'output/playwright/motion-mobile-toast.png',animations:'disabled'});
+  await page.evaluate(()=>flash('第 2 夜 · 天黑请闭眼','night',10));
+  await page.waitForFunction(()=>document.querySelector('#m-flash').classList.contains('fadeout'));
+  await page.evaluate(()=>flash('新提示必须完整展示'));
+  await page.waitForTimeout(250); // Specifically cross the old 180ms hide timer.
+  ok(await toast.isVisible() && (await toast.innerText()).includes('新提示'), 'old fade-out timer never hides a newer notification');
+  for (const [width,height] of [[320,568],[390,844],[844,390]]) {
+    await page.setViewportSize({width,height});
+    await page.evaluate(()=>flash('保存失败：连接暂时不可用。请稍后重试，输入的内容已保留。'));
+    const rect=await toast.boundingBox();
+    ok(rect.x>=0 && rect.x+rect.width<=width && rect.y>=0 && rect.y+rect.height<=height, `toast stays inside ${width}x${height}`);
+  }
+  ok(errors.length===0, `no runtime errors: ${errors.join(';')}`);
+  await context.close();
+  return {passed:checks.length,checks};
+}

@@ -34,7 +34,7 @@
  * ⚠ 这段注释里**不要**出现"版本号赋值语句"的原样字面量：test/sw-shell.test.js 用
  * `match` 取**第一处**形如 `const VERSION` 的赋值，写在这里会被它当成真的版本号（实测踩过）。
  */
-const VERSION = 'ww-v23-m3';
+const VERSION = 'ww-v25-m3';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 
@@ -44,6 +44,9 @@ const SHELL = [
   '/index.html',
   '/style.css',
   '/shared/tokens.css',
+  '/shared/nocturne.css',
+  '/shared/nocturne-mobile.css',
+  '/shared/presentation.js',
   '/shared/card-frame-kit.css',
   '/i18n.js',
   '/card-frame.js',
@@ -66,6 +69,7 @@ const SHELL = [
   '/shared/setup-wizard.js',
   '/shared/stats-bucket.js',
   '/shared/export-status.js',
+  '/shared/entry-portal.js',
   '/ai-cast.js',
   '/ai-cast.html',
   '/ai-cast-page.js',
@@ -81,6 +85,8 @@ const SHELL = [
   '/assets/icon-192.png',
   '/assets/icon-512.png',
   '/assets/apple-touch-icon.png',
+  '/assets/nocturne/moonlit-village.png',
+  '/assets/nocturne/engraved-divider.svg',
   // 角色卡牌 V3 素材（SKIN-01：17 件，源 design/card-frames/v3/assets 逐字节副本）。
   // 这里刻意把 1.94MiB 的 reliquary-metal.png 也放进预缓存：断网时大卡不能变成一张破图。
   // 这是**一次性的离线预缓存**，不是卡牌组件自身的流量 —— 52/62px 小卡路径不会请求它

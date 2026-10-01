@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="shared/tokens.css">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="shared/nocturne.css">
 </head>
 <body data-phase="dusk">
 <script>
@@ -87,16 +88,18 @@
       </g>
     </svg>
       <div class="hero-inner">
+        <button class="btn ghost icon-btn ng-menu-toggle" id="ng-menu-toggle" type="button" aria-label="打开导航菜单" aria-controls="ng-nav-dialog" aria-expanded="false" data-ww-icon="list"></button>
         <div class="hero-mark">
           <!-- FIN-08：首页大标识改用生产资产（月夜狼冠母版直拷的 SVG，可编辑矢量），
                不再在页面里维护第二份狼头。局中顶栏与手机端引用同一份文件。 -->
           <img class="hero-emblem" src="assets/brand/wolf-emblem.svg" alt="月夜狼冠纹章" width="120" height="120">
         </div>
         <div class="hero-text">
-          <p class="hero-kicker" data-i18n="app.kicker">月夜集会 · 村人闭眼，狼人睁眼</p>
-          <h1 id="app-title" data-i18n="app.title">AI 狼人杀</h1>
+          <p class="hero-kicker" data-i18n="home.kicker">月夜议会</p>
+          <h1 id="app-title" data-i18n="app.title">游戏大厅</h1>
           <p class="sub" data-i18n="app.sub">本地网页版 · 1 名人类玩家 + AI · OpenAI 兼容接口</p>
         </div>
+        <button class="btn ghost small hero-appearance" id="entry-appearance" data-ww-icon="settings" data-i18n-title="home.appearanceTitle" title="界面外观与字体大小" aria-label="界面外观与字体大小" data-i18n-aria="home.appearanceTitle"></button>
         <button class="btn ghost small hero-lang" id="btn-lang" data-ww-icon="lang" data-i18n-title="api.langSwitch" title="切换界面语言">中</button>
       </div>
     </header>
@@ -111,9 +114,10 @@
               <span class="home-avatar" id="home-avatar" aria-hidden="true"><svg class="ww-avatar-badge" viewBox="0 0 24 24" width="1.2em" height="1.2em" focusable="false"><use href="#wwAvScholar" xlink:href="#wwAvScholar"/></svg></span>
               <span class="home-who">
                 <b id="home-nick">…</b>
-                <span class="hint">本机玩家档案 · 战绩 / 笔记 / 经验按档案隔离</span>
+                <span class="hint" data-i18n="home.profileHint">本机玩家档案 · 战绩 / 笔记 / 经验按档案隔离</span>
               </span>
-              <button class="btn ghost small" id="btn-profiles-entry" type="button">管理档案…</button>
+              <button class="btn ghost small" id="btn-profiles-entry" type="button" data-i18n="home.manageProfiles">管理档案…</button>
+              <button class="btn ghost small" id="ng-switch-profile" type="button" data-i18n="home.switchProfile">切换玩家</button>
             </div>
 
             <!-- 继续上局：有可恢复局时显示（模式 / 阶段 / 保存时间来自 checkResume）；无可恢复局给空态 -->
@@ -126,78 +130,108 @@
               </div>
             </div>
             <div id="resume-empty" class="home-card home-empty hidden">
-              <p class="hint">没有进行中的对局。点「开始游戏」按三步开局：板子与规则 → 参与与座位 → 确认开局（前两步不会建局，随时可以后退改）。</p>
+              <h2>今夜，新的故事尚未开始</h2>
+              <span class="hint">暂无待继续的对局。开始新局后，可随时返回这里继续。</span>
             </div>
 
             <!-- 主行动区：开始按钮 + 确认要素行（这一局是什么）+ 费用说明 -->
             <div class="home-cta">
+              <section class="ng-hero-copy">
+                <p class="ng-inscription">THE MOONLIT COUNCIL</p>
+                <h2 data-i18n="home.heroTitle">月已升，诸位请入席</h2>
+                <p data-i18n="home.heroDescription">一位人类 · 一桌 AI · 每句话都可能改变结局。</p>
+              </section>
               <button class="btn primary big" id="btn-start" data-ww-icon="start" data-i18n="start.button" disabled title="界面加载配置中…">开始游戏</button>
-              <span class="hint">试玩局用本地流程脚本推进（不调用模型、完全免费，用于演练流程）；真实对局才调用你配置的模型服务商，按用量计费。</span>
+              <span class="hint" data-i18n="home.costHint">试玩局用本地流程脚本推进（不调用模型、完全免费，用于演练流程）；真实对局才调用你配置的模型服务商，按用量计费。</span>
               <span class="hint setup-warn" id="setup-warn" role="status"></span>
             </div>
             <ul class="hero-facts" id="hero-facts"></ul>
             <span class="hint" id="setup-error"></span>
+            <section class="ng-cast-card" aria-labelledby="ng-cast-title">
+              <h2 id="ng-cast-title" data-i18n="home.castTitle">今夜来客</h2>
+              <div class="ng-cast-faces" aria-hidden="true">
+                <img src="assets/avatars/detective.png" alt="" loading="lazy"><img src="assets/avatars/diplomat.png" alt="" loading="lazy"><img src="assets/avatars/archivist.png" alt="" loading="lazy"><img src="assets/avatars/cartographer.png" alt="" loading="lazy">
+              </div>
+              <p data-i18n="home.castDescription">不同的性格，相同的游戏规则。人物外观不代表身份或阵营。</p>
+              <a class="btn ghost" href="ai-cast.html" target="_blank" rel="noopener" data-ww-icon="aiCast" data-i18n="home.castOpen">翻阅来客名册 ↗</a>
+            </section>
           </div>
 
           <!-- 次级入口行：历史 / 资料 / 设置等低频入口压成一组，不占第一屏主体（§8.2 :245-254） -->
-          <nav class="home-side" aria-label="历史、资料与设置入口">
-            <button class="btn ghost home-entry" id="entry-history" data-ww-icon="timeline" type="button" title="对局历史（按当前档案）">对局历史</button>
+          <nav class="home-side" id="ng-side-nav" aria-label="历史、资料与设置入口" data-i18n-aria="home.navAria">
+            <div class="ng-side-brand"><img src="assets/brand/wolf-emblem.svg" alt="" width="64" height="64"><b data-i18n="home.brand">AI 狼人杀</b><span>NOCTURNE</span></div>
+            <button class="ng-side-active" id="entry-lobby" data-ww-icon="home" type="button" aria-current="page" data-i18n="home.lobby">大厅</button>
+            <button class="btn ghost home-entry" id="entry-history" data-ww-icon="timeline" type="button" data-i18n="home.history" data-i18n-title="home.historyTitle" title="对局历史（按当前档案）">对局历史</button>
             <button class="btn ghost home-entry" id="btn-codex" data-ww-icon="codex" data-i18n="codex.entry" type="button">角色图鉴</button>
-            <a class="btn ghost home-entry" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener">AI 来客名册 ↗</a>
-            <button class="btn ghost home-entry" id="entry-rulebook" data-ww-icon="rulebook" type="button">规则书</button>
-            <button class="btn ghost home-entry" id="entry-settings" data-ww-icon="settings" type="button">开局设置 · 模型与密钥</button>
+            <a class="btn ghost home-entry" data-ww-icon="aiCast" href="ai-cast.html" target="_blank" rel="noopener" data-i18n="home.castNav">AI 来客名册 ↗</a>
+            <button class="btn ghost home-entry" id="entry-rulebook" data-ww-icon="rulebook" type="button" data-i18n="home.rulebook">规则书</button>
+            <button class="btn ghost home-entry" id="entry-settings" data-ww-icon="settings" type="button" data-i18n="home.setupNav">开局设置 · 模型与密钥</button>
           </nav>
         </div>
       </div>
+      <dialog id="ng-nav-dialog" class="ng-nav-dialog" aria-label="导航菜单"><button id="ng-nav-close" class="btn ghost" type="button" data-ww-icon="close">关闭菜单</button></dialog>
 
       <!-- ======== 开局设置区：分组折叠，默认在首屏之下（FIN-04 §8.2/8.3） ======== -->
       <div class="setup-section" id="setup-section" hidden>
+      <div class="setup-page-head"><p class="ng-inscription" id="setup-page-kicker">GAME SETUP</p><h2 id="setup-page-title">开局配置</h2><p id="setup-page-description">先确认模式与模型，再选择板子和座位。</p></div>
+      <div class="card wizard-preflight" id="wizard-preflight" hidden>
+        <h2 data-i18n="wizard.modeTitle">开局前，选择对局模式</h2>
+        <p class="hint" data-i18n="wizard.modeHint">免费试玩使用本地流程脚本；真实对局需要先保存模型地址、模型名和 API Key。</p>
+        <div class="wizard-mode-row" role="group" aria-label="对局模式" data-i18n-aria="wizard.modeTitle">
+          <button class="wizard-mode-choice" id="wizard-mode-mock" type="button" aria-pressed="true"><b data-i18n="wizard.mockTitle">免费试玩</b><span data-i18n="wizard.mockHint">不调用模型 · 不产生 API 费用</span></button>
+          <button class="wizard-mode-choice" id="wizard-mode-real" type="button" aria-pressed="false"><b data-i18n="wizard.realTitle">真实对局</b><span data-i18n="wizard.realHint">使用下方配置的模型 · 按服务商用量计费</span></button>
+        </div>
+        <p id="wizard-key-status" class="hint" role="status"></p>
+      </div>
       <!-- ======== 三步开局（M3 §8.2 :255-268）：板子与规则 → 参与与座位 → 确认开局 ========
            前两步只写草稿、**不发任何建局请求**；第三步冻结档案与全部参数后单次提交（闸门在共享模块里）。 -->
-      <div class="setup-steps" id="setup-steps" role="tablist" aria-label="开局步骤">
-        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="1">1 板子与规则</button>
-        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="2">2 参与与座位</button>
-        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="3">3 确认开局</button>
+      <div class="setup-steps" id="setup-steps" role="tablist" aria-label="开局步骤" data-i18n-aria="wizard.stepsAria">
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="0">1 模式准备</button>
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="1" data-i18n="wizard.stepBoard">1 板子与规则</button>
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="2" data-i18n="wizard.stepPlayers">2 参与与座位</button>
+        <button class="setup-step-btn" type="button" role="tab" data-setup-step-btn="3" data-i18n="wizard.stepConfirm">3 确认开局</button>
         <span class="hint" id="setup-step-hint" role="status"></span>
       </div>
       <div class="setup-nav" id="setup-nav">
-        <button class="btn ghost" type="button" id="setup-prev">← 上一步</button>
-        <button class="btn" type="button" id="setup-next">下一步 →</button>
-        <button class="btn primary" type="button" id="setup-confirm">确认开局</button>
+        <button class="btn ghost" type="button" id="setup-home" data-i18n="wizard.backLobby">返回大厅</button>
+        <button class="btn ghost" type="button" id="setup-prev" data-i18n="wizard.prev">← 上一步</button>
+        <button class="btn" type="button" id="setup-next" data-i18n="wizard.next">下一步 →</button>
+        <button class="btn primary" type="button" id="setup-confirm" data-i18n="wizard.confirm">确认开局</button>
       </div>
+      <p class="hint setup-wizard-error" id="wizard-error" role="alert"></p>
       <div class="setup-confirm-box" id="setup-confirm-box">
         <div class="setup-confirm-rows" id="setup-confirm-rows"></div>
         <div class="btnrow">
-          <button class="btn ghost small" type="button" id="setup-fix-settings">去配置模型与密钥</button>
+          <button class="btn ghost small" type="button" id="setup-fix-settings" data-i18n="wizard.fixKeys">Configure model and API key</button>
         </div>
       </div>
         <div class="setup-grid">
           <!-- 左列：⓪ 外观与操作 + ① 板子 + ② 玩家 + ③ 规则 -->
           <div class="setup-col">
-            <h2 class="group-head">外观与操作 <span class="hint">档案级偏好 · 保存后立即生效并跟随档案</span></h2>
+            <h2 class="group-head setup-appearance-head"><span data-i18n="settings.appearance">外观与操作</span> <span class="hint" data-i18n="settings.appearanceHint">档案级偏好 · 保存后立即生效并跟随档案</span></h2>
 
             <!-- 外观与操作（FIN-07 行4）：字号/布局/减少动态，保存到当前档案 -->
             <div class="card" id="card-appearance">
               <div class="row2">
-                <label><span>界面字号</span>
+                <label><span data-i18n="settings.fontScale">界面字号</span>
                   <select id="pref-font">
-                    <option value="sm">小</option>
-                    <option value="std" selected>标准</option>
-                    <option value="lg">大</option>
+                    <option value="sm" data-i18n="settings.small">小</option>
+                    <option value="std" selected data-i18n="settings.standard">标准</option>
+                    <option value="lg" data-i18n="settings.large">大</option>
                   </select>
                 </label>
-                <label><span>阅读布局</span>
+                <label><span data-i18n="settings.layout">阅读布局</span>
                   <select id="pref-layout">
-                    <option value="reading" selected>阅读</option>
-                    <option value="compact">紧凑</option>
+                    <option value="reading" selected data-i18n="settings.reading">阅读</option>
+                    <option value="compact" data-i18n="settings.compact">紧凑</option>
                   </select>
                 </label>
               </div>
-              <label class="checkline"><input id="pref-motion" type="checkbox"> <span>减少动态效果（关闭过渡与动画）</span></label>
-              <div class="hint" id="pref-status">保存到当前档案；切换档案后各自生效。</div>
+              <label class="checkline"><input id="pref-motion" type="checkbox"> <span data-i18n="settings.reduceMotion">减少动态效果（关闭过渡与动画）</span></label>
+              <div class="hint" id="pref-status" data-i18n="settings.prefStatus">保存到当前档案；切换档案后各自生效。</div>
             </div>
 
-            <h2 class="group-head">游戏默认偏好 <span class="hint">开局后板子与规则固定，中途不可修改</span></h2>
+            <h2 class="group-head setup-game-head"><span data-i18n="settings.gamePrefs">游戏默认偏好</span> <span class="hint" data-i18n="settings.gamePrefsHint">开局后板子与规则固定，中途不可修改</span></h2>
 
             <!-- 板子 -->
             <div class="card" id="card-board" data-setup-step="1">
@@ -206,6 +240,7 @@
                 <select id="board-template"></select>
               </label>
               <div id="board-editor" class="board-editor"></div>
+              <div id="board-summary" class="ng-board-summary"></div>
               <div class="hint" id="board-total"></div>
             </div>
 
@@ -214,10 +249,10 @@
               <h2 data-no="②" data-i18n="players.title">玩家</h2>
               <!-- 玩家档案（PROF-01）：本机多档案，切换不换 API 配置；对局创建时把归属固化到所选档案 -->
               <div class="profile-strip" id="profile-strip">
-                <label class="profile-pick"><span class="profile-label">👤 我的档案</span>
+                <label class="profile-pick"><span class="profile-label" data-ww-icon="players" data-i18n="wizard.myProfile">👤 我的档案</span>
                   <select id="profile-select" title="对局将归属到该档案（战绩/笔记/经验池按档案隔离）"></select>
                 </label>
-                <button class="btn ghost small" id="btn-profile-manage" type="button">管理档案…</button>
+                <button class="btn ghost small" id="btn-profile-manage" type="button" data-i18n="home.manageProfiles">管理档案…</button>
               </div>
               <div class="mode-picker">
                 <label class="mode-card"><input type="radio" name="mode" value="play" checked> <span class="mode-body"><b data-i18n="players.modePlay">我当玩家（其余全是 AI）</b></span></label>
@@ -244,7 +279,7 @@
             <div class="card" id="card-rules" data-setup-step="1">
               <h2 data-no="③"><span data-i18n="rules.title">规则开关</span> <span class="hint" data-i18n="rules.defaultHint">默认 = 网易12人守卫局</span></h2>
               <details class="fold" id="rules-fold">
-                <summary>展开规则长表（夜晚顺序 / 自救 / 警长竞选…通常不用改）</summary>
+                <summary data-i18n="wizard.expandRules">展开规则长表（夜晚顺序 / 自救 / 警长竞选…通常不用改）</summary>
                 <div id="rules-editor"></div>
               </details>
             </div>
@@ -252,7 +287,7 @@
 
           <!-- 右列：④ 模型与密钥 + 设备与数据 + 关于 -->
           <div class="setup-col">
-            <h2 class="group-head">模型与密钥 <span class="hint">此设备共享 · 不随档案切换</span></h2>
+            <h2 class="group-head setup-model-head"><span data-i18n="settings.modelKeys">模型与密钥</span> <span class="hint" data-i18n="settings.modelKeysHint">此设备共享 · 不随档案切换</span></h2>
 
             <!-- API 配置 -->
             <div class="card" id="card-api" data-setup-step="3">
@@ -260,13 +295,13 @@
               <h2 data-no="④" data-i18n="api.title">API 配置</h2>
               <label><span data-i18n="api.baseUrl">接口地址 base_url</span><input id="cfg-baseurl" placeholder="https://open.deepseek.com/v1"></label>
               <label><span data-i18n="api.model">模型 model</span><input id="cfg-model" placeholder="deepseek-chat"></label>
-              <label><span data-i18n="api.modelFast">快速任务模型（留空 = 与主模型相同）</span><input id="cfg-modelfast" placeholder="留空则与上面一致"></label>
+              <label><span data-i18n="api.modelFast">快速任务模型（留空 = 与主模型相同）</span><input id="cfg-modelfast" placeholder="留空则与上面一致" data-i18n-placeholder="settings.fastModelPlaceholder"></label>
               <label><span data-i18n="api.key">API Key</span><input id="cfg-key" type="password" placeholder="sk-..."></label>
               <label><span data-i18n="api.keys">更多 API Key（可选，一行一个或用逗号分隔；每把 Key 各自有并发额度）</span><textarea id="cfg-keys" rows="2" placeholder="sk-...（留空则只用上面那一把）"></textarea></label>
               <div class="hint" id="cfg-channels"></div>
               <div class="btnrow">
-                <button class="btn ghost small" id="btn-clear-keys" type="button">清空额外 Key</button>
-                <button class="btn ghost small" id="btn-probe" type="button">探测并发额度</button>
+                <button class="btn ghost small" id="btn-clear-keys" type="button" data-i18n="settings.clearKeys">清空额外 Key</button>
+                <button class="btn ghost small" id="btn-probe" type="button" data-i18n="settings.probe">探测并发额度</button>
               </div>
               <div class="row2">
                 <label><span data-i18n="api.temp">温度 temperature</span><input id="cfg-temp" type="number" step="0.1" min="0" max="2"></label>
@@ -278,8 +313,8 @@
               <div class="row2">
                 <label><span data-i18n="api.effort">发言思考强度（发言/遗言/PK）</span>
                   <select id="cfg-effort">
-                    <option value="low" data-i18n="api.effortLow">最低 low（最快）</option>
-                    <option value="medium" data-i18n="api.effortMedium">中档 medium（默认，平衡速度与质量）</option>
+                    <option value="low" data-i18n="api.effortLow">轻度 low（默认，较快）</option>
+                    <option value="medium" data-i18n="api.effortMedium">中档 medium</option>
                     <option value="high" data-i18n="api.effortHigh">最高 high（最慢，实测单条发言平均等 100s+）</option>
                   </select></label>
                 <label><span data-i18n="api.fastEffort">快速任务思考强度（夜晚/投票等）</span>
@@ -301,26 +336,38 @@
             </div>
 
             <!-- 设备与数据：只列真实存在的能力 -->
-            <h2 class="group-head">设备与数据</h2>
+            <h2 class="group-head setup-device-head" data-i18n="settings.deviceData">设备与数据</h2>
             <div class="card" id="card-device">
-              <div class="btnrow"><button class="btn ghost small" id="btn-recovery-check" type="button">检查待清理恢复记录</button><span class="hint" id="recovery-status"></span></div>
+              <div class="btnrow"><button class="btn ghost small" id="btn-recovery-check" type="button" data-i18n="settings.recoveries">检查待清理恢复记录</button><span class="hint" id="recovery-status"></span></div>
               <div id="recovery-list" class="pm-list" style="display:none"></div>
               <div class="btnrow">
-                <button class="btn ghost" id="btn-device-profiles" type="button">👤 档案管理（导入 / 导出 / 战绩）</button>
-                <a class="btn ghost" data-ww-icon="mobile" href="/m/">手机端页面</a>
+                <button class="btn ghost" id="btn-device-profiles" type="button" data-ww-icon="players" data-i18n="settings.manageData">👤 档案管理（导入 / 导出 / 战绩）</button>
+                <a class="btn ghost" data-ww-icon="mobile" data-i18n="settings.mobilePage" href="/m/">手机端页面</a>
               </div>
               <p class="hint" id="pairing-status"></p>
             </div>
 
             <!-- 关于 -->
-            <h2 class="group-head">关于</h2>
+            <h2 class="group-head setup-about-head" data-i18n="settings.about">关于</h2>
             <div class="card" id="card-about">
               <p class="hint" id="about-version"></p>
-              <p class="hint">本机单机运行：对局、笔记与档案只保存在这台电脑上；模型请求直接发往你配置的服务商地址。</p>
+              <p class="hint" data-i18n="settings.localData">本机单机运行：对局、笔记与档案只保存在这台电脑上；模型请求直接发往你配置的服务商地址。</p>
             </div>
           </div><!-- /右列 -->
         </div>
       </div>
+      <section class="ng-page" id="history-page" hidden aria-labelledby="history-page-title">
+        <div class="setup-page-head"><p class="ng-inscription">ARCHIVES</p><h2 id="history-page-title" data-i18n="home.history">对局历史</h2><p data-i18n="home.historyDescription">按当前玩家档案查看未结束对局、战绩和公开事件。</p></div>
+        <div class="ng-page-body" id="history-page-body" role="status"></div>
+      </section>
+      <section class="ng-page" id="player-page" hidden aria-labelledby="player-page-title">
+        <div class="setup-page-head"><p class="ng-inscription">YOUR CHRONICLE</p><h2 id="player-page-title">玩家中心</h2><p>属于你的身份、故事与记忆。档案保存在本机，无需密码。</p><button class="btn ghost" id="player-page-back" type="button" data-ww-icon="back">返回</button></div>
+        <div id="player-page-body" aria-busy="false"></div>
+      </section>
+      <section class="ng-page" id="rulebook-page" hidden aria-labelledby="rulebook-page-title">
+        <div class="setup-page-head"><p class="ng-inscription">RULEBOOK</p><h2 id="rulebook-page-title" data-i18n="home.rulebook">规则书</h2><p data-i18n="home.rulebookDescription">胜负条件、夜晚顺序和本局角色说明。</p></div>
+        <div class="ng-page-body" id="rulebook-page-body"></div>
+      </section>
     </div>
   </section>
 
@@ -355,8 +402,15 @@
     <!-- 暂停横幅：配额/套餐等外部原因导致对局暂停（不是结束，可恢复） -->
     <div id="paused-banner" class="paused-banner hidden"></div>
 
+    <section class="ng-game-lead" aria-label="当前对局阶段">
+      <div class="ng-game-pills"><span id="ng-game-phase">对局进行中</span><span id="ng-game-alive">存活状态加载中</span></div>
+      <h1 id="ng-game-headline">倾听，也留下你的判断</h1>
+      <p id="ng-game-caption">一桌来客，每句话都可能改变结局。</p>
+    </section>
+
     <main class="game-layout" id="game-layout">
-      <div class="left-col">
+      <div class="left-col" id="left-col">
+        <button class="btn ghost" id="btn-seats-close" type="button" hidden data-ww-icon="close">关闭玩家列表</button>
         <div id="my-role-card" class="my-role hidden"></div>
         <!-- 座位视图切换（FIN-05）：圆桌 / 列表共用同一份选择状态，切换不清草稿、不改目标、不重建对局 -->
         <div class="seat-tabs" role="group" aria-label="座位视图切换">
@@ -443,16 +497,17 @@
 
 <!-- 弹窗与身份翻牌 -->
 <div id="modal-root"></div>
-<div id="role-overlay" class="role-overlay hidden">
+<div id="role-overlay" class="role-overlay hidden" role="dialog" aria-modal="true" aria-label="我的身份牌">
   <div class="flip-wrap">
-    <div class="flip-card" id="flip-card">
+    <div class="flip-card" id="flip-card" role="button" tabindex="0" aria-label="点击或按回车揭示身份">
       <div class="flip-inner">
-        <div class="flip-back"><span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span></div>
-        <div class="flip-front" id="flip-front"></div>
+        <div class="flip-back"></div>
+        <div class="flip-front" id="flip-front" hidden aria-hidden="true"></div>
       </div>
     </div>
-    <div class="flip-caption" id="flip-caption"></div>
-    <div class="flip-tools">
+    <div class="flip-hint" id="flip-hint"><span class="cb-txt" data-i18n-html="overlay.flipHint">❓<br>点击翻看你的身份</span></div>
+    <div class="flip-caption" id="flip-caption" hidden aria-hidden="true"></div>
+    <div class="flip-tools" hidden>
       <button class="btn primary" id="btn-flip-done" data-i18n="overlay.flipDone">我记住了，开始游戏</button>
       <button class="btn" id="btn-inspect" data-ww-icon="inspect" data-i18n="overlay.inspect">检视卡牌</button>
     </div>
@@ -479,7 +534,9 @@
 <script src="shared/draft-store.js"></script>
 <script src="shared/setup-wizard.js"></script>
 <script src="shared/stats-bucket.js"></script>
-  <script src="shared/export-status.js"></script>
+<script src="shared/presentation.js"></script>
+<script src="shared/export-status.js"></script>
+<script src="shared/entry-portal.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

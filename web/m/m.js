@@ -285,7 +285,7 @@ function closeTopOverlayLayer() {
   const top = backStack[backStack.length - 1];
   if (!top || top.kind === 'game') return false;
   if (top.veto && top.veto()) return true;
-  backStack.pop();
+  dropTopOverlay();
   try { top.closeDom(); } catch (_) {}
   if (top.kind === 'modal' && state.leaveAskOpen) {
     // 关掉的是"离局确认"= 取消离局：复位标志，之后仍可再次询问（与 popstate 分支同语义）
@@ -330,6 +330,7 @@ window.__wwEscClose = function () {
  *  不订阅整个 body 子树（手机端事件流刷新很频繁，避免每次插入都重算）。 */
 function syncLayerScrollLock() {
   const open = overlayAlive('modal') || overlayAlive('sheet') || overlayAlive('inspect') || overlayAlive('flip');
+  $('#m-app').inert = open;
   document.body.classList.toggle('ww-layer-open', open);
 }
 for (const sel of ['#m-modal', '#m-sheet', '#m-flip']) {
@@ -450,7 +451,14 @@ async function init() {
   state.meta = await api('GET', '/api/meta');
   state.rules = JSON.parse(JSON.stringify(state.meta.defaultRules));
   applyBoard('adv12');
+  const boardOptions = $('#m-board-options-body');
+  const rulesHeading = $('#m-rules-list').previousElementSibling;
+  boardOptions.append($('#m-board-summary'), $('#m-custom-editor'), rulesHeading, $('#m-rules-list'));
   renderBoardGrid();
+  prepareBoardRules();
+  wireMobileSetup();
+  window.WWPresentation.autosize(document);
+  window.WWPresentation.mobileViewport();
   wireSettings();
   wirePlayerCenter(); // 屏2b 玩家中心：返回键 + ③ 外观与操作那三个控件（内容渲染在 renderPlayerCenter）
   $('#m-next').addEventListener('click', gotoRules);
@@ -481,10 +489,7 @@ async function init() {
     window.WWGameDraft.writeSeat(localStorage, 'ww_seat', $('#m-my-seat').value);
     renderSeatSelect();
   });
-  $('#m-inspect-btn').addEventListener('click', () => state.view && state.view.me && openInspect(state.view.me.role));
-  $('#m-flip-card').addEventListener('click', () => $('#m-flip-card').classList.add('flipped'));
-  // 翻牌浮层也要进返回栈：返回键先收翻牌，而不是穿透到离局确认
-  $('#m-flip-done').addEventListener('click', () => dismissFlip());
+  // 翻牌/确认/检视由共享 roleReveal 绑定，未揭示时不能通过旧监听器绕过闸门。
   // 玩家档案（PROF-01）：选择 + 管理 + "我的昵称"手改标记。加载失败不阻塞开局（服务端会归默认档案）
   $('#m-profile-select').addEventListener('change', (e) => onSelectProfile(e.target.value));
   $('#m-profile-manage').addEventListener('click', openProfileManager);
@@ -496,11 +501,12 @@ async function init() {
   });
   // ---- FIN-04 首页 ----
   $('#m-play-new').addEventListener('click', () => {
-    const grid = $('#m-board-grid');
-    if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    flash('第一步：选择板子', '');
+    showScreen('m-setup');
+    setMobileSetupStage('mode');
+    trackOverlay('screen-setup', () => showScreen('m-boards'));
   });
-  $('#m-profile-chip').addEventListener('click', openProfileManager);
+  $('#m-profile-chip').addEventListener('click', openPlayerCenter);
+  $('#m-switch-profile').addEventListener('click', openNocturneProfileEntry);
   $('#m-resume-go').addEventListener('click', resumeGame);
   $('#m-tab-start').addEventListener('click', () => showScreen('m-boards'));
   $('#m-tab-game').addEventListener('click', openMyGamesPage); // M3 C1b：「对局」= 独立页（原来只弹底部弹层）
@@ -540,6 +546,17 @@ async function init() {
   await loadProfiles();
   await loadResumeCard();
   window.__wwReady = true; // 放开 index.html 顶部那段"加载中"守卫
+  if (new URLSearchParams(location.search).has('choose')) openNocturneProfileEntry();
+}
+
+function openNocturneProfileEntry() {
+  window.WWEntryPortal.open({
+    profiles: state.profiles,
+    currentId: state.profileId,
+    renderAvatar: renderAvatarInto,
+    onSelect: onSelectProfile,
+    onManage: openProfileManager,
+  });
 }
 
 // ---------------- 齿轮菜单（设置 / 规则书 / 结束本局 / 退出） ----------------
@@ -865,8 +882,8 @@ async function requestReview() {
   }
 }
 
-/** 点身份牌：已经发过牌就直接亮正面，否则走翻牌浮层 */
-function hideFlipDom() { $('#m-flip').classList.add('hidden'); syncLayerScrollLock(); }
+/** 点身份牌：只有亲手揭示过才直接亮正面，不能把“浮层已展示”当成“已揭示”。 */
+function hideFlipDom() { roleRevealController?.cancel(); $('#m-flip').classList.add('hidden'); syncLayerScrollLock(); }
 function dismissFlip() {
   const top = backStack[backStack.length - 1];
   if (top && top.kind === 'flip') dropTopOverlay(); // 返回键/完成键同一条路径：只关翻牌这一层
@@ -874,11 +891,7 @@ function dismissFlip() {
 }
 function showMyCard() {
   if (!state.view || !state.view.me || !state.view.me.role) return;
-  const wasOpen = !$('#m-flip').classList.contains('hidden');
-  hideFlipDom();
-  $('#m-flip-card').classList.add('flipped'); // 直接亮正面
-  $('#m-flip').classList.remove('hidden');
-  trackOverlay('flip', hideFlipDom, { swapIfOpen: wasOpen });
+  maybeShowRole(state.view, true);
 }
 
 /** 底部坞左侧的身份牌（常驻；旧版要点顶部 🎴 才看得到） */
@@ -907,25 +920,33 @@ function renderBoardGrid() {
   grid.innerHTML = '';
   for (const b of Object.values(state.meta.boards)) {
     const total = Object.values(b.roles).reduce((a, c) => a + c, 0);
-    const card = el('div', 'm-board-card' + (state.boardId === b.id ? ' sel' : ''));
+    const card = el('button', 'm-board-card' + (state.boardId === b.id ? ' sel' : ''));
+    card.type = 'button'; card.setAttribute('aria-pressed', String(state.boardId === b.id));
     card.innerHTML = `<span class="m-seats">${total}</span><h3>${b.name}</h3><p>${b.desc}</p>`;
     card.addEventListener('click', () => {
       state.boardId = b.id;
       state.boardCounts = { ...b.roles };
       // 板子内置板规（如狼美人局女巫不可自救）预填进规则页，仍可手动调整
       if (b.rules) Object.assign(state.rules, JSON.parse(JSON.stringify(b.rules)));
-      grid.querySelectorAll('.m-board-card').forEach((x) => x.classList.remove('sel'));
+      grid.querySelectorAll('.m-board-card').forEach((x) => { x.classList.remove('sel'); x.setAttribute('aria-pressed', 'false'); });
       card.classList.add('sel');
+      card.setAttribute('aria-pressed', 'true');
+      prepareBoardRules();
       $('#m-next').disabled = false;
     });
     grid.appendChild(card);
   }
-  const custom = el('div', 'm-board-card' + (state.boardId === 'custom' ? ' sel' : ''));
+  const custom = el('button', 'm-board-card' + (state.boardId === 'custom' ? ' sel' : ''));
+  custom.type = 'button'; custom.setAttribute('aria-pressed', String(state.boardId === 'custom'));
   custom.innerHTML = `<span class="m-seats">✦</span><h3>自定义</h3><p>自由调配每种身份的数量，打造你自己的板子</p>`;
   custom.addEventListener('click', () => {
     state.boardId = 'custom';
-    grid.querySelectorAll('.m-board-card').forEach((x) => x.classList.remove('sel'));
+    grid.querySelectorAll('.m-board-card').forEach((x) => { x.classList.remove('sel'); x.setAttribute('aria-pressed', 'false'); });
     custom.classList.add('sel');
+    custom.setAttribute('aria-pressed', 'true');
+    prepareBoardRules();
+    $('#m-board-options').open = true;
+    $('#m-board-options').scrollIntoView({ block: 'start' });
     $('#m-next').disabled = false;
   });
   grid.appendChild(custom);
@@ -947,15 +968,54 @@ function poolHint(cfg) {
   return `当前并发容量 ${live} 条${limits && limits.length > 1 ? `（每把 ${limits.join('/')} 条）` : ''}；${detail}。上限约 -23%，不是减半。`;
 }
 
+let settingsRequestId = 0;
 function wireSettings() {
-  $('#m-settings-btn').addEventListener('click', async () => {
+  $('#m-settings-btn').addEventListener('click', openMobileSettings);
+  $('#m-settings-back').addEventListener('click', () => { if (!dismissTop()) showScreen('m-boards'); });
+  document.querySelectorAll('[data-mobile-settings]').forEach((button) => button.addEventListener('click', () => {
+    const category = button.dataset.mobileSettings;
+    settingsRequestId++;
+    if (category === 'appearance' || category === 'data') {
+      openPlayerCenter();
+      $('#m-player').dataset.section = category;
+      $('#m-player .m-head h2').textContent = category === 'appearance' ? '外观与操作' : '设备与数据';
+      return;
+    }
+    $('#m-settings-menu').hidden = true;
+    $('#m-settings-detail').hidden = false;
+    trackOverlay('settings-category', resetMobileSettings);
+    if (category === 'model') void openModelSettings();
+    else {
+      $('#m-settings-title').textContent = '关于';
+      $('#m-settings-detail').replaceChildren(el('h3', null, '月夜议会 · AI 狼人杀'), elText('p', 'hint', `版本 ${state.meta.version || '未知'}`), el('p', 'hint', '本机多档案，无需密码。对局、笔记与头像保存在此设备；真实对局的模型请求直接发往你配置的服务商。'));
+    }
+  }));
+}
+
+function resetMobileSettings() {
+  settingsRequestId++;
+  $('#m-settings-menu').hidden = false;
+  $('#m-settings-detail').hidden = true;
+  $('#m-settings-title').textContent = '设置';
+}
+function openMobileSettings() {
+  const from = ['m-boards', 'm-setup', 'm-player', 'm-game'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  resetMobileSettings();
+  showScreen('m-settings');
+  trackOverlay('screen-settings', () => showScreen(from));
+}
+async function openModelSettings() {
+    const requestId = ++settingsRequestId;
+    $('#m-settings-title').textContent = '模型与连接';
+    $('#m-settings-detail').textContent = '正在读取连接配置…';
     const cfg = await api('GET', '/api/config').catch(() => ({}));
     const wrap = el('div');
     const head = el('div', 'mhead', `<h2>${ico('settings')} AI 设置</h2>`);
     const close = el('button', 'btn ghost small', '✕');
-    close.addEventListener('click', closeModalTop);
+    close.addEventListener('click', () => { if (!dismissTop()) resetMobileSettings(); });
     head.appendChild(close);
     const body = el('div', 'mbody');
+    const field = (selector) => body.querySelector(selector);
     const paces = (state.meta && state.meta.paces) || [];
     const paceOpts = paces.map((p) => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join('')
       + '<option value="custom">自定义（参数与任何档位都不一致）</option>';
@@ -976,8 +1036,8 @@ function wireSettings() {
         <label>最大回复 tokens（建议 16000）<input id="ms-maxtokens" type="number" value="${cfg.maxTokens || 16000}"></label>
       <div class="row2">
         <label>发言思考强度<select id="ms-effort">
-          <option value="low"${(cfg.reasoningEffort || 'medium') === 'low' ? ' selected' : ''}>最低 low（最快）</option>
-          <option value="medium"${(cfg.reasoningEffort || 'medium') === 'medium' ? ' selected' : ''}>中档 medium（默认）</option>
+          <option value="low"${(cfg.reasoningEffort || 'low') === 'low' ? ' selected' : ''}>轻度 low（默认，较快）</option>
+          <option value="medium"${cfg.reasoningEffort === 'medium' ? ' selected' : ''}>中档 medium</option>
           <option value="high"${cfg.reasoningEffort === 'high' ? ' selected' : ''}>最高 high（最慢）</option>
         </select></label>
         <label>快速任务强度<select id="ms-fasteffort">
@@ -998,77 +1058,89 @@ function wireSettings() {
         <span class="hint" id="ms-result"></span>
       </div>`;
     wrap.append(head, body);
-    openModal(wrap);
+    if (requestId !== settingsRequestId || $('#m-settings-detail').hidden || $('#m-settings').classList.contains('hidden')) return;
+    window.WWPresentation.modelForm(body, 'ms');
+    head.hidden = true;
+    $('#m-settings-detail').replaceChildren(wrap);
     // 节奏档位：与桌面端同源（都来自 /api/meta 的 paces），选中后填充可见输入框并如实说明改了什么
     const paceHint = (id) => {
       const p = paces.find((x) => x.id === id);
-      const box = $('#ms-pace-hint');
+      const box = field('#ms-pace-hint');
       if (!box) return;
       box.textContent = p
         ? `${p.desc}（反思阈值 ${p.values.digestMinEvents} 条、纪要保留 ${p.values.digestKeep} 条）`
         : '当前参数与任何档位都不完全一致；再选一档并保存即可回到该档的完整参数。';
     };
-    $('#ms-pace').value = curPace;
+    field('#ms-pace').value = curPace;
     paceHint(curPace);
-    $('#ms-pace').addEventListener('change', (e) => {
+    field('#ms-pace').addEventListener('change', (e) => {
       const p = paces.find((x) => x.id === e.target.value);
       if (p) {
-        if (p.values.reasoningEffort) $('#ms-effort').value = p.values.reasoningEffort;
-        if (p.values.fastEffort) $('#ms-fasteffort').value = p.values.fastEffort;
-        if (p.values.contextBudget) $('#ms-budget').value = p.values.contextBudget;
+        if (p.values.reasoningEffort) field('#ms-effort').value = p.values.reasoningEffort;
+        if (p.values.fastEffort) field('#ms-fasteffort').value = p.values.fastEffort;
+        if (p.values.contextBudget) field('#ms-budget').value = p.values.contextBudget;
       }
       paceHint(e.target.value);
     });
-    $('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; syncMockBtn(); });
-    $('#ms-save').addEventListener('click', async () => {
-      const b = { baseUrl: $('#ms-baseurl').value.trim(), model: $('#ms-model').value.trim(), modelFast: $('#ms-modelfast').value.trim(), maxTokens: Number($('#ms-maxtokens').value), temperature: Number($('#ms-temp').value), reasoningEffort: $('#ms-effort').value || 'medium', fastEffort: $('#ms-fasteffort').value || 'low', contextBudget: Number($('#ms-budget').value) || 12000 };
-      const pace = $('#ms-pace').value;
+    field('#ms-mock').addEventListener('change', (e) => { state.mock = e.target.checked; syncMockBtn(); });
+    let saving = false;
+    const saveModel = async () => {
+      if (saving) return false;
+      saving = true;
+      const saveButton = field('#ms-save');
+      saveButton.disabled = true;
+      saveButton.setAttribute('aria-busy', 'true');
+      field('#ms-result').textContent = '正在保存配置…';
+      const b = { baseUrl: field('#ms-baseurl').value.trim(), model: field('#ms-model').value.trim(), modelFast: field('#ms-modelfast').value.trim(), maxTokens: Number(field('#ms-maxtokens').value), temperature: Number(field('#ms-temp').value), reasoningEffort: field('#ms-effort').value || 'low', fastEffort: field('#ms-fasteffort').value || 'low', contextBudget: Number(field('#ms-budget').value) || 12000 };
+      const pace = field('#ms-pace').value;
       if (pace && pace !== 'custom') b.pace = pace; // custom = 保留用户自己调出来的参数
-      const key = $('#ms-key').value.trim();
+      const key = field('#ms-key').value.trim();
       if (key) b.apiKey = key;
       // 额外 Key：留空 = 不修改（与 apiKey 同一约定）；要清空请用下面的按钮
-      const extraKeys = ($('#ms-keys').value || '').split(/[\s,;、]+/).map((s) => s.trim()).filter(Boolean);
+      const extraKeys = (field('#ms-keys').value || '').split(/[\s,;、]+/).map((s) => s.trim()).filter(Boolean);
       if (extraKeys.length) b.apiKeys = extraKeys;
       try {
         const r = await api('PUT', '/api/config', b);
-        $('#ms-key').value = '';
-        $('#ms-keys').value = '';
-        $('#ms-key').placeholder = `已保存（${r.apiKeyMasked}）`;
-        $('#ms-result').textContent = `✓ 已保存（${r.pool ? r.pool.channels : r.channels || 1} 条并发通道）`;
+        field('#ms-key').value = '';
+        field('#ms-keys').value = '';
+        field('#ms-key').placeholder = `已保存（${r.apiKeyMasked}）`;
+        field('#ms-result').textContent = `✓ 已保存（${r.pool ? r.pool.channels : r.channels || 1} 条并发通道）`;
         const after = await api('GET', '/api/config').catch(() => null); // 按服务端反查结果回显，避免界面与磁盘不一致
         if (after) {
           const id = paces.some((p) => p.id === after.pace) ? after.pace : 'custom';
-          $('#ms-pace').value = id;
+          field('#ms-pace').value = id;
           paceHint(id);
         }
-      } catch (e) { $('#ms-result').textContent = `✗ ${e.message}`; }
-    });
+        return true;
+      } catch (e) { field('#ms-result').textContent = `✗ ${e.message}`; return false; }
+      finally { saving = false; saveButton.disabled = false; saveButton.removeAttribute('aria-busy'); }
+    };
+    field('#ms-save').addEventListener('click', saveModel);
     // 主动探测每把 Key 的实际并发额度（会花几次极短请求，必须由用户点出来）
-    $('#ms-probe').addEventListener('click', async () => {
-      const btn = $('#ms-probe');
+    field('#ms-probe').addEventListener('click', async () => {
+      const btn = field('#ms-probe');
       btn.disabled = true; btn.textContent = '探测中…';
-      $('#ms-result').textContent = '正在逐档试并发（每档几个极短请求）…';
+      field('#ms-result').textContent = '正在逐档试并发（每档几个极短请求）…';
       try {
         const r = await api('POST', '/api/config/probe', { max: 4 });
         const lines = (r.results || []).map((x) => `Key${x.index + 1}→${x.limit} 并发`).join('，');
-        $('#ms-result').textContent = `✓ 探测完成：${lines}；当前容量 ${r.pool ? r.pool.channels : '?'} 条`;
-      } catch (e) { $('#ms-result').textContent = `✗ 探测失败：${e.message}`; }
+        field('#ms-result').textContent = `✓ 探测完成：${lines}；当前容量 ${r.pool ? r.pool.channels : '?'} 条`;
+      } catch (e) { field('#ms-result').textContent = `✗ 探测失败：${e.message}`; }
       finally { btn.disabled = false; btn.textContent = '探测并发额度'; }
     });
-    $('#ms-test').addEventListener('click', async () => {      $('#ms-result').textContent = '测试中…';
-      await $('#ms-save').click();
+    field('#ms-test').addEventListener('click', async () => {      field('#ms-result').textContent = '测试中…';
+      if (!await saveModel()) return;
       try {
         const r = await api('POST', '/api/config/test');
-        $('#ms-result').textContent = r.ok ? `✓ 连接成功（${r.latencyMs}ms）` : `✗ ${(r.error || '').slice(0, 120)}`;
-      } catch (e) { $('#ms-result').textContent = `✗ ${e.message}`; }
+        field('#ms-result').textContent = r.ok ? `✓ 连接成功（${r.latencyMs}ms）` : `✗ ${(r.error || '').slice(0, 120)}`;
+      } catch (e) { field('#ms-result').textContent = `✗ ${e.message}`; }
     });
-  });
 }
 
 // ---------------- 屏2：角色图鉴 ----------------
 /** 挂载共享图鉴（web/codex.js）。手机端用 sheet 模式：点牌不挤右侧栏，而是弹层看细节。 */
 function openCodex(replace) {
-  state.codexFrom = ['m-boards', 'm-rules', 'm-game', 'm-games', 'm-player'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  state.codexFrom = ['m-boards', 'm-setup', 'm-settings', 'm-rules', 'm-game', 'm-games', 'm-player'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
   showScreen('m-codex');
   // 进入返回栈：从齿轮/设置弹窗里进来时替换那一层（replace），返回键不空关一层
   if (replace) overlayReplaceNext = true;
@@ -1097,8 +1169,10 @@ function closeCodexDom() { showScreen(state.codexFrom || 'm-boards'); }
  * 原有底部弹层仍保留给子流程：档案列表 / 编辑资料 / 裁切头像 / 回收站。
  */
 function openPlayerCenter() {
+  delete $('#m-player').dataset.section;
+  $('#m-player .m-head h2').textContent = '玩家中心';
   // 从哪一屏进来，返回就回哪一屏（与 #m-codex 的 codexFrom 同一套做法）
-  state.playerFrom = ['m-boards', 'm-rules', 'm-game', 'm-codex', 'm-games'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
+  state.playerFrom = ['m-boards', 'm-setup', 'm-settings', 'm-rules', 'm-game', 'm-codex', 'm-games'].find((id) => !$('#' + id).classList.contains('hidden')) || 'm-boards';
   showScreen('m-player');
   trackOverlay('screen-player', closePlayerCenterDom);
   renderPlayerCenter();
@@ -1139,6 +1213,7 @@ function renderPcProfile() {
   renderAvatarInto(av, p); // 与首页档案行/列表同一条渲染路径：自定义图或内置徽记，永不空白
   const who = el('div', 'pc-who');
   who.appendChild(elText('b', 'pc-nick', p ? p.nickname : (usable.length ? '未选择档案' : '默认档案')));
+  who.title = p ? p.nickname : '';
   who.appendChild(elText('div', 'hint', p && p.bio ? p.bio : '简介还没写（点「编辑资料」补上）'));
   if (p && p.createdAt) who.appendChild(elText('div', 'hint', `创建于 ${String(p.createdAt).slice(0, 10)}`));
   idRow.appendChild(who);
@@ -1160,7 +1235,9 @@ function renderPcProfile() {
   // 然后整页重画 —— 旧档案的头像/战绩不被留在页面上（§5.2）。
   sel.addEventListener('change', (e) => { onSelectProfile(e.target.value); renderPlayerCenter(); });
   field.appendChild(sel);
-  box.appendChild(field);
+  const switcher = el('details', 'ng-profile-manage');
+  switcher.append(el('summary', null, '切换玩家档案'), field);
+  box.appendChild(switcher);
 
   const ops = el('div', 'btnrow');
   const edit = el('button', 'btn', icoLabel(p ? 'edit' : 'create', p ? '编辑资料' : '新建档案'));
@@ -1223,7 +1300,8 @@ async function renderPcGames() {
   api('GET', `/api/profiles/${pid}/stats`).then((st) => {
     if (!fresh()) return;
     stats.innerHTML = '';
-    stats.appendChild(el('p', 'hint', pcStatsText(st)));
+    stats.title = pcStatsText(st);
+    stats.appendChild(window.WWPresentation.stats(st));
   }).catch(fail(stats, '统计概览'));
 
   api('GET', `/api/profiles/${pid}/games?status=unfinished&limit=5`).then((un) => {
@@ -1442,17 +1520,50 @@ function syncTabbar(id) {
 }
 
 function showScreen(id) {
+  if (id !== 'm-game') window.WWConnectionState.stopLiveClock(state);
+  const changed = $('#' + id).classList.contains('hidden');
   // 'm-player'（屏2b 玩家中心）与 'm-games'（屏2c 我的对局）也在这个清单里：切换即整屏显隐，
   // 与 #m-codex 同一套做法（这是**唯一**的屏清单，任何新屏都要加进来）
-  ['m-boards', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  ['m-boards', 'm-setup', 'm-settings', 'm-codex', 'm-player', 'm-games', 'm-rules', 'm-game'].forEach((s) => $('#' + s).classList.toggle('hidden', s !== id));
+  if (id === 'm-game' && state.view) updateLive(state.view);
   syncTabbar(id);
+  if (changed) window.WWPresentation.enter($('#' + id));
 }
 
 function gotoRules() {
   showScreen('m-rules');
-  trackOverlay('screen-rules', () => showScreen('m-boards')); // 返回键：从第二步回到第一步（保留已选项）
-  const tpl = state.meta.boards[state.boardId];
-  $('#m-rules-title').textContent = tpl ? tpl.name : '自定义板子';
+  trackOverlay('screen-rules', () => { showScreen('m-setup'); setMobileSetupStage('board'); });
+  $('#m-rules-title').textContent = '参与与座位';
+  renderSeatSelect();
+}
+
+function setMobileSetupStage(stage) {
+  $('#m-setup').dataset.stage = stage;
+  $('#m-setup-title').textContent = stage === 'mode' ? '模式准备' : '板子与规则';
+  $('#m-setup-step').textContent = stage === 'mode' ? '1 / 4' : '2 / 4';
+  $('#m-setup .m-scroll').scrollTop = 0;
+  window.WWPresentation.enter($('#m-setup .m-scroll'), true);
+}
+
+function wireMobileSetup() {
+  $('#m-mode-settings').addEventListener('click', openMobileSettings);
+  $('#m-setup-back').addEventListener('click', () => { if (!dismissTop()) showScreen('m-boards'); });
+  $('#m-mode-next').addEventListener('click', async () => {
+    const btn = $('#m-mode-next'); btn.disabled = true;
+    try {
+      if (!state.mock) {
+        const cfg = await api('GET', '/api/config');
+        if (!cfg.hasKey || !cfg.model || !cfg.baseUrl) { $('#m-mode-status').textContent = '请先保存接口地址、主模型与密钥，或选择免费试玩。'; return; }
+      }
+      $('#m-mode-status').textContent = '';
+      setMobileSetupStage('board');
+      trackOverlay('setup-board', () => setMobileSetupStage('mode'));
+    } catch (e) { $('#m-mode-status').textContent = `读取配置失败：${e.message}`; }
+    finally { btn.disabled = false; }
+  });
+}
+
+function prepareBoardRules() {
   // 摘要
   const counts = state.boardCounts;
   const total = Object.values(counts).reduce((a, b) => a + b, 0);
@@ -2183,7 +2294,7 @@ function openAvatarCrop(cfg) {
   back.id = 'av-crop-cancel';
   back.addEventListener('click', () => leave(cfg.onCancel));
   const useBuiltin = el('button', 'btn ghost', '改用内置头像');
-  useBuiltin.id = 'av-crop-builtin';
+  useBuiltin.id = 'av-crop-builtin'; useBuiltin.textContent = '内置头像';
   useBuiltin.addEventListener('click', () => leave(cfg.onUseBuiltin));
   const ok = el('button', 'btn primary', '确认裁切');
   ok.id = 'av-crop-confirm';
@@ -2441,6 +2552,29 @@ function openProfileTrash() {
   renderProfileTrash(list, msg);
 }
 
+function confirmMobileSetup(wizard, cfg) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ok) => { if (!settled) { settled = true; resolve(ok); } };
+    const body = el('div', 'ng-mobile-confirm');
+    body.appendChild(el('p', 'ng-inscription', '4 / 4 · READY TO BEGIN'));
+    const rows = window.WWSetupWizard.summarize(wizard.snapshot(), { model: cfg.model, hasApiKey: cfg.hasKey, bindingValid: cfg.keyBindingValid !== false });
+    for (const row of rows) {
+      const item = el('div', 'setup-confirm-row');
+      item.append(elText('span', 'k', row.label), elText('span', 'v', row.text));
+      body.appendChild(item);
+    }
+    const foot = el('div', 'btnrow');
+    const back = el('button', 'btn ghost', '上一步');
+    back.addEventListener('click', () => { finish(false); sheetDismiss(); });
+    const confirm = el('button', 'btn primary', '确认开局');
+    confirm.id = 'm-confirm-create';
+    confirm.addEventListener('click', () => { confirm.disabled = true; wizard.freeze(); finish(true); sheetDismiss(); });
+    foot.append(back, confirm);
+    openSheet('确认开局', body, foot, { onTeardown: () => finish(false) });
+  });
+}
+
 async function startGame() {
   $('#m-err').textContent = '';
   const startBtn = $('#m-start');
@@ -2474,13 +2608,25 @@ async function startGame() {
     };
     if (randomSeat) { body.mySeat = 'random'; body.myName = humanName; } // 座位由服务端抽签
     // 对局归属固化（PROF-02）：开局即锁定到所选档案；未加载出档案时不带字段（服务端归默认档案）
-    if (state.profileId) body.profileId = state.profileId;
-    try { window.WWGameDraft.writeSeat(localStorage, 'ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
-    const created = await api('POST', '/api/games', body);
-    // mock 随句柄保存：首页「继续上局」卡要如实标出试玩/真实（防止恢复时误标花钱）
     const owner = state.profiles.find((x) => x.id === state.profileId);
+    const wizard = window.WWSetupWizard.createWizard({ profileId: state.profileId, ownerNickname: owner?.nickname, mode: useMock ? 'mock' : 'real', participation: 'play' });
+    wizard.set({ boardId: state.boardId, board: { boardName: state.meta.boards[state.boardId]?.name || '自定义', roles: counts }, playerCount: total, rules: state.rules, mySeat: seatChoice, nickname: humanName });
+    wizard.goTo(3);
+    if (!await confirmMobileSetup(wizard, cfg)) return;
+    body.rules = wizard.frozen.rules;
+    if (wizard.profileId) body.profileId = wizard.profileId;
+    // The body is captured before opening confirmation; no current-profile reads after await.
+    try { window.WWGameDraft.writeSeat(localStorage, 'ww_seat', seatChoice); } catch (_) { /* 隐私模式忽略 */ }
+    const outcome = await wizard.commit({
+      hasApiKey: !!cfg.hasKey, bindingValid: cfg.keyBindingValid !== false,
+      create: () => api('POST', '/api/games', body),
+      queryExisting: () => api('GET', '/api/games'),
+    });
+    if (!outcome.allowed) { $('#m-err').textContent = outcome.reason; return; }
+    const created = outcome.created;
+    // mock 随句柄保存：首页「继续上局」卡要如实标出试玩/真实（防止恢复时误标花钱）
     state.game = { gameId: created.gameId, playerToken: created.playerToken, godToken: created.godToken, mySeat: created.mySeat, mock: !!created.mock || useMock, savedAt: Date.now(),
-      ownerProfileId: state.profileId || null, ownerNickname: owner ? owner.nickname : null };
+      ownerProfileId: wizard.profileId || null, ownerNickname: wizard.ownerNickname || null };
     await api('POST', `/api/games/${created.gameId}/start`, { token: created.godToken });
     enterGame();
   } catch (e) { $('#m-err').textContent = `✗ ${e.message}`; }
@@ -2488,7 +2634,7 @@ async function startGame() {
     // 还原时不能只写 textContent：i18n 词典里的 `m.start` 是「⚔ 开始游戏」，
     // 直接写会把 data-ww-icon 的徽记抹掉（按钮从此只剩一个 emoji）。
     // 所以写完文案再按标记重画一次 —— 与切语言后重画走的是同一条路。
-    if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('m-busy'); startBtn.textContent = I18N.t('m.start'); window.WWIcons.mountNode(startBtn); }
+    if (startBtn) { startBtn.disabled = false; startBtn.classList.remove('m-busy'); startBtn.textContent = '下一步：确认开局'; window.WWIcons.mountNode(startBtn); }
   }
 }
 
@@ -2597,7 +2743,8 @@ function persistGameHandle(immediate) {
 function enterGame() {
   persistGameHandle(true);
   showScreen('m-game');
-  state.playerAfter = 0; state.roleShown = false; state.lastNightStep = null;
+  state.playerAfter = 0; state.roleShown = false; state.roleRevealed = false; state.lastNightStep = null;
+  roleRevealController?.cancel();
   state.speakingSeat = 0;
   // FIN-06：进对局默认落在发言页；返回栈压 game 哨兵（返回键→回发言页→离局确认）
   flowPinned = true; flowNewCount = 0; state.voteProgress = null; state.liveSince = null;
@@ -2915,6 +3062,7 @@ function renderEventNode(e) {
     case 'phase': { const night = (d.title || '').includes('夜'); return el('div', `banner ${night ? 'night' : ''}`, d.title || ''); }
     case 'night_step': return el('div', 'msg event', `🕯 ${escapeHtml(d.label)}（${d.index}/${d.total}）`);
     case 'system': return el('div', 'sysline', escapeHtml(e.text || d.text || ''));
+    case 'ai_status': return elText('div', 'sysline', d.message || '模型响应异常，本次已使用规则兜底行动。');
     case 'deaths': {
       const ds = d.deaths || [];
       const rules = state.view && state.view.rules;
@@ -3188,7 +3336,7 @@ function feedStage(e, fresh) {
     case 'phase': {
       state.speakingSeat = 0;
       const night = (d.title || '').includes('夜');
-      if (fresh) flash(d.title || (night ? '天黑请闭眼' : '天亮了'), night ? 'night' : '');
+      if (fresh) flash(d.title || (night ? '天黑请闭眼' : '天亮了'), night ? 'night' : 'phase');
       break;
     }
     case 'speech': {
@@ -3237,14 +3385,17 @@ function feedStage(e, fresh) {
 
 /** 流程区底部的"正在发言/正在思考"节点（流式打字）：把漫长的空白等待变成即时反馈。
  *  FIN-10 §13.1.2：流式文本只更新当前节点的文本子节点，秒表只重建 meta 行 —— 不整块重建。 */
-function updateLive(v) {
+function updateLive(v, clockOnly = false) {
   const flow = $('#m-flow');
   if (!flow) return;
-  const live = v && v.live && !v.finished ? v.live : null;
+  const live = v && v.live && !v.finished && !v.paused ? v.live : null;
   // 私密投票期间没有公开发言（live.public=false），但服务端会播报"已收集几票"——
   // 那是这个阶段唯一能让玩家知道"程序在跑"的信号，不能因为 live 为空就把节点收掉。
-  const vpRaw = v && v.finished ? null : state.voteProgress;
+  const vpRaw = v && !v.finished && !v.paused ? state.voteProgress : null;
   const vp = vpRaw && vpRaw.done < vpRaw.total ? vpRaw : null; // 收齐即收工，不依赖事件顺序
+  window.WWConnectionState.syncLiveClock(state, !!(live || vp) && !$('#m-game').classList.contains('hidden'), () => {
+    if (!document.hidden) updateLive(state.view, true);
+  });
   let node = $('#m-live');
   if (!live && !vp) { if (node) node.remove(); state.liveSince = null; return; }
   if (!node) {
@@ -3255,35 +3406,41 @@ function updateLive(v) {
   if (node.parentNode !== flow) flow.appendChild(node);
   else if (node !== flow.lastElementChild) flow.appendChild(node); // 始终贴底
   const lp = live ? (v.players || []).find((x) => x.seat === live.seat) : null;
-  // 秒表：实测单条发言平均等 103.6s、最长 362s，而这段时间手机上**完全不动**。
-  // 只显示"已 N 秒"，不泄露任何私密内容（秒数进 sig，让 1.2s 轮询把表走起来）。
-  const lkey = live ? `${live.seat}|${live.task || ''}` : '';
-  if (live && (!state.liveSince || state.liveSince.key !== lkey)) state.liveSince = { key: lkey, at: Date.now() };
-  const secs = live ? Math.max(0, Math.round((Date.now() - state.liveSince.at) / 1000))
-    : Math.max(0, Math.round((Date.now() - vp.at) / 1000));
+  // SSE 没有增量也继续计时；同座位同任务的新请求由 startedAt 区分。
+  const secs = window.WWConnectionState.liveSeconds(state, live, vp && vp.at);
+  const countText = live ? ` · 已 ${secs}s${vp ? ` · ${vp.done}/${vp.total}` : ''}` : `已思考 ${vp.done}/${vp.total} · ${secs}s`;
+  if (clockOnly && node) {
+    const counter = node.querySelector('[data-live-clock]');
+    if (counter) counter.textContent = countText;
+    return;
+  }
   const meta = node.querySelector('.meta');
   const body = node.querySelector('.live-body');
   if (!live) {
     // 只有投票进度：明确告诉玩家"已经收到几票、等了多久"，而不是让他盯着空白
     const msig = `vp|${vp.done}/${vp.total}|${secs}`;
+    delete node.dataset.txt; // A later empty live frame must replace this voting body.
     if (node.dataset.msig !== msig) {
       node.dataset.msig = msig;
       meta.innerHTML = '<span class="hint">… 正在收集投票</span>';
       body.innerHTML = '';
-      body.appendChild(elText('div', 'hint', `已思考 ${vp.done}/${vp.total} · ${secs}s`));
+      const counter = elText('div', 'hint', countText); counter.dataset.liveClock = '';
+      body.appendChild(counter);
     }
     return;
   }
-  const work = live.text ? '… 正在决策' : '… 正在思考';
+  const work = window.WWConnectionState.liveStatus(live, live.public);
   const msig = `${live.seat}|${live.public ? 1 : 0}|${live.public && live.text ? 'say' : work}|${secs}|${vp ? `${vp.done}/${vp.total}` : ''}|${lp ? lp.name : ''}`;
   if (node.dataset.msig !== msig) {
     node.dataset.msig = msig;
-    meta.innerHTML = '<span class="who"></span> <span class="hint"></span>';
+    meta.innerHTML = '<span class="who"></span> <span class="hint live-status"></span><span class="hint" data-live-clock></span>';
     meta.querySelector('.who').textContent = `${lp ? lp.name : ''} · ${live.seat}号`;
-    meta.querySelector('.hint').textContent = `${live.public && live.text ? '✍ 正在发言' : work} · 已 ${secs}s${vp ? ` · ${vp.done}/${vp.total}` : ''}`;
+    meta.querySelector('.live-status').textContent = work;
+    meta.querySelector('[data-live-clock]').textContent = countText;
   }
-  if (node.dataset.txt !== (live.public && live.text ? live.text : '')) {
-    node.dataset.txt = live.public && live.text ? live.text : '';
+  const bodySig = `${work}|${live.public && live.text ? live.text : ''}`;
+  if (node.dataset.txt !== bodySig) {
+    node.dataset.txt = bodySig;
     body.innerHTML = '';
     if (live.public && live.text) {
       const txt = document.createElement('span');
@@ -3291,21 +3448,24 @@ function updateLive(v) {
       txt.textContent = live.text; // 模型输出：按纯文本渲染
       body.append(txt, el('span', 'caret'));
     } else {
-      body.appendChild(elText('div', 'hint', '正在思考…'));
+      body.appendChild(elText('div', 'hint', work));
     }
   }
 }
 
-let flashTimer = null;
+let flashTimer = null, flashHideTimer = null;
 function flash(text, cls, durationMs = 1450) {
   const f = $('#m-flash');
-  f.className = 'm-flash' + (cls ? ' ' + cls : '');
+  const cinematic = ['night', 'red', 'phase'].includes(cls);
+  f.className = 'm-flash' + (cls ? ' ' + cls : '') + (cinematic ? '' : ' m-flash-toast');
+  f.setAttribute('role', 'status'); f.setAttribute('aria-live', 'polite');
+  f.setAttribute('aria-atomic', 'true');
   f.innerHTML = `<div class="flash-txt">${escapeHtml(text)}</div>`;
-  clearTimeout(flashTimer);
+  clearTimeout(flashTimer); clearTimeout(flashHideTimer);
   flashTimer = setTimeout(() => {
     f.classList.add('fadeout');
-    setTimeout(() => f.classList.add('hidden'), 520);
-  }, durationMs);
+    flashHideTimer = setTimeout(() => f.classList.add('hidden'), window.WWPresentation.reducedMotion() ? 0 : 180);
+  }, cinematic ? durationMs : Math.max(durationMs, Math.min(6000, 1800 + String(text).length * 45)));
 }
 
 function possibleRolesFor(v, seat) {
@@ -4236,11 +4396,13 @@ function mountRoleArt(root, rid, width) {
   return window.CardFrame.mount(host, { roleId: rid, revealed: true, name: roleInfo(rid).name, width });
 }
 function openInspect(rid, replace) {
+  if (document.querySelector('.inspect-stage')) return;
   const r = roleInfo(rid);
   const stage = el('div', 'inspect-stage');
+  stage.setAttribute('aria-label', `检视${r.name}角色牌`);
   const card = el('div', 'inspect-card');
   const fit = window.CardFrame.fitSize(window.CardFrame.SIZES.inspect, {
-    width: window.innerWidth - 48, height: window.innerHeight - 110,
+    width: window.innerWidth - 48, height: window.innerHeight - 180,
   });
   card.style.width = `${fit.width}px`;
   window.CardFrame.mount(card, { roleId: rid, revealed: true, name: r.name, width: fit.width });
@@ -4248,35 +4410,45 @@ function openInspect(rid, replace) {
   stage.appendChild(el('div', 'inspect-desc', escapeHtml(r.short)));
   stage.appendChild(el('div', 'inspect-hint', '移动指针检视 · 点击关闭'));
   stage.addEventListener('mousemove', (e) => {
+    if (window.WWPresentation.reducedMotion()) return;
     const rect = card.getBoundingClientRect();
     const dx = (e.clientX - rect.left - rect.width / 2) / rect.width;
     const dy = (e.clientY - rect.top - rect.height / 2) / rect.height;
     card.style.transform = `rotateY(${(dx * 14).toFixed(2)}deg) rotateX(${(-dy * 12).toFixed(2)}deg)`;
   });
-  // 点击关闭也走返回栈：返回键与点击行为一致（关检视 ≠ 退局）
+  document.body.appendChild(stage);
+  const restore = window.WWPresentation.beginInspection(stage);
+  const closeInspect = () => { stage.remove(); restore(); syncLayerScrollLock(); };
+  // 点击、Esc 与原生返回均清理检视并恢复同一份资料 DOM。
   stage.addEventListener('click', () => {
     const top = backStack[backStack.length - 1];
     if (top && top.kind === 'inspect') dismissTop();
-    else { stage.remove(); syncLayerScrollLock(); }
+    else closeInspect();
   });
-  document.body.appendChild(stage);
   if (replace) overlayReplaceNext = true; // 从齿轮/设置里进来：替换那一层，返回深度不加深
-  trackOverlay('inspect', () => stage.remove());
+  trackOverlay('inspect', closeInspect);
 }
-function maybeShowRole(v) {
-  if (state.roleShown || !v.me || !v.me.role || v.finished || (v.day === 0 && !v.events.length)) return; // 已结束不播翻牌
+let roleRevealController = null;
+function maybeShowRole(v, reopen = false) {
+  if (!v.me || !v.me.role || (!reopen && (state.roleShown || v.finished || (v.day === 0 && !v.events.length)))) return;
   state.roleShown = true;
-  const r = roleInfo(v.me.role);
-  $('#m-flip-front').innerHTML = `
-    ${roleArtHtml()}`;
-  mountRoleArt($('#m-flip-front'), v.me.role);
-  $('#m-flip-caption').innerHTML = `
-    <div class="r-desc">${r.short}</div>
-    ${v.me.teammates && v.me.teammates.length ? `<div class="r-desc tm">狼队：${v.me.teammates.join('、')} 号</div>` : ''}`;
-  const wasOpen = !$('#m-flip').classList.contains('hidden');
-  $('#m-flip').classList.remove('hidden');
-  $('#m-flip-card').classList.remove('flipped');
-  trackOverlay('flip', hideFlipDom, { swapIfOpen: wasOpen }); // 翻牌也在返回栈里：返回先收翻牌
+  const overlay = $('#m-flip');
+  const wasOpen = !overlay.classList.contains('hidden');
+  roleRevealController = window.WWPresentation.roleReveal({
+    overlay, card: $('#m-flip-card'), front: $('#m-flip-front'), caption: $('#m-flip-caption'),
+    hint: $('#m-flip-hint'), tools: overlay.querySelector('.flip-tools'), done: $('#m-flip-done'), inspect: $('#m-inspect-btn'),
+    renderFront(front) { front.innerHTML = roleArtHtml(); mountRoleArt(front, v.me.role); },
+    renderCaption(caption) {
+      const r = roleInfo(v.me.role);
+      caption.innerHTML = `<div class="r-desc">${escapeHtml(r.short)}</div>
+        ${v.me.teammates?.length ? `<div class="r-desc tm">狼队：${v.me.teammates.map(escapeHtml).join('、')} 号</div>` : ''}`;
+    },
+    onReveal() { state.roleRevealed = true; },
+    onDone() { dismissFlip(); $('#m-mycard').focus({ preventScroll: true }); },
+    onInspect() { openInspect(v.me.role); },
+    initiallyRevealed: reopen && (state.roleRevealed || v.finished),
+  });
+  trackOverlay('flip', hideFlipDom, { swapIfOpen: wasOpen, veto: () => !overlay.classList.contains('revealed') });
 }
 /**
  * 规则书：内容与渲染器都在 web/rulebook.js（桌面端同一份）。

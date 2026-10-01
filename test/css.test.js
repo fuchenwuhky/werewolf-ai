@@ -22,7 +22,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
-const CSS_FILES = ['web/shared/tokens.css', 'web/style.css', 'web/m/m.css'];
+const CSS_FILES = ['web/shared/tokens.css', 'web/style.css', 'web/m/m.css', 'web/shared/nocturne.css', 'web/shared/nocturne-mobile.css'];
+const BASE_CSS_FILES = CSS_FILES.filter((f) => !f.includes('nocturne'));
 const TEXT_EXT = new Set(['.js', '.json', '.css', '.html', '.md', '.webmanifest']);
 const SKIP_DIR = new Set(['node_modules', '.git', 'saves', 'logs', 'app', 'android', 'dist', 'coverage']);
 
@@ -326,7 +327,7 @@ function hexLiterals(cssRaw) {
 
 test('§3 行62-69：六色语义只在共享令牌层定义一次，样式表里不得再写同值字面量（FIX-22 防复发）', () => {
   const tokens = read(TOKENS_CSS);
-  const all = CSS_FILES.map(read).join('\n');
+  const all = BASE_CSS_FILES.map(read).join('\n');
   const problems = [];
   for (const [name, value, label] of SEM_COLORS) {
     // ① 正本取值与计划书一致（规范化后比较：hex 大小写等价）

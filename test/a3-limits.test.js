@@ -7,7 +7,7 @@
  *
  * A3 的三件事，本文件逐条守住：
  *   ① 分任务软超时：发言给足（90s）、结构化微决策压死（30s），cfg.timeoutMs 只作兜底；
- *   ② 超时/截断**先降档**（effort → minimal）再试，而不是原样重试或直接翻倍预算；
+ *   ② 超时/截断先使用模型真正支持的低档（DeepSeek high → low），避免 minimal 映射后无效降档；
  *   ③ 单次决策总时长闸：传输层重试 × 校验层重试会相乘，必须有一道总闸把最坏情况钉住。
  */
 'use strict';
@@ -69,7 +69,7 @@ function fakeFetchOnce({ content, finishReason }) {
   return calls;
 }
 
-test('截断（finish_reason=length）先降档到 minimal，而不是直接翻倍预算', async () => {
+test('DeepSeek 截断先有效降档到 low，而不是 minimal 或直接翻倍预算', async () => {
   const calls = fakeFetchOnce({ content: '', finishReason: 'length' });
   let downgradedSeen = false;
   try {
@@ -83,7 +83,7 @@ test('截断（finish_reason=length）先降档到 minimal，而不是直接翻�
   assert.ok(downgradedSeen, '截断应触发重试');
   assert.ok(calls.length >= 2, `必须重试（实际 ${calls.length} 次）`);
   assert.strictEqual(calls[0].reasoning_effort, 'high', '第一次用原档位');
-  assert.strictEqual(calls[1].reasoning_effort, 'minimal', '第二次必须降档到 minimal（A3 的核心）');
+  assert.strictEqual(calls[1].reasoning_effort, 'low', 'DeepSeek high 的有效降档是 low，不再发送映射回 low 的 minimal');
   // 第一次不该翻倍预算（那是旧行为：越截断越慢）
   assert.strictEqual(calls[1].max_tokens, 6000, '降档时预算只小幅上调（1.5x），不是翻倍');
 });
@@ -98,7 +98,7 @@ test('超时（AbortError）降档重试，且不等待退避', async () => {
       err.name = 'AbortError';
       throw err;
     }
-    assert.strictEqual(body.reasoning_effort, 'minimal', '超时后的重试必须已降档');
+    assert.strictEqual(body.reasoning_effort, 'low', 'DeepSeek 超时后必须降为真实低档');
     return {
       ok: true,
       status: 200,
