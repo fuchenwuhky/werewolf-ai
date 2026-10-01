@@ -1,0 +1,330 @@
+{
+  "admirer": {
+    "path": "web/assets/roles/admirer.png",
+    "success": true,
+    "imageHash": "148938420bd9049f6ab445821f8770f463b90e55",
+    "sizeBytes": 1243611,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:2"
+  },
+  "card_back": {
+    "path": "web/assets/roles/card_back.png",
+    "success": true,
+    "imageHash": "90ec4127854becd2f481ff471be7742c4cae0c20",
+    "sizeBytes": 1513349,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:3"
+  },
+  "moonlit-village": {
+    "path": "design/gothic-ui-v1/assets/moonlit-village.png",
+    "success": true,
+    "imageHash": "ea267c058b370288b2ff9546a0bce2eff213388c",
+    "sizeBytes": 2139783,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:4"
+  },
+  "dreamer": {
+    "path": "web/assets/roles/dreamer.png",
+    "success": true,
+    "imageHash": "3fd274846ddbab7c36d55a72434e6d873ff836d6",
+    "sizeBytes": 1163067,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:5"
+  },
+  "crow": {
+    "path": "web/assets/roles/crow.png",
+    "success": true,
+    "imageHash": "684b7cf03498aedbb56f89c2a6c39400bfc39b5d",
+    "sizeBytes": 1314809,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:6"
+  },
+  "guard": {
+    "path": "web/assets/roles/guard.png",
+    "success": true,
+    "imageHash": "882f50290edfc66fb5debf9a75ba2bcef497fd48",
+    "sizeBytes": 1184539,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:7"
+  },
+  "knight": {
+    "path": "web/assets/roles/knight.png",
+    "success": true,
+    "imageHash": "ee7b9bc6f30e0d2e94c9a7df2ecf51fe54b5ed08",
+    "sizeBytes": 1210220,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:8"
+  },
+  "hiddenwolf": {
+    "path": "web/assets/roles/hiddenwolf.png",
+    "success": true,
+    "imageHash": "84523af9482d9906d31f13a31279341d6fe1a761",
+    "sizeBytes": 1102780,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:9"
+  },
+  "hunter": {
+    "path": "web/assets/roles/hunter.png",
+    "success": true,
+    "imageHash": "e0569bb8bd0381524c239b7fa622b8cdb944062a",
+    "sizeBytes": 1194246,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:10"
+  },
+  "idiot": {
+    "path": "web/assets/roles/idiot.png",
+    "success": true,
+    "imageHash": "cc46c6cf3d2bc6dbb6883956ab9727d06dcf24ce",
+    "sizeBytes": 1218628,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:11"
+  },
+  "whitewolfking": {
+    "path": "web/assets/roles/whitewolfking.png",
+    "success": true,
+    "imageHash": "92f1cdc2a715113fcd1a9654109603aee3f0960e",
+    "sizeBytes": 1310245,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:12"
+  },
+  "wolf": {
+    "path": "web/assets/roles/wolf.png",
+    "success": true,
+    "imageHash": "985e2cc3244f75adb46f911f3d01ef71cb87b0db",
+    "sizeBytes": 1303893,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:13"
+  },
+  "witch": {
+    "path": "web/assets/roles/witch.png",
+    "success": true,
+    "imageHash": "9af164dd405308d4d36a9347a476670a1f0a2c76",
+    "sizeBytes": 1330690,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:14"
+  },
+  "seer": {
+    "path": "web/assets/roles/seer.png",
+    "success": true,
+    "imageHash": "96fd0377ab7ef1ece10ecfa7a58d01dba31514a2",
+    "sizeBytes": 1292687,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:15"
+  },
+  "villager": {
+    "path": "web/assets/roles/villager.png",
+    "success": true,
+    "imageHash": "2b6b441c7cecce3b07af2e331d31ac6901f866a2",
+    "sizeBytes": 1162572,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:16"
+  },
+  "archivist": {
+    "path": "web/assets/avatars/archivist.png",
+    "success": true,
+    "imageHash": "98e0d20267a611357cbea2584baff0efa7ced7f4",
+    "sizeBytes": 98423,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:17"
+  },
+  "cartographer": {
+    "path": "web/assets/avatars/cartographer.png",
+    "success": true,
+    "imageHash": "3fc7d53c6b3bc0e7e236dbb0bc5b23ba6c0be53d",
+    "sizeBytes": 91345,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:18"
+  },
+  "auditor": {
+    "path": "web/assets/avatars/auditor.png",
+    "success": true,
+    "imageHash": "7cabf2e012b98df7f916e083439ff94d94616a19",
+    "sizeBytes": 89410,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:19"
+  },
+  "wolfbeauty": {
+    "path": "web/assets/roles/wolfbeauty.png",
+    "success": true,
+    "imageHash": "666ac7fa7a273ffa070002fbbda1dcc77d6f9303",
+    "sizeBytes": 1057673,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:20"
+  },
+  "wolfking": {
+    "path": "web/assets/roles/wolfking.png",
+    "success": true,
+    "imageHash": "0fe0c7becd92f1e684e13c92442b74b20680eee3",
+    "sizeBytes": 1208500,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:21"
+  },
+  "closer": {
+    "path": "web/assets/avatars/closer.png",
+    "success": true,
+    "imageHash": "37f43a89ac7acea947fe4ce73c63c2d6cd45ed87",
+    "sizeBytes": 92166,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:22"
+  },
+  "counterfactual": {
+    "path": "web/assets/avatars/counterfactual.png",
+    "success": true,
+    "imageHash": "b496e7ddafe974dc8af90a785e511b9a60119fb8",
+    "sizeBytes": 101109,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:23"
+  },
+  "dramallama": {
+    "path": "web/assets/avatars/dramallama.png",
+    "success": true,
+    "imageHash": "2dba14e1af2d9caa75a6ff73c4a7f76d315b6292",
+    "sizeBytes": 96092,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:24"
+  },
+  "diplomat": {
+    "path": "web/assets/avatars/diplomat.png",
+    "success": true,
+    "imageHash": "457dc7c2b3e35872a4fc563055e33aa25133e308",
+    "sizeBytes": 91345,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:25"
+  },
+  "detective": {
+    "path": "web/assets/avatars/detective.png",
+    "success": true,
+    "imageHash": "20de798d5663d116d6c23911cbc51f2dd52a919d",
+    "sizeBytes": 94315,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:26"
+  },
+  "improviser": {
+    "path": "web/assets/avatars/improviser.png",
+    "success": true,
+    "imageHash": "6b3b7338fb6bec4ffcac6d7c1b7215f98f2a0f1f",
+    "sizeBytes": 104240,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:27"
+  },
+  "grumpy": {
+    "path": "web/assets/avatars/grumpy.png",
+    "success": true,
+    "imageHash": "8ee7ec5f1b2a7c7a4634c3b0452a9b035ad66fc1",
+    "sizeBytes": 98357,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:28"
+  },
+  "enigma": {
+    "path": "web/assets/avatars/enigma.png",
+    "success": true,
+    "imageHash": "6b07f287317ec97e35f10c6c06e7c703a355bca3",
+    "sizeBytes": 102809,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:29"
+  },
+  "listener": {
+    "path": "web/assets/avatars/listener.png",
+    "success": true,
+    "imageHash": "ec36bf671ccc116d11b12b6881a210bc10f091c8",
+    "sizeBytes": 100473,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:30"
+  },
+  "hawk": {
+    "path": "web/assets/avatars/hawk.png",
+    "success": true,
+    "imageHash": "77d53d8c8b3063459f05c6434fc12f76a05d767b",
+    "sizeBytes": 95529,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:31"
+  },
+  "minimalist": {
+    "path": "web/assets/avatars/minimalist.png",
+    "success": true,
+    "imageHash": "d24aa2b6350709b08573fcb8cc6f1f7297ccc686",
+    "sizeBytes": 96703,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:32"
+  },
+  "rookie": {
+    "path": "web/assets/avatars/rookie.png",
+    "success": true,
+    "imageHash": "11ebc119cad20cb0a9b823ceaee5715c5f269c5e",
+    "sizeBytes": 93861,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:33"
+  },
+  "shadow": {
+    "path": "web/assets/avatars/shadow.png",
+    "success": true,
+    "imageHash": "32fb73c36045b5b506347b9e099f7f096ba72c01",
+    "sizeBytes": 99309,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:34"
+  },
+  "scholar": {
+    "path": "web/assets/avatars/scholar.png",
+    "success": true,
+    "imageHash": "9fa57bfba12c82b0f392c25d208c422d23d7f2a4",
+    "sizeBytes": 91439,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:35"
+  },
+  "peacemaker": {
+    "path": "web/assets/avatars/peacemaker.png",
+    "success": true,
+    "imageHash": "cdc3112a68b2f41c09d671b54032e0197e8c9d62",
+    "sizeBytes": 96222,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:36"
+  },
+  "skeptic": {
+    "path": "web/assets/avatars/skeptic.png",
+    "success": true,
+    "imageHash": "dc8dee81cd6f17bb2e7297ad73deaf8eb0196a5e",
+    "sizeBytes": 98819,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:37"
+  },
+  "snarky": {
+    "path": "web/assets/avatars/snarky.png",
+    "success": true,
+    "imageHash": "045444002b3c78d7468b3ec859e5d217c565806f",
+    "sizeBytes": 88646,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:38"
+  },
+  "softie": {
+    "path": "web/assets/avatars/softie.png",
+    "success": true,
+    "imageHash": "1a3d28a4890e3c27cdc4a744c57bd7c641460dfe",
+    "sizeBytes": 98615,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:39"
+  },
+  "trickster": {
+    "path": "web/assets/avatars/trickster.png",
+    "success": true,
+    "imageHash": "22a7ba2f6d2bb2b63c104dac268baf79c49627fa",
+    "sizeBytes": 102862,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:40"
+  },
+  "turtle": {
+    "path": "web/assets/avatars/turtle.png",
+    "success": true,
+    "imageHash": "7328da8149839c379e7464a7fa4fdd4044755420",
+    "sizeBytes": 97495,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:41"
+  },
+  "veteran": {
+    "path": "web/assets/avatars/veteran.png",
+    "success": true,
+    "imageHash": "b6f54101ece0083f737d28b10ff57503d093abba",
+    "sizeBytes": 91460,
+    "contentType": "image/png",
+    "placedOnNodeId": "5:42"
+  }
+}

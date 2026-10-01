@@ -1,144 +1,131 @@
-# 🐺 AI 狼人杀（本地网页版 + 手机 APP 端）
+# AI 狼人杀 · 月夜议会
 
-1 名人类玩家 + N 名 AI 的狼人杀。轮流发言、记忆严格隔离、随机发身份牌，默认适配**网易《狼人杀-官方正版》12 人守卫局（进阶场）**，所有规则细则可开关、板子可自定义。只需一个 **OpenAI 兼容 API Key**。哥特暗黑风界面。
+1 名人类玩家与多名 AI 的本地狼人杀，也支持纯 AI 观战和无需密钥的 Mock 试玩。原生 HTML/CSS/JavaScript 前端，哥特暗黑主题；同一套 Node 服务运行在浏览器、Windows 桌面应用和 Android APP 内。
 
-> 规则依据与官方出处见 [docs/rules.md](docs/rules.md)（开发对照规则书）；角色图鉴见 [docs/roles.md](docs/roles.md)；
-> 角色卡生图提示词见 [docs/image-prompts.md](docs/image-prompts.md)（把 AI 生成的图放入 `web/assets/roles/` 即自动生效）。
+账号采用**本机多玩家档案**，不是云账号：无需密码，不做云同步。支持玩家自定义头像、私人笔记、对局归属、战绩与档案导入导出。
+
+当前版本：`1.5.2`，Android versionCode：`9`。本次为同版本的 2026-10-01 更新构建，不代表此前同名安装包内容相同。交付状态、验证范围和制品摘要见 [本次交付记录](docs/current-delivery-2026-10-01.md)；文档入口见 [文档索引](docs/README.md)。
 
 ## 快速开始
 
+需要 Node.js ≥18.18。服务端没有 npm 运行时依赖，直接启动即可；执行开发检查前需安装开发依赖。
+
 ```bash
-node server.js        # 或 npm start（要求 Node ≥ 18，零 npm 依赖）
+node server.js
+# 或 npm start
 ```
 
-启动后自动打开 `http://localhost:3210`（可用 `PORT=xxxx` 换端口，`NO_OPEN=1` 关闭自动打开）。
+默认自动打开电脑端 `http://localhost:3210/`；手机端为 `http://localhost:3210/m/`。`PORT` 可修改端口，`NO_OPEN=1` 可关闭自动打开。
 
-- **桌面版**：完整设置页（API 配置/板子/规则开关/玩家昵称）+ 上帝调试面板 + 日志查看器
-- **📱 APP 端（手机）**：手机浏览器访问自动跳转 `/m/`（也可手动打开），三步开局：**选板子 → 确认规则 → 开始**；左下角 ⚙ 配置 AI。已打包为安卓 APP（离线内嵌 Node 服务端，见下方「安卓 APP」）
+1. 在玩家中心选择或创建本机档案；可上传、裁切和移除自定义头像。
+2. 进入“设置 → 模型与连接”，填写 OpenAI Chat Completions 兼容接口地址、模型和完整 API Key，保存并测试连接。配置保存到本机 `config.json`，不入 Git、不随档案导出。
+3. 从大厅“开始新局”进入四步流程：**模式准备 → 板子与规则 → 参与与座位 → 确认开局**。后退保留草稿，最终确认前不创建对局；无 Key 时可选 Mock 试玩。
+4. 点击身份牌翻开后查看技能与私密信息。轮到自己时输入发言，投票或夜间行动通过目标选择与确认完成。
 
-1. **① API 配置**：填 OpenAI 兼容的 `base_url` / `model` / `API Key`（DeepSeek、Kimi、智谱、通义、OpenAI 等均可），点「测试连接」→「保存配置」。配置存在本机 `config.json`。
-2. **② 板子**：默认 12 人进阶场（狼王+3狼+预女猎守+4民），可换模板或完全自定义各身份数量。
-3. **③ 规则开关**：警长竞选、吞警徽模式（单爆/双爆）、女巫自救、同守同救、守卫连守、空刀、自爆、遗言、夜晚顺序……全部可调，默认即网易官方守卫局。
-4. **④ 玩家**：选你的座位和昵称（或勾「纯观战」看 AI 互杀；勾「Mock 试玩」可在无 Key 时用脚本 AI 验证流程）。
-5. 开始游戏 → 翻看身份牌 → 轮到你时打字发送（**无时间限制**），投票/夜晚行动点选目标即可。
+真实模型调用需要联网，可能消耗服务商额度。仅安装 APP 不会自动填入开发者的 API Key；手机与电脑的本机设置相互独立。测试连接出现 401 时，应检查完整密钥、接口地址和模型权限，不能仅凭输入框显示“已保存”判断可用。
 
-## 特性
+## 主要功能与边界
 
-- **记忆隔离**：全局事件日志 + 可见性标签（公开/指定座位/上帝），AI 只能看到"它该看到的"；人类前端同样被服务端裁剪。引擎测试含隔离审计断言。
-- **缓存省钱**：每个 AI 的上下文是**追加式消息数组**（system 整局不变、动态内容只在最后一条），稳定前缀命中服务商前缀缓存；上帝面板展示**缓存命中率**与 token 消耗。可选显式 `cache_control` 标记。
-- **秘密投票**：按座位顺序收集，但每张票只对投票者本人（和上帝）可见，收齐后统一亮票。
-- **规则开关系统**：14 组开关集中在 `src/engine/rules.js`，设置页自动生成控件，游戏内「规则书」按本局实际开关渲染。
-- **开发者日志**：控制台 + `logs/` JSONL（全局 server.log + 按局 game-*.log）；启动与开局打印**生效配置快照**；每次 LLM 调用记录 token/缓存/延迟/重试，报错带堆栈；上帝面板内嵌日志查看器（级别/模块过滤、错误堆栈展开）与 **AI 上下文调试器**（直接查看某个 AI 收到的完整提示词）。
-- **上帝/观战模式**：纯 AI 局或随时切换上帝视角，可见全部事件、原始提示词、遥测统计，以及 AI 的**内心独白**直播流（思考模型 reasoning 轨迹，仅上帝可见）。
-- **怀疑度表**：每个 AI 维护对其他座位的显式怀疑度分值（-100 确定好人 ~ +100 确定狼），随每日反思更新并注入局面快照——立场有连续性，投票不轻易被带节奏。
-- **跨局经验池**：局终让每个 AI 对照"当时的判断"与"终局真相"复盘提炼教训，按角色持久化（`saves/experiences.json`），下局开局注入 system——AI 越玩越强（借鉴清华 Werewolf 框架的 critical mind）。
-- **MVP 评分与统计**：对局结束按胜负/存活/发言/投票准确率/技能价值量化算分，终局展示 MVP；`/api/stats` 聚合多局统计。
-- **断点恢复**：白天/夜晚边界自动拍摄全量锚点（含 AI 记忆），服务重启后从存档一键续跑，不丢进度、不重复发言。
-- **警徽策略**：15 个身份各有一套"持徽打法 + 死后警徽流转"策略（预言家徽给金水、狼系递徽队友/伺机撕徽、白痴免死后立即交徽等），注入警长的发言归票、方向选择、投票与移交决策。
-- **打断与终止**：狼人自爆/骑士决斗支持白天任意时刻发动（发言间隙生效，排队状态前端常驻可见）；终止对局立即中断在途 LLM 调用秒级结算。完整行为矩阵见 [docs/interrupts.md](docs/interrupts.md)。
-- **容错**：LLM 调用自动重试，输出解析失败带提示重试，多次失败降级（随机票/空过）并在上帝面板标注，对局永不卡死；对局自动存档 `saves/`。
+- **身份与记忆隔离**：服务端裁剪公开、指定座位和上帝信息；普通玩家与 AI 只能看到各自有权限的信息。身份牌翻开完成前不显示技能、阵营或狼队。
+- **板子与规则**：15 种角色、10 个内置板子及自定义组成；警长、女巫、守卫、夜间顺序、自爆和遗言等规则由引擎统一定义。依据与差异见 [规则书](docs/rules.md)和 [角色图鉴](docs/roles.md)。
+- **AI 上下文**：反思纪要、可见事件实录与即时快照分层组装，按预算裁剪；提示词明确阶段、发言顺序和已发生事件。每日记忆整理仅针对存活且已创建智能体的 AI，不阻止死亡后的合法技能或遗言。
+- **思考与容错**：默认主决策使用低思考强度。公开发言总预算 60 秒，其他决策 30 秒，覆盖排队、请求和修复；可在预算内使用轻量降级，降级状态对用户可见。鉴权、额度等致命错误有单独处理，并非保证所有网络错误都能继续。
+- **本机档案**：头像、偏好、战绩、归档、回收站和脱敏导入导出。创建对局时固定归属，之后切换当前档案不会转移该局。
+- **私人笔记**：自称、候选身份和备注分层；并发修改使用 revision 冲突控制。旧标记无法完整合并时保留待确认内容，不静默丢弃。
+- **存档恢复**：自动落盘并在昼夜边界建立恢复锚点；重启后从可恢复存档继续。恢复边界以实际锚点为准，不承诺进程被强杀时保留尚未写盘的每条事件。
+- **跨局经验与统计**：AI 复盘经验按对局档案归属隔离。新档案使用 `profiles/<id>/experiences.json`，迁移的旧池可继续使用原路径。经验是提示词辅助，不是保证 AI 每局变强的模型训练。
+- **上帝调试**：有权限时可查看提示词、日志、调用遥测与模型返回的 reasoning；不属于普通玩家可见信息。[打断与终止规则](docs/interrupts.md)另有说明。
+- **双端体验**：共享视觉样式与短动效，支持减少动态效果；手机底栏、独立开局流程，电脑侧栏与窄窗口抽屉。角色详情进入大卡检视后，关闭检视返回原资料层。
 
-## 角色（15 种，均按官方技能原文）
+## 开发与检查
 
-🐺 狼人 ｜ 👑 狼王 ｜ ⚡ 白狼王 ｜ 🌫️ 隐狼 ｜ 💃 狼美人 ｜ 🔮 预言家 ｜ ⚗️ 女巫 ｜ 🎯 猎人 ｜ 🛡️ 守卫 ｜ 🃏 白痴 ｜ ⚔️ 骑士 ｜ 🌙 摄梦人 ｜ 🐦 乌鸦 ｜ 💗 暗恋者 ｜ 🌾 平民
+```bash
+npm ci
+npm run gate
+```
 
-新身份只需在 `src/engine/roles.js` 注册能力字段（`nightStep` / `deathTrigger` / `selfExplode` 等），流程编排自动适配——未来魔术师、熊等照此扩展。
+| 命令 | 用途 |
+| --- | --- |
+| `npm start` | 启动本地服务 |
+| `npm test` | 全量 Node 测试 |
+| `npm run lint` / `npm run eslint` | 语法与代码检查 |
+| `npm run coverage` | 覆盖率门禁，同时运行测试 |
+| `npm run eval` | 隔离 Mock 对局评估，不调用真实模型 |
+| `npm run gate` | lint、ESLint、覆盖率、eval、品牌、版本、守卫、e2e、临时残留全链 |
+| `npm run ui:check` | 现有 UI 静态检查，不替代浏览器视觉验收 |
+| `npm run brand:check` | 品牌资产哈希与引用校验 |
+| `npm run version:check` | 检查各工程版本与唯一来源一致 |
+| `npm run hooks:install` | 安装 pre-push 守卫；敏感路径改动增加全量测试 |
+| `npm run gen-docs` | 从角色定义生成 `docs/roles.md` |
 
-## 板子（10 个内置，均对照网易官方）
+浏览器专项脚本位于 `scripts/ui-*.playwright.js`，是 Playwright 工具执行的回调，不是直接运行的 Node CLI。涉及创建档案或 Mock 对局的脚本仅可在其要求的隔离服务中执行；不要对个人数据目录运行验收写入。原始浏览器截图保存在本机 `output/playwright/`，默认不提交。
 
-12 人进阶场（守卫局·默认）、12 人守卫局纯狼版、12 人标准场白痴版、10 人速推局、12 人白狼王骑士场、12 人白狼王守卫场、12 人狼王摄梦人场、12 人狼美人骑士场（板规：女巫不可自救）、12 人乌鸦隐狼场、12 人暗恋者场——板子支持携带内置板规（选中即预填、可手调），另有完全自定义板子。
+`node scripts/probe-current-effort.js --live` 是人工诊断低思考／关闭思考兼容性的付费探针，最多两次短请求，不在门禁中执行；不带 `--live` 不读取配置、不访问网络。不要自动运行到用户账号上。
+
+修改页面内联守卫、品牌母版或 Service Worker shell 时，需要同步相应 CSP、品牌与 shell 测试，不能只修改快照断言让门禁变绿。维护说明见 [守卫整改记录](docs/fix-plan-2026-09-21.md)。
+
+## Windows 电脑端
+
+```bash
+npm run app:desktop
+```
+
+生成 `release/werewolf-ai-1.5.2-win-x64-portable.exe`。这是 x64 免安装桌面应用，内嵌窗口和本地服务，不依赖外部 Node 或浏览器。构建脚本首次运行会安装桌面工程依赖；需要联网获取构建工具。
+
+本机数据位于 `%APPDATA%\werewolf-ai-desktop`，不在 EXE 旁边；“免安装”不表示关闭后不留下数据。当前包没有 Authenticode 发布者签名，Windows 可能提示未知发布者，不能描述为已签名正式发行版。
+
+`npm run app:win` 是旧式“内置 Node + 浏览器”的文件夹/ZIP 交付方式，不是 Electron 包。本轮仅重建 Electron EXE，不更新历史 ZIP；不要把旧 ZIP 与本轮源码混用。
+
+## Android 手机端
+
+工程采用 Capacitor 与 capacitor-nodejs，在手机本地运行 Node 服务，WebView 连接 `127.0.0.1:3210`。离线可浏览本机资料和使用 Mock，真实 AI 仍需联网。
+
+构建需要 JDK 21 和 Android SDK；通过 `JAVA_HOME`、`ANDROID_HOME` / `ANDROID_SDK_ROOT` 配置本机工具路径。`app/android/local.properties` 不入库。首次准备 Android 工程依赖后构建：
+
+```bash
+npm --prefix app ci
+npm run app:apk
+```
+
+`app:apk` 依次同步服务端/前端、Capacitor sync、Gradle debug 构建、拷贝与源码核验。产物为 `release/werewolf-ai-1.5.2-debug.apk`，**默认不安装到设备**。显式需要覆盖安装时使用 `node scripts/build-apk.js --install`。
+
+当前 APK 使用 debug 签名，用于测试交付；实体手机、软键盘和后台恢复仍需设备验证，不等同于应用商店正式发行。
+
+## 版本与制品核对
+
+版本唯一来源为 `release-version.json`。修改版本后运行 `node scripts/version-sync.js --fix` 同步声明点，再执行 `npm run version:check`。不要分别手改各工程的版本号。
+
+`npm run app:verify -- --release` 默认要求 APK、旧式 WIN 文件夹和 Electron EXE 三类制品均存在且内容一致；本轮只交 APK 与 EXE，不能用旧 WIN 文件夹冒充第三项通过。两包专用核验命令见 [本次交付记录](docs/current-delivery-2026-10-01.md)。
+
+构建产物保存在本机 `release/`，不提交到 Git。任何 `src/`、`web/`、桌面主进程或打包载荷变更后，需要重新构建对应包并检查实际包内内容，不能只检查 `win-unpacked` 或文件名。
+
+## 数据与网络安全
+
+- 默认监听 `127.0.0.1`。局域网访问需要显式 `WW_LAN=1` 并重启；远端管理接口采用配对会话门禁，只在可信网络启用。`WW_HOST` 可指定监听地址。
+- `config.json`、`logs/`、`saves/`、根目录 `profiles/`、`migrations/` 和安装包不入 Git。日志及存档可能含私人发言、笔记或调试信息，分享前需脱敏。
+- 服务端配置可由 `WW_CONFIG` 指定，数据根目录可由 `WW_DATA_DIR` 指定。开发、评估和制品测试使用临时目录，不能混入真实档案库。
+- 档案导出不携带 API Key；模型配置属于设备级设置。提交前仍需检查新增脚本、文档和素材，不能仅依赖 `.gitignore`。
 
 ## 项目结构
 
+```text
+server.js                 本地 HTTP 服务入口
+release-version.json      版本唯一来源
+src/engine/               角色、规则、流程、事件和可见性
+src/ai/                   模型客户端、调度、上下文、记忆与提示词
+src/profiles/             本机档案、头像、迁移、导入导出
+src/annotations/          私人笔记与并发控制
+src/request-scope.js      请求绝对截止时间与取消生命周期
+src/api.js                REST 接口与对局生命周期
+web/                      电脑前端及图鉴、AI 名册
+web/m/                    手机前端
+web/shared/               双端共享状态、样式和交互
+web/assets/               已批准品牌、角色、AI 肖像与主题素材
+desktop/                  Electron 主进程与构建配置
+app/                      Capacitor Android 工程
+scripts/                  构建、核验、回归与隔离评估工具
+test/                     Node 自动化测试
+design/                   设计母版、Figma 交接稿与 OpenPencil 试验
+docs/                     使用、设计、施工及历史验收文档
+release/                  本机构建产物（忽略）
 ```
-werewolf-ai/
-├─ server.js               # HTTP 服务 + 静态文件 + 配置（零依赖）
-├─ src/
-│  ├─ engine/              # 纯逻辑引擎（可被未来安卓版复用）
-│  │  ├─ roles.js          #   身份牌唯一数据源（驱动 AI 提示词/UI/文档）
-│  │  ├─ rules.js          #   规则开关系统
-│  │  ├─ game.js           #   对局状态、事件日志、可见性隔离
-│  │  ├─ flow.js           #   流程状态机（夜/警长竞选/白天/投票/结算）
-│  │  └─ render.js         #   事件渲染（AI 上下文与前端共用）
-│  ├─ ai/
-│  │  ├─ llm.js            #   OpenAI 兼容客户端（重试/遥测/缓存）
-│  │  ├─ agent.js          #   分层上下文智能体（反思纪要 + 实录 + 快照）
-│  │  ├─ context.js        #   上下文组装 v2（预算裁剪/任务分层思考/防幻觉快照）
-│  │  └─ prompts.js        #   提示词模板
-│  ├─ api.js               # REST 接口
-│  └─ log.js               # 日志系统
-├─ web/                    # 前端（原生 HTML/CSS/JS，移动自适应）
-│  └─ m/                   # 手机端 UI（圆桌座位 + 发言舞台 + 底部操作栏）
-├─ test/engine.test.js     # 引擎单元测试（npm test）
-├─ scripts/
-│  ├─ simulate.js          # mock 批量模拟（npm run simulate -- --n=100）
-│  ├─ e2e.js               # 端到端验证（起真实服务打完整局）
-│  ├─ mock-agent.js        # 脚本化测试智能体
-│  ├─ play.js              # 代玩助手（人类接管座位，调试用）
-│  ├─ build-app.js         # 同步服务端到 Capacitor webDir（app/www/nodejs）
-│  ├─ gen-icon.js          # 生成应用图标
-│  ├─ update-app.sh        # 一键 APK：同步 → cap sync → 构建 → adb 安装
-│  └─ gen-roles-doc.js     # 生成 docs/roles.md
-├─ app/                    # Capacitor 安卓工程（webDir=app/www）
-├─ docs/rules.md           # 规则书（含官方出处）
-├─ logs/  saves/           # 日志与对局存档（git 忽略）
-└─ config.json             # API 配置（含密钥，git 忽略；模板见 config.example.json）
-```
-
-## 常用命令
-
-| 命令 | 说明 |
-|---|---|
-| `npm start` | 启动服务（默认 :3210） |
-| `npm test` | 引擎单元测试（隔离审计/规则矩阵/胜负/投票保密） |
-| `npm run simulate` | mock 智能体批量模拟，验证闭环与隔离 |
-| `node scripts/e2e.js` | 端到端：真实 HTTP 服务 + 人类玩家 REST 打完整局 |
-| `npm run gen-docs` | 从 roles.js 重新生成 docs/roles.md |
-| `npm run app:sync` | 把服务端+前端打进 Capacitor 工程 |
-| `npm run app:apk` | 一键出 APK 并尝试 adb 安装（需 JDK21 + Android SDK） |
-| `npm run guards` | 防忘记守卫（秒级）：pin 静态复核（CSP 白名单/品牌 SHA-256）+ pin 敏感用例 + 断言卫生；已进 `gate` |
-| `npm run hooks:install` | 安装 pre-push 钩子：每次 push 先跑守卫，改动涉及 `web/`、`src/static.js`、`app/`、`design/brand/`、`desktop/` 时再跑全量 `npm test`（`WW_SKIP_GUARD=1` 紧急绕过） |
-
-> 改 `web/**` 后最容易漏的三处 pin：① `web/*/index.html` 内联守卫脚本的 sha256 → `src/static.js` 的 CSP 白名单；
-> ② `design/brand/v2/**` → `npm run brand:apply` 重新 pin；③ `web/sw.js` 的 SHELL 清单 → 升 `VERSION` 并在
-> `test/sw-shell.test.js` 登记新指纹。守卫按 CI 字节（LF）复核，Windows 的 CRLF 不会假红；详见
-> [docs/fix-plan-2026-09-21.md](docs/fix-plan-2026-09-21.md) 第六节。
-
-
-## 安全与网络（2026-09 整改）
-
-- **默认只监听本机**（127.0.0.1）：浏览器、Electron、本机调试零配置即可用，局域网设备无法连接。
-- **开放局域网**：设环境变量 `WW_LAN=1` 后重启（监听 0.0.0.0）。此时其他设备要用
-  「管理功能」（读写配置、创建对局、查看对局列表/令牌、统计）必须先配对：
-  服务本机的设置页顶部会显示 6 位配对码（5 分钟有效、错 5 次锁定），在访问设备的
-  配对弹窗里输入即可获得 12 小时会话（HttpOnly Cookie）。
-- **对局令牌通道不受影响**：手机 APP 凭已有的玩家/上帝令牌可正常进入对局、观战、复盘
-  （令牌随请求携带，不依赖 Cookie）。
-- `WW_HOST` 可绑定指定网卡地址（高级用法，风险自负）。**不要**为了图方便长期开
-  `WW_LAN=1`——管理接口能读走 LLM API Key 的配置（虽然接口已做配对门禁）。
-- 对局数据每 4 秒原子落盘（写临时文件后重命名），写失败保持脏标记自动重试；
-  进程退出（Ctrl+C）会先等活动对局落盘再退出（4 秒总闸）。
-- 存档目录可用 `WW_DATA_DIR` / `WW_CONFIG` 指定（APP 内嵌与测试用）。
-
-
-## 版本与发布
-
-- **版本唯一源**：`app/android/app/build.gradle` 的 `versionName` / `versionCode`。
-- 发版前必须同步：`desktop/package.json` 与 `app/package.json` 的 `version`（有自动化测试校验三者一致）。
-- 桌面安装包：`cd desktop && npm run dist`（文件名带 desktop 包自身的 version）。
-- Android 包：`cd app && npx cap sync android && cd android && ./gradlew assembleRelease`。
-- Android 构建需要 **JDK 21**：`JAVA_HOME=D:jdk-21.0.12.1+1`（本机路径；JDK 17 会报"无效的源发行版：21"）。
-
-## 安卓 APP
-
-已落地：**Capacitor 8 + [capacitor-nodejs](https://github.com/hampoelz/capacitor-nodejs)** 在手机本地内嵌 Node 运行时，同一套服务端随 APP 离线运行，WebView 指向 `127.0.0.1:3210`——安装即用，只需首次填 API Key。
-
-打包流程（Windows，需 JDK21 与 Android SDK，路径见 `app/android/local.properties`——该文件不入库，clone 后自建）：
-
-```bash
-npm run app:sync      # 同步服务端/前端进工程
-cd app/android && ./gradlew assembleDebug
-# 产物：app/android/app/build/outputs/apk/debug/app-debug.apk
-```
-
-或直接 `npm run app:apk`（同步 → 构建 → `adb install -r` 四连）。

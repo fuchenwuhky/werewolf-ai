@@ -13,6 +13,7 @@ saves/
 # 本地浏览器验收快照与截图
 .playwright-cli/
 output/playwright/
+output/feedback-images-*/
 
 # 依赖
 node_modules/
@@ -53,3 +54,9 @@ Thumbs.db
 # 所以表面上一切正常，但**往 src/profiles/ 新增文件会被静默忽略、永远不会进提交**。
 /profiles/
 /migrations/
+
+# Figma 画布生成器是设计工具内执行的 JS 片段（可含顶层 await/return），不是 Node/浏览器源码。
+# 设计交付的文档、预览和资产仍保留在 design/gothic-ui-v1/。
+/design/gothic-ui-v1/*.js
+/design/gothic-ui-v1/receipt-*.json
+/design/gothic-ui-v1/state.json

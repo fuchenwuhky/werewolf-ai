@@ -1,0 +1,772 @@
+{
+  "version": "1.0",
+  "name": "lobby-sample",
+  "children": [
+    {
+      "type": "frame",
+      "id": "html_0",
+      "name": "lobby-sample",
+      "width": 1440.0,
+      "height": 680.0,
+      "minHeight": 680.0,
+      "layout": "vertical",
+      "fill": [
+        {
+          "type": "solid",
+          "color": "#0c1019"
+        }
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "html_1",
+          "name": "main",
+          "width": 1120.0,
+          "height": 680.0,
+          "minHeight": 680.0,
+          "layout": "vertical",
+          "padding": 28.0,
+          "justifyContent": "start",
+          "alignItems": "start",
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#0c1019"
+            }
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "html_2",
+              "name": "header",
+              "width": "fill_container",
+              "height": 54.0,
+              "layout": "horizontal",
+              "padding": [
+                0.0,
+                0.0,
+                1.0,
+                0.0
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "stroke": {
+                "thickness": [
+                  0.0,
+                  0.0,
+                  1.0,
+                  0.0
+                ],
+                "align": "inside",
+                "fill": [
+                  {
+                    "type": "solid",
+                    "color": "#544638"
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "html_3",
+                  "name": "div",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "html_4",
+                      "name": "Text",
+                      "content": "☾ 月夜议会",
+                      "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                      "fontSize": 24.0,
+                      "fontWeight": 700,
+                      "letterSpacing": 4.0,
+                      "textGrowth": "auto",
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#d8b877"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "html_5",
+                  "name": "nav",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "layout": "horizontal",
+                  "gap": 30.0,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "html_6",
+                      "name": "span",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_7",
+                          "name": "Text",
+                          "content": "游戏大厅",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "textGrowth": "auto",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b8aa98"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_8",
+                      "name": "span",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_9",
+                          "name": "Text",
+                          "content": "角色图鉴",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "textGrowth": "auto",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b8aa98"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_10",
+                      "name": "span",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_11",
+                          "name": "Text",
+                          "content": "AI 来客",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "textGrowth": "auto",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b8aa98"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_12",
+                      "name": "span",
+                      "width": "fit_content",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_13",
+                          "name": "Text",
+                          "content": "设置",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "textGrowth": "auto",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b8aa98"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "html_14",
+                  "name": "div",
+                  "width": "fit_content",
+                  "height": "fit_content",
+                  "layout": "vertical",
+                  "padding": [
+                    10.0,
+                    19.0,
+                    10.0,
+                    19.0
+                  ],
+                  "cornerRadius": 24.0,
+                  "stroke": {
+                    "thickness": 1.0,
+                    "align": "inside",
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#8b714d"
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "html_15",
+                      "name": "Text",
+                      "content": "沙洲 · 玩家档案",
+                      "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                      "fontSize": 16.0,
+                      "textGrowth": "auto",
+                      "fill": [
+                        {
+                          "type": "solid",
+                          "color": "#e8d7b5"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "html_16",
+              "name": "div",
+              "width": "fill_container",
+              "height": "fit_content",
+              "layout": "vertical",
+              "padding": [
+                54.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "html_17",
+                  "name": "Text",
+                  "width": "fill_container",
+                  "content": "THE NOCTURNE COUNCIL · AI WEREWOLF",
+                  "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                  "fontSize": 13.0,
+                  "letterSpacing": 5.0,
+                  "textGrowth": "fixed-width",
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#b59563"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "html_18",
+              "name": "h1",
+              "width": "fill_container",
+              "height": "fit_content",
+              "layout": "vertical",
+              "padding": [
+                8.0,
+                0.0,
+                12.0,
+                0.0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "html_19",
+                  "name": "Text",
+                  "width": "fill_container",
+                  "content": "今夜，谁藏在月光之后？",
+                  "fontFamily": "SimSun, serif",
+                  "fontSize": 44.0,
+                  "fontWeight": 700,
+                  "letterSpacing": 5.0,
+                  "textGrowth": "fixed-width",
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#f0e6d6"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "html_20",
+              "name": "p",
+              "width": "fill_container",
+              "height": "fit_content",
+              "layout": "vertical",
+              "padding": [
+                0.0,
+                0.0,
+                30.0,
+                0.0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "html_21",
+                  "name": "Text",
+                  "width": "fill_container",
+                  "content": "在推理、谎言与信任之间，开启一场属于你的狼人杀对局。",
+                  "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                  "fontSize": 16.0,
+                  "textGrowth": "fixed-width",
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#aeb3be"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "html_22",
+              "name": "section",
+              "width": "fill_container",
+              "height": "fit_content",
+              "layout": "horizontal",
+              "gap": 22.0,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "html_23",
+                  "name": "article",
+                  "width": 620.0,
+                  "height": 315.0,
+                  "layout": "vertical",
+                  "padding": 27.0,
+                  "cornerRadius": 12.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#171c28"
+                    }
+                  ],
+                  "stroke": {
+                    "thickness": 1.0,
+                    "align": "inside",
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#685337"
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "html_24",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_25",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "01 / NEW STORY",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 13.0,
+                          "letterSpacing": 3.0,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b79a67"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_26",
+                      "name": "h2",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "padding": [
+                        16.0,
+                        0.0,
+                        10.0,
+                        0.0
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_27",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "召集今夜的议会",
+                          "fontFamily": "SimSun, serif",
+                          "fontSize": 28.0,
+                          "fontWeight": 700,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#f1e6d4"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_28",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_29",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "选择板子、安排座位，让 AI 来客在这座古老议事厅中各自扮演命运。",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "lineHeight": 1.8,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#adb4bf"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_30",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "horizontal",
+                      "gap": 14.0,
+                      "padding": [
+                        35.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "html_31",
+                          "name": "span",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "layout": "vertical",
+                          "padding": [
+                            15.0,
+                            35.0,
+                            15.0,
+                            35.0
+                          ],
+                          "cornerRadius": 6.0,
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#9d7542"
+                            }
+                          ],
+                          "stroke": {
+                            "thickness": 1.0,
+                            "align": "inside",
+                            "fill": [
+                              {
+                                "type": "solid",
+                                "color": "#caa66a"
+                              }
+                            ]
+                          },
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "html_32",
+                              "name": "Text",
+                              "content": "创建对局 →",
+                              "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                              "fontSize": 16.0,
+                              "fontWeight": 700,
+                              "textGrowth": "auto",
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#fff5df"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "html_33",
+                          "name": "span",
+                          "width": "fit_content",
+                          "height": "fit_content",
+                          "layout": "vertical",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "html_34",
+                              "name": "Text",
+                              "content": "当前档案：沙洲",
+                              "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                              "fontSize": 13.0,
+                              "textGrowth": "auto",
+                              "fill": [
+                                {
+                                  "type": "solid",
+                                  "color": "#9ba4b2"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "html_35",
+                  "name": "aside",
+                  "width": 390.0,
+                  "height": 315.0,
+                  "layout": "vertical",
+                  "padding": 27.0,
+                  "cornerRadius": 12.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#171c28"
+                    }
+                  ],
+                  "stroke": {
+                    "thickness": 1.0,
+                    "align": "inside",
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#3e4653"
+                      }
+                    ]
+                  },
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "html_36",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_37",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "02 / YOUR CHRONICLE",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 13.0,
+                          "letterSpacing": 3.0,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#b79a67"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_38",
+                      "name": "h2",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "padding": [
+                        16.0,
+                        0.0,
+                        10.0,
+                        0.0
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_39",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "继续与回顾",
+                          "fontFamily": "SimSun, serif",
+                          "fontSize": 28.0,
+                          "fontWeight": 700,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#f1e6d4"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_40",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_41",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "回到未完的夜晚，或从往昔对局中寻找遗漏的线索。",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "lineHeight": 1.8,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#adb4bf"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "html_42",
+                      "name": "div",
+                      "width": "fill_container",
+                      "height": "fit_content",
+                      "layout": "vertical",
+                      "padding": [
+                        26.0,
+                        0.0,
+                        0.0,
+                        0.0
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "html_43",
+                          "name": "Text",
+                          "width": "fill_container",
+                          "content": "› 继续上次对局\n› 我的对局\n› 私人笔记与复盘",
+                          "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                          "fontSize": 15.0,
+                          "lineHeight": 2.5,
+                          "textGrowth": "fixed-width",
+                          "fill": [
+                            {
+                              "type": "solid",
+                              "color": "#d3c1a4"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "html_44",
+              "name": "footer",
+              "width": "fill_container",
+              "height": "fit_content",
+              "layout": "vertical",
+              "padding": [
+                17.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "stroke": {
+                "thickness": [
+                  1.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ],
+                "align": "inside",
+                "fill": [
+                  {
+                    "type": "solid",
+                    "color": "#39404a"
+                  }
+                ]
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "id": "html_45",
+                  "name": "Text",
+                  "width": "fill_container",
+                  "content": "本机玩家档案 · 不需要密码 · 对局归属始终可见",
+                  "fontFamily": "\"Microsoft YaHei\", sans-serif",
+                  "fontSize": 13.0,
+                  "textGrowth": "fixed-width",
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#8d98a8"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "editorMeta": {
+    "activePageIndex": 0,
+    "preserveAuthoredGeometry": false
+  }
+}
